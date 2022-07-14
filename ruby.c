@@ -338,7 +338,7 @@ usage(const char *name, int help, int highlight, int columns)
         M("--yjit-greedy-versioning",  "", "Greedy versioning mode (default: disabled)"),
     };
 #endif
-#if USE_THIRD_PARTY_HEAP
+#ifdef USE_THIRD_PARTY_HEAP
     static const struct ruby_opt_message mmtk_options[] = {
         M("--mmtk-plan=name",          "", "MMTk garbage collection plan to use (default: " MMTK_DEFAULT_PLAN ")"),
     };

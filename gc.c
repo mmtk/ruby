@@ -1450,7 +1450,7 @@ asan_poison_object_restore(VALUE obj, void *ptr)
 #define FL_SET2(x,f)   FL_CHECK2("FL_SET2",   x, RBASIC(x)->flags |= (f))
 #define FL_UNSET2(x,f) FL_CHECK2("FL_UNSET2", x, RBASIC(x)->flags &= ~(f))
 
-// Comment for easy location 
+// Comment for easy location
 #ifdef USE_THIRD_PARTY_HEAP
 #define RVALUE_MARK_BITMAP(obj)           0
 #define RVALUE_PIN_BITMAP(obj)            0
