@@ -15111,45 +15111,59 @@ size_t rb_mmtk_heap_limit(void) {
 }
 
 void rb_mmtk_pre_process_opts(int argc, char **argv) {
+    bool enable_rubyopt = true;
+
     mmtk_env_plan = getenv("MMTK_PLAN");
 
     for (int n = 1; n < argc; n++) {
         if (strcmp(argv[n], "--") == 0) {
             break;
         }
+        else if (strcmp(argv[n], "--enable-rubyopt") == 0
+                || strcmp(argv[n], "--enable=rubyopt") == 0) {
+            enable_rubyopt = true;
+        }
+        else if (strcmp(argv[n], "--disable-rubyopt") == 0
+                || strcmp(argv[n], "--disable=rubyopt") == 0) {
+            enable_rubyopt = false;
+        }
         else if (strncmp(argv[n], "--mmtk-plan=", strlen("--mmtk-plan=")) == 0) {
             mmtk_pre_arg_plan = argv[n] + strlen("--mmtk-plan=");
         }
     }
 
-    char *env_args = getenv("RUBYOPT");
-    if (env_args != NULL) {
-        while (*env_args != '\0') {
-            while (ISSPACE(*env_args)) {
-                env_args++;
-            }
-
-            if (strncmp(env_args, "--mmtk-plan=", strlen("--mmtk-plan=")) == 0) {
-                int length = 0;
-                while (env_args[length] != '\0' && !ISSPACE(env_args[length])) {
-                    length++;
+    if (enable_rubyopt) {
+        char *env_args = getenv("RUBYOPT");
+        if (env_args != NULL) {
+            while (*env_args != '\0') {
+                if (ISSPACE(*env_args)) {
+                    env_args++;
                 }
+                else {
+                    size_t length = 0;
+                    while (env_args[length] != '\0' && !ISSPACE(env_args[length])) {
+                        length++;
+                    }
 
-                mmtk_pre_arg_plan = strndup(env_args + strlen("--mmtk-plan="), length - strlen("--mmtk-plan="));
-                if (mmtk_pre_arg_plan == NULL) {
-                    rb_bug("could not allocate space for argument");
+                    if (strncmp(env_args, "--mmtk-plan=", strlen("--mmtk-plan=")) == 0) {
+                        mmtk_pre_arg_plan = strndup(env_args + strlen("--mmtk-plan="), length - strlen("--mmtk-plan="));
+                        if (mmtk_pre_arg_plan == NULL) {
+                            rb_bug("could not allocate space for argument");
+                        }
+                    }
+
+                    env_args += length;
                 }
-                env_args += length;
             }
         }
     }
 
-    if (mmtk_env_plan && mmtk_pre_arg_plan && strcmp(mmtk_env_plan, mmtk_pre_arg_plan) != 0) {
+    if (enable_rubyopt && mmtk_env_plan && mmtk_pre_arg_plan && strcmp(mmtk_env_plan, mmtk_pre_arg_plan) != 0) {
         fputs("[FATAL] MMTK_PLAN and --mmtk-plan do not agree\n", stderr);
 	    exit(EXIT_FAILURE);
     }
 
-    if (mmtk_env_plan) {
+    if (enable_rubyopt && mmtk_env_plan) {
         mmtk_chosen_plan = mmtk_env_plan;
     }
     else if (mmtk_pre_arg_plan) {
