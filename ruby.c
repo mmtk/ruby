@@ -62,7 +62,7 @@
 #include "ruby/internal/error.h"
 
 #ifdef USE_THIRD_PARTY_HEAP
-#include "mmtk.h"
+#include "gc.h"
 #endif
 
 #ifndef MAXPATHLEN

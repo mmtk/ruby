@@ -22,8 +22,6 @@ typedef void* MMTk_VMMutatorThread;
 #define MMTK_GC_THREAD_KIND_CONTROLLER 0
 #define MMTK_GC_THREAD_KIND_WORKER 1
 
-#define MMTK_DEFAULT_PLAN "MarkSweep"
-
 typedef struct {
     void (*init_gc_worker_thread)(MMTk_VMWorkerThread worker_tls);
     MMTk_VMWorkerThread (*get_gc_thread_tls)(void);
@@ -105,10 +103,6 @@ extern void mmtk_harness_end(void *tls);
 
 extern void mmtk_register_finalizable(void *reff);
 extern void* mmtk_poll_finalizable(bool include_live);
-
-void rb_mmtk_pre_process_opts(int argc, char **argv);
-void rb_mmtk_post_process_opts(char *arg);
-void rb_mmtk_post_process_opts_finish(void);
 
 #ifdef __cplusplus
 }

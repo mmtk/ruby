@@ -31,7 +31,7 @@
 #endif
 
 #ifdef USE_THIRD_PARTY_HEAP
-#include "mmtk.h"
+#include "gc.h"
 #endif
 
 static int
