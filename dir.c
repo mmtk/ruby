@@ -465,12 +465,12 @@ struct dir_data {
     rb_encoding *enc;
 };
 
-static void
-dir_mark(void *ptr)
-{
-    struct dir_data *dir = ptr;
-    rb_gc_mark(dir->path);
-}
+/* static void */
+/* dir_mark(void *ptr) */
+/* { */
+/*     struct dir_data *dir = ptr; */
+/*     rb_gc_mark(dir->path); */
+/* } */
 
 static void
 dir_free(void *ptr)
@@ -487,10 +487,14 @@ dir_memsize(const void *ptr)
     return sizeof(struct dir_data);
 }
 
+#define END_REFS UINTPTR_MAX
+
+static VALUE references[] = {offsetof(struct dir_data, path), END_REFS};
+
 static const rb_data_type_t dir_data_type = {
     "dir",
-    {dir_mark, dir_free, dir_memsize,},
-    0, 0, RUBY_TYPED_WB_PROTECTED | RUBY_TYPED_FREE_IMMEDIATELY
+    {NULL, dir_free, dir_memsize,},
+    0, references, RUBY_TYPED_WB_PROTECTED | RUBY_TYPED_FREE_IMMEDIATELY | RUBY_TYPED_DECL_MARKING
 };
 
 static VALUE dir_close(VALUE);

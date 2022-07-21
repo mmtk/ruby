@@ -7208,6 +7208,19 @@ gc_mark_imemo(rb_objspace_t *objspace, VALUE obj)
     }
 }
 
+static bool
+gc_declarative_marking_p(const rb_data_type_t *type)
+{
+    return (type->flags & RUBY_TYPED_DECL_MARKING) != 0;     
+}
+
+static void
+gc_mark_from_offset(rb_objspace_t *objspace, VALUE *data_struct, VALUE offset)
+{
+    VALUE markable = *(data_struct + (offset / sizeof(VALUE)));
+    gc_mark_and_pin(objspace, markable);
+}
+
 static void
 gc_mark_children(rb_objspace_t *objspace, VALUE obj)
 {
@@ -7310,16 +7323,29 @@ gc_mark_children(rb_objspace_t *objspace, VALUE obj)
         break;
 
       case T_DATA:
-        {
+	{
             void *const ptr = DATA_PTR(obj);
             if (ptr) {
-                RUBY_DATA_FUNC mark_func = RTYPEDDATA_P(obj) ?
-                    any->as.typeddata.type->function.dmark :
-                    any->as.data.dmark;
-                if (mark_func) (*mark_func)(ptr);
+                if (RTYPEDDATA_P(obj) && gc_declarative_marking_p(any->as.typeddata.type)) {
+                    VALUE *offset_list = any->as.typeddata.type->data;
+                    VALUE *data_struct = (VALUE *)any->as.typeddata.data;
+                    VALUE offset = *offset_list;
+
+                    int n = 0;
+                    while (offset != UINTPTR_MAX) {
+                        gc_mark_from_offset(objspace, data_struct, offset);
+                        n++;
+                        offset = *(offset_list + n);
+                    }
+                } else {
+                    RUBY_DATA_FUNC mark_func = RTYPEDDATA_P(obj) ?
+                        any->as.typeddata.type->function.dmark :
+                        any->as.data.dmark;
+                    if (mark_func) (*mark_func)(ptr);
+                }
             }
         }
-        break;
+	break;
 
       case T_OBJECT:
         {
