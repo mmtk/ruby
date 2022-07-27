@@ -1460,9 +1460,9 @@ asan_poison_object_restore(VALUE obj, void *ptr)
 
 // Comment for easy location
 #ifdef USE_THIRD_PARTY_HEAP
-#define RVALUE_MARK_BITMAP(obj)           0
-#define RVALUE_PIN_BITMAP(obj)            0
-#define RVALUE_PAGE_MARKED(page, obj)     0
+#define RVALUE_MARK_BITMAP(obj)           (rb_bug("RVALUE_MARK_BITMAP"), 0)
+#define RVALUE_PIN_BITMAP(obj)            (rb_bug("RVALUE_PIN_BITMAP"), 0)
+#define RVALUE_PAGE_MARKED(page, obj)     (rb_bug("RVALUE_PAGE_MARKED"), 0)
 #else
 #define RVALUE_MARK_BITMAP(obj)           MARKED_IN_BITMAP(GET_HEAP_MARK_BITS(obj), (obj))
 #define RVALUE_PIN_BITMAP(obj)            MARKED_IN_BITMAP(GET_HEAP_PINNED_BITS(obj), (obj))
@@ -1477,12 +1477,12 @@ asan_poison_object_restore(VALUE obj, void *ptr)
 #define RVALUE_PAGE_UNCOLLECTIBLE(page, obj)  MARKED_IN_BITMAP((page)->uncollectible_bits, (obj))
 #define RVALUE_PAGE_MARKING(page, obj)        MARKED_IN_BITMAP((page)->marking_bits, (obj))
 #else
-#define RVALUE_WB_UNPROTECTED_BITMAP(obj) 0
-#define RVALUE_UNCOLLECTIBLE_BITMAP(obj)  0
-#define RVALUE_MARKING_BITMAP(obj)        0
-#define RVALUE_PAGE_WB_UNPROTECTED(page, obj) 0
-#define RVALUE_PAGE_UNCOLLECTIBLE(page, obj)  0
-#define RVALUE_PAGE_MARKING(page, obj)        0
+#define RVALUE_WB_UNPROTECTED_BITMAP(obj) (rb_bug("RVALUE_WB_UNPROTECTED_BITMAP"), 0)
+#define RVALUE_UNCOLLECTIBLE_BITMAP(obj)  (rb_bug("RVALUE_UNCOLLECTIBLE_BITMAP"), 0)
+#define RVALUE_MARKING_BITMAP(obj)        (rb_bug("RVALUE_MARKING_BITMAP"), 0)
+#define RVALUE_PAGE_WB_UNPROTECTED(page, obj) (rb_bug("RVALUE_PAGE_WB_UNPROTECTED"), 0)
+#define RVALUE_PAGE_UNCOLLECTIBLE(page, obj)  (rb_bug("RVALUE_PAGE_UNCOLLECTIBLE"), 0)
+#define RVALUE_PAGE_MARKING(page, obj)        (rb_bug("RVALUE_PAGE_MARKING"), 0)
 #endif
 
 #define RVALUE_OLD_AGE   3
@@ -3588,7 +3588,9 @@ obj_free(rb_objspace_t *objspace, VALUE obj)
         obj_free_object_id(objspace, obj);
     }
 
+#ifndef USE_THIRD_PARTY_HEAP
     if (RVALUE_WB_UNPROTECTED(obj)) CLEAR_IN_BITMAP(GET_HEAP_WB_UNPROTECTED_BITS(obj), obj);
+#endif
 
 #if RGENGC_CHECK_MODE
 #define CHECK(x) if (x(obj) != FALSE) rb_bug("obj_free: " #x "(%s) != FALSE", obj_info(obj))

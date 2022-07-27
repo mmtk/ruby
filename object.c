@@ -284,7 +284,9 @@ init_copy(VALUE dest, VALUE obj)
     }
     RBASIC(dest)->flags &= ~(T_MASK|FL_EXIVAR);
     RBASIC(dest)->flags |= RBASIC(obj)->flags & (T_MASK|FL_EXIVAR);
+#ifndef USE_THIRD_PARTY_HEAP
     rb_copy_wb_protected_attribute(dest, obj);
+#endif
     rb_copy_generic_ivar(dest, obj);
     rb_gc_copy_finalizer(dest, obj);
     if (RB_TYPE_P(obj, T_OBJECT)) {
