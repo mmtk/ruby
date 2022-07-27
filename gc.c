@@ -1521,7 +1521,6 @@ check_rvalue_consistency_force(const VALUE obj, int terminate)
             ;
         }
         else {
-#if USE_MMTK
             int wb_unprotected_bit;
             int uncollectible_bit;
             int mark_bit;
@@ -1529,6 +1528,7 @@ check_rvalue_consistency_force(const VALUE obj, int terminate)
             int remembered_bit;
             int age;
 
+#if USE_MMTK
             if (!mmtk_enable) {
 #endif
                 // TODO remove these

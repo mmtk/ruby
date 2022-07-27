@@ -3928,9 +3928,7 @@ Init_BareVM(void)
 
 #if USE_MMTK
     if (rb_mmtk_enabled_p()) {
-#endif
         rb_gc_init_collection();
-#if USE_MMTK
     }
 #endif
 }
