@@ -1458,32 +1458,16 @@ asan_poison_object_restore(VALUE obj, void *ptr)
 #define FL_SET2(x,f)   FL_CHECK2("FL_SET2",   x, RBASIC(x)->flags |= (f))
 #define FL_UNSET2(x,f) FL_CHECK2("FL_UNSET2", x, RBASIC(x)->flags &= ~(f))
 
-// Comment for easy location
-#ifdef USE_THIRD_PARTY_HEAP
-#define RVALUE_MARK_BITMAP(obj)           (rb_bug("RVALUE_MARK_BITMAP"), 0)
-#define RVALUE_PIN_BITMAP(obj)            (rb_bug("RVALUE_PIN_BITMAP"), 0)
-#define RVALUE_PAGE_MARKED(page, obj)     (rb_bug("RVALUE_PAGE_MARKED"), 0)
-#else
 #define RVALUE_MARK_BITMAP(obj)           MARKED_IN_BITMAP(GET_HEAP_MARK_BITS(obj), (obj))
 #define RVALUE_PIN_BITMAP(obj)            MARKED_IN_BITMAP(GET_HEAP_PINNED_BITS(obj), (obj))
 #define RVALUE_PAGE_MARKED(page, obj)     MARKED_IN_BITMAP((page)->mark_bits, (obj))
-#endif
 
-#ifndef USE_THIRD_PARTY_HEAP
 #define RVALUE_WB_UNPROTECTED_BITMAP(obj) MARKED_IN_BITMAP(GET_HEAP_WB_UNPROTECTED_BITS(obj), (obj))
 #define RVALUE_UNCOLLECTIBLE_BITMAP(obj)  MARKED_IN_BITMAP(GET_HEAP_UNCOLLECTIBLE_BITS(obj), (obj))
 #define RVALUE_MARKING_BITMAP(obj)        MARKED_IN_BITMAP(GET_HEAP_MARKING_BITS(obj), (obj))
 #define RVALUE_PAGE_WB_UNPROTECTED(page, obj) MARKED_IN_BITMAP((page)->wb_unprotected_bits, (obj))
 #define RVALUE_PAGE_UNCOLLECTIBLE(page, obj)  MARKED_IN_BITMAP((page)->uncollectible_bits, (obj))
 #define RVALUE_PAGE_MARKING(page, obj)        MARKED_IN_BITMAP((page)->marking_bits, (obj))
-#else
-#define RVALUE_WB_UNPROTECTED_BITMAP(obj) (rb_bug("RVALUE_WB_UNPROTECTED_BITMAP"), 0)
-#define RVALUE_UNCOLLECTIBLE_BITMAP(obj)  (rb_bug("RVALUE_UNCOLLECTIBLE_BITMAP"), 0)
-#define RVALUE_MARKING_BITMAP(obj)        (rb_bug("RVALUE_MARKING_BITMAP"), 0)
-#define RVALUE_PAGE_WB_UNPROTECTED(page, obj) (rb_bug("RVALUE_PAGE_WB_UNPROTECTED"), 0)
-#define RVALUE_PAGE_UNCOLLECTIBLE(page, obj)  (rb_bug("RVALUE_PAGE_UNCOLLECTIBLE"), 0)
-#define RVALUE_PAGE_MARKING(page, obj)        (rb_bug("RVALUE_PAGE_MARKING"), 0)
-#endif
 
 #define RVALUE_OLD_AGE   3
 #define RVALUE_AGE_SHIFT 5 /* FL_PROMOTED0 bit */
