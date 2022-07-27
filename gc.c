@@ -3507,7 +3507,7 @@ static inline void
 make_zombie(rb_objspace_t *objspace, VALUE obj, void (*dfree)(void *), void *data)
 {
     struct RZombie *zombie;
-    
+
 #if USE_MMTK
     // Zombies are for deferred jobs of cleaning up non-GC resources. It is not
     // necessry to manage zombies with GC, although there is no problem using GC,
