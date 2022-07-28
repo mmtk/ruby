@@ -2910,7 +2910,7 @@ newobj_of0(VALUE klass, VALUE flags, int wb_protected, rb_ractor_t *cr, size_t a
     size_t size_pool_idx = size_pool_idx_for_size(alloc_size);
 
 #if USE_MMTK
-        if (rb_mmtk_enabled_p()) {
+    if (rb_mmtk_enabled_p()) {
         // FIXME: Currently, types that uses VWA asks the GC for the object size (rb_gc_obj_slot_size).
         // It is only convenient to implement for size-segregated free-list allocators which
         // Ruby currently implements. However, for high-performance bump-pointer allcators,
@@ -3311,11 +3311,11 @@ is_pointer_to_heap(rb_objspace_t *objspace, void *ptr)
         bool result = mmtk_is_mmtk_object(ptr);
 
         if (USE_RUBY_DEBUG_LOG) {
-        if (result) {
-            RUBY_DEBUG_LOG("***** %18p: YEAH! It looks like an object reference! *****", ptr);
-        } else {
-            RUBY_DEBUG_LOG("      %18p: MMTk says nope.", ptr);
-        }
+            if (result) {
+                RUBY_DEBUG_LOG("***** %18p: YEAH! It looks like an object reference! *****", ptr);
+            } else {
+                RUBY_DEBUG_LOG("      %18p: MMTk says nope.", ptr);
+            }
         }
 
         return result;
