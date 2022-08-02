@@ -1529,7 +1529,8 @@ check_rvalue_consistency_force(const VALUE obj, int terminate)
             int age;
 
 #if USE_MMTK
-            if (!rb_mmtk_enabled_p()) {
+            const bool mmtk_enabled_local = rb_mmtk_enabled_p(); // Allows control-flow sensitive analysis of wb_unprotected_bit etc
+            if (!mmtk_enabled_local) {
 #endif
                 // TODO remove these
                 wb_unprotected_bit = RVALUE_WB_UNPROTECTED_BITMAP(obj) != 0;
@@ -1557,7 +1558,7 @@ check_rvalue_consistency_force(const VALUE obj, int terminate)
             obj_memsize_of((VALUE)obj, FALSE);
 
 #if USE_MMTK
-            if (!rb_mmtk_enabled_p()) {
+            if (!mmtk_enabled_local) {
 #endif
                 /* check generation
                 *
@@ -4578,7 +4579,8 @@ finalize_list(rb_objspace_t *objspace, VALUE zombie)
 
         struct heap_page *page;
 #if USE_MMTK
-        if (!rb_mmtk_enabled_p()) {
+        const bool mmtk_enabled_local = rb_mmtk_enabled_p(); // Allows control-flow sensitive analysis of page
+        if (!mmtk_enabled_local) {
 #endif
             page = GET_HEAP_PAGE(zombie);
 #if USE_MMTK
@@ -4590,7 +4592,7 @@ finalize_list(rb_objspace_t *objspace, VALUE zombie)
         RB_VM_LOCK_ENTER();
         {
 #if USE_MMTK
-            if (!rb_mmtk_enabled_p()) {
+            if (!mmtk_enabled_local) {
 #endif
                 // TODO: will probably need to re-enable this section when we
                 // implement object/ID bijective mappings
@@ -4615,7 +4617,7 @@ finalize_list(rb_objspace_t *objspace, VALUE zombie)
         RB_VM_LOCK_LEAVE();
 
 #if USE_MMTK
-        if (rb_mmtk_enabled_p()) {
+        if (mmtk_enabled_local) {
             // When using MMTk, we allocated zombie with xmalloc.  It needs to be freed here.
             xfree((void*)zombie);
         }
@@ -7761,7 +7763,8 @@ gc_mark_roots(rb_objspace_t *objspace, const char **categoryp)
     rb_execution_context_t *ec;
 
 #if USE_MMTK
-    if (rb_mmtk_enabled_p()) {
+    const bool mmtk_enabled_local = rb_mmtk_enabled_p(); // Allows control-flow sensitive analysis of ec etc
+    if (mmtk_enabled_local) {
         rb_mmtk_assert_mmtk_worker();
         vm = GET_VM();
     } else {
@@ -7811,7 +7814,7 @@ gc_mark_roots(rb_objspace_t *objspace, const char **categoryp)
 #if USE_MMTK
     // Note that when using MMTk, this function is executed by a GC worker thread, not a mutator.
     // Therefore we don't set stack end or scan the current stack.
-    if (!rb_mmtk_enabled_p()) {
+    if (!mmtk_enabled_local) {
 #endif
         SET_STACK_END;
 #if USE_MMTK
@@ -7825,7 +7828,7 @@ gc_mark_roots(rb_objspace_t *objspace, const char **categoryp)
     mark_finalizer_tbl(objspace, finalizer_table);
 
 #if USE_MMTK
-    if (!rb_mmtk_enabled_p()) {
+    if (!mmtk_enabled_local) {
 #endif
         // When using MMTk, the current thread is a GC worker.  Mutators are scanned separately.
         MARK_CHECKPOINT("machine_context");
@@ -14708,7 +14711,7 @@ rb_mmtk_plan_name(VALUE _)
 }
 
 VALUE
-rb_mmtk_enabled(void)
+rb_mmtk_enabled(VALUE _)
 {
     return RBOOL(rb_mmtk_enabled_p());
 }
