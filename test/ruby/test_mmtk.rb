@@ -48,7 +48,7 @@ class TestMMTk < Test::Unit::TestCase
     ENABLE_OPTIONS.each do |version_args|
       mmtk_child_env = {'RUBYOPT' => version_args.join(' ')}
       assert_in_out_err([mmtk_child_env, '--version'], '') do |stdout, stderr|
-        # Meed to scrub the description because --mmtk etc will use the default plan
+        # Need to scrub the description because --mmtk etc will use the default plan
         assert_equal(scrub_desc(RUBY_DESCRIPTION), scrub_desc(stdout.first))
         assert_equal([], stderr)
       end
