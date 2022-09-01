@@ -37,7 +37,7 @@ class TestMMTk < Test::Unit::TestCase
   def test_enable
     ENABLE_OPTIONS.each do |version_args|
       assert_in_out_err(['--version'] + version_args) do |stdout, stderr|
-        # Meed to scrub the description because --mmtk etc will use the default plan
+        # Need to scrub the description because --mmtk etc will use the default plan
         assert_equal(scrub_desc(RUBY_DESCRIPTION), scrub_desc(stdout.first))
         assert_equal([], stderr)
       end
