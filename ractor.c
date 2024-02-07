@@ -1424,6 +1424,9 @@ cancel_single_ractor_mode(void)
     // enable multi-ractor mode
     RUBY_DEBUG_LOG("enable multi-ractor mode");
 
+#if USE_MMTK
+    // disable GC call for multi-ractor mode
+#else
     VALUE was_disabled = rb_gc_enable();
 
     rb_gc_start();
@@ -1432,7 +1435,7 @@ cancel_single_ractor_mode(void)
     if (was_disabled) {
         rb_gc_disable();
     }
-
+#endif
     ruby_single_main_ractor = NULL;
 
     if (rb_warning_category_enabled_p(RB_WARN_CATEGORY_EXPERIMENTAL)) {
