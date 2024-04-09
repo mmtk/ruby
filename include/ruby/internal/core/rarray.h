@@ -189,6 +189,14 @@ struct RArray {
     } as;
 };
 
+#if USE_MMTK
+typedef struct rb_mmtk_arrayext_struct {
+    VALUE objbuf; // points to rb_mmtk_objbuf_t in the GC'ed heap
+} rb_mmtk_arrayext_t;
+
+#define RARRAY_EXT(s) ((rb_mmtk_arrayext_t *)((char *)(s) + sizeof(struct RArray)))
+#endif
+
 RBIMPL_SYMBOL_EXPORT_BEGIN()
 /**
  * @private
@@ -306,6 +314,55 @@ rb_array_const_ptr(VALUE a)
     }
 }
 
+#if USE_MMTK
+/**
+ * @private
+ *
+ * Return the object that holds the content of the array.
+ * Only relevant when using MMTk.
+ * For embedded arrays, it is the array itself;
+ * for heap arrays, it is the the underlying imemo:mmtk_objbuf
+ *
+ * @param[in]  a  An object of ::RArray.
+ * @return     The object holding its backend storage.
+ */
+static inline VALUE
+rb_mmtk_array_content_holder(VALUE a)
+{
+    RBIMPL_ASSERT_TYPE(a, RUBY_T_ARRAY);
+
+    if (RB_FL_ANY_RAW(a, RARRAY_EMBED_FLAG)) {
+        return a;
+    }
+    else {
+        return RARRAY_EXT(a)->objbuf;
+    }
+}
+#endif
+
+#if USE_MMTK
+// Defined in mmtk_support.c
+bool rb_mmtk_enabled_p(void);
+void rb_mmtk_pin_array_buffer(VALUE array, volatile VALUE *stack_slot);
+
+// When using MMTk, we need to pin the underlying buffer if the array is not embedded becuase the
+// buffer is in the GC heap.  Otherwise, if C calls back to Ruby, and Ruby triggers GCm and GC
+// moves the array buffer, the C function will be operating on the old address of the buffer.
+#define RBIMPL_RARRAY_STMT(ary, var, expr) do {                 \
+    RBIMPL_ASSERT_TYPE((ary), RUBY_T_ARRAY);                    \
+    const VALUE rbimpl_ary = (ary);                             \
+    volatile VALUE rb_mmtk_impl_pinned;                         \
+    if (rb_mmtk_enabled_p()) {                                  \
+        rb_mmtk_pin_array_buffer(ary, &rb_mmtk_impl_pinned);    \
+    } else {                                                    \
+        rb_mmtk_impl_pinned = 0;                                \
+    }                                                           \
+    VALUE *var = rb_ary_ptr_use_start(rbimpl_ary);              \
+    expr;                                                       \
+    rb_ary_ptr_use_end(rbimpl_ary);                             \
+    rb_mmtk_impl_pinned = 0;                                    \
+} while (0)
+#else
 /**
  * @private
  *
@@ -319,6 +376,7 @@ rb_array_const_ptr(VALUE a)
     expr;                                                   \
     rb_ary_ptr_use_end(rbimpl_ary);                \
 } while (0)
+#endif
 
 /**
  * Declares a section of code where raw pointers are used.  In case you need to

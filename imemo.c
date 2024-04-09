@@ -29,6 +29,8 @@ rb_imemo_name(enum imemo_type type)
         IMEMO_NAME(svar);
         IMEMO_NAME(throw_data);
         IMEMO_NAME(tmpbuf);
+        IMEMO_NAME(mmtk_strbuf);
+        IMEMO_NAME(mmtk_objbuf);
 #undef IMEMO_NAME
       default:
         rb_bug("unreachable");
@@ -183,18 +185,53 @@ cc_table_mark_i(ID id, VALUE ccs_ptr, void *data)
 {
     struct rb_class_cc_entries *ccs = (struct rb_class_cc_entries *)ccs_ptr;
     VM_ASSERT(vm_ccs_p(ccs));
+#if USE_MMTK
+    if (!rb_mmtk_enabled_p()) {
+    // ccs->cme can point to heap object, too.
+    // Evacuating GC (such as Immix) may have moved it.
+#endif
     VM_ASSERT(id == ccs->cme->called_id);
+#if USE_MMTK
+    } else {
+        VM_ASSERT(id == 0);
+    }
+#endif
 
     if (METHOD_ENTRY_INVALIDATED(ccs->cme)) {
+#if USE_MMTK
+        if (!rb_mmtk_enabled_p()) {
+        // NOTE:
+        // Vanilla Ruby assumes no objects are moved during marking phase,
+        // and attempts to clean-up invalidated method entries during marking.
+        // This doesn't work with MMTk.
+        // With an evacuating GC algorithm (such as Immix),
+        // children of `ccs` may have been moved during tracing.
+        // But the code in `rb_vm_ccs_free` reads many VALUE fields without calling `gc_location`
+        // which obviously isn't needed for the non-moving marking phase.
+        // We temporarily disable this call for now.
+        // FIXME: Clean up method entries properly using the weak reference processing mechanism.
+#endif
         rb_vm_ccs_free(ccs);
+#if USE_MMTK
+        }
+#endif
         return ID_TABLE_DELETE;
     }
     else {
         rb_gc_mark_movable((VALUE)ccs->cme);
 
         for (int i=0; i<ccs->len; i++) {
+#if USE_MMTK
+            if (!rb_mmtk_enabled_p()) {
+            // Type info are stored on the heap, too.
+            // With evacuating GC, they may have been moved, too.
+            // It is not safe to inspect reference fields during tracing.
+#endif
             VM_ASSERT((VALUE)data == ccs->entries[i].cc->klass);
             VM_ASSERT(vm_cc_check_cme(ccs->entries[i].cc, ccs->cme));
+#if USE_MMTK
+            }
+#endif
 
             rb_gc_mark_movable((VALUE)ccs->entries[i].ci);
             rb_gc_mark_movable((VALUE)ccs->entries[i].cc);
@@ -203,12 +240,31 @@ cc_table_mark_i(ID id, VALUE ccs_ptr, void *data)
     }
 }
 
+#if USE_MMTK
+static enum rb_id_table_iterator_result
+cc_table_mark_i_no_id(VALUE ccs_ptr, void *data_ptr)
+{
+    return cc_table_mark_i(0, ccs_ptr, data_ptr);
+}
+#endif
+
 void
 rb_cc_table_mark(VALUE klass)
 {
     struct rb_id_table *cc_tbl = RCLASS_CC_TBL(klass);
     if (cc_tbl) {
+#if USE_MMTK
+        if (rb_mmtk_enabled_p()) {
+            // Note: rb_id_table_foreach will look up the ID from keys by accessing
+            // arrays in the heap during key2id, but the id is only used for
+            // assertion which fails with an evacuating GC (such as Immix) anyway.
+            rb_id_table_foreach_values(cc_tbl, cc_table_mark_i_no_id, (void *)klass);
+        } else {
+#endif
         rb_id_table_foreach(cc_tbl, cc_table_mark_i, (void *)klass);
+#if USE_MMTK
+        }
+#endif
     }
 }
 
@@ -299,6 +355,9 @@ rb_imemo_mark_and_move(VALUE obj, bool reference_updating)
          */
         struct rb_callcache *cc = (struct rb_callcache *)obj;
         if (reference_updating) {
+#if USE_MMTK
+            if (!rb_mmtk_enabled_p()) {
+#endif
             if (!cc->klass) {
                 // already invalidated
             }
@@ -313,6 +372,16 @@ rb_imemo_mark_and_move(VALUE obj, bool reference_updating)
                     vm_cc_invalidate(cc);
                 }
             }
+#if USE_MMTK
+            } else {
+                // When using MMTk, we must trace both the class and the cme_ field because
+                // we are still in the middle of tracing at this time,
+                // therefore reachability is not yet established.
+                *((VALUE *)&cc->klass) = rb_gc_location(cc->klass);
+                *((struct rb_callable_method_entry_struct **)&cc->cme_) =
+                    (struct rb_callable_method_entry_struct *)rb_gc_location((VALUE)cc->cme_);
+            }
+#endif
         }
         else {
             if (vm_cc_super_p(cc) || vm_cc_refinement_p(cc)) {
@@ -344,9 +413,15 @@ rb_imemo_mark_and_move(VALUE obj, bool reference_updating)
         rb_env_t *env = (rb_env_t *)obj;
 
         if (LIKELY(env->ep)) {
+#if USE_MMTK
+            if (!rb_mmtk_enabled_p()) {
+#endif
             // just after newobj() can be NULL here.
             RUBY_ASSERT(rb_gc_location(env->ep[VM_ENV_DATA_INDEX_ENV]) == rb_gc_location(obj));
             RUBY_ASSERT(reference_updating || VM_ENV_ESCAPED_P(env->ep));
+#if USE_MMTK
+            }
+#endif
 
             for (unsigned int i = 0; i < env->env_size; i++) {
                 rb_gc_mark_and_move((VALUE *)&env->env[i]);
@@ -421,6 +496,28 @@ rb_imemo_mark_and_move(VALUE obj, bool reference_updating)
 
         break;
       }
+
+#if USE_MMTK
+      case imemo_mmtk_strbuf: {
+        // imemo_mmtk_strbuf is only used by mmtk.
+        RUBY_ASSERT(rb_mmtk_enabled_p());
+
+        // imemo_mmtk_strbuf does not nave any children.
+        break;
+      }
+      case imemo_mmtk_objbuf: {
+        // imemo_mmtk_objbuf is only used by mmtk.
+        RUBY_ASSERT(rb_mmtk_enabled_p());
+
+        rb_mmtk_objbuf_t *objbuf = (rb_mmtk_objbuf_t*)obj;
+        size_t capa = objbuf->capa;
+        for (size_t i = 0; i < capa; i++) {
+            rb_gc_mark_and_move(&objbuf->ary[i]);
+        }
+        break;
+      }
+#endif
+
       default:
         rb_bug("unreachable");
     }
@@ -584,6 +681,16 @@ rb_imemo_free(VALUE obj)
         RB_DEBUG_COUNTER_INC(obj_imemo_tmpbuf);
 
         break;
+
+#if USE_MMTK
+      case imemo_mmtk_strbuf:
+        rb_bug("imemo_mmtk_strbuf is not a candidate of obj_free");
+        break;
+      case imemo_mmtk_objbuf:
+        rb_bug("imemo_mmtk_objbuf is not a candidate of obj_free");
+        break;
+#endif
+
       default:
         rb_bug("unreachable");
     }

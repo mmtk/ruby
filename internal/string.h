@@ -48,6 +48,10 @@ int rb_ascii8bit_appendable_encoding_index(rb_encoding *enc, unsigned int code);
 VALUE rb_str_include(VALUE str, VALUE arg);
 VALUE rb_str_byte_substr(VALUE str, VALUE beg, VALUE len);
 
+#if USE_MMTK
+bool rb_mmtk_str_no_free(VALUE str);
+#endif
+
 static inline bool STR_EMBED_P(VALUE str);
 static inline bool STR_SHARED_P(VALUE str);
 static inline VALUE QUOTE(VALUE v);

@@ -46,6 +46,7 @@ m4_include([tool/m4/ruby_try_ldflags.m4])dnl
 m4_include([tool/m4/ruby_universal_arch.m4])dnl
 m4_include([tool/m4/ruby_wasm_tools.m4])dnl
 m4_include([tool/m4/ruby_werror_flag.m4])dnl
+m4_include([tool/m4/mmtk_ruby.m4])dnl
 
 AS_IF([test "x${GITHUB_ACTIONS}" = xtrue],
 [AC_REQUIRE([_COLORIZE_RESULT_PREPARE])dnl
@@ -3750,6 +3751,8 @@ AS_IF([test x"$gcov" = xyes], [
 ])
 
 RUBY_SETJMP_TYPE
+
+MMTK_RUBY
 }
 
 [begin]_group "installation section" && {
@@ -4229,6 +4232,7 @@ AC_SUBST(LIBRUBYARG)
 AC_SUBST(LIBRUBYARG_STATIC)
 AC_SUBST(LIBRUBYARG_SHARED)
 AC_SUBST(SOLIBS)
+AC_SUBST(EXTLIBS)
 AC_SUBST(DLDLIBS)
 AC_SUBST(DLDSHARED)
 AC_SUBST(ENABLE_SHARED)
@@ -4668,6 +4672,7 @@ config_summary "warnflags"           "$warnflags"
 config_summary "strip command"       "$STRIP"
 config_summary "install doc"         "$DOCTARGETS"
 config_summary "YJIT support"        "$YJIT_SUPPORT"
+config_summary "garbage collector"   "$gc_support"
 config_summary "RJIT support"        "$RJIT_SUPPORT"
 config_summary "man page type"       "$MANTYPE"
 config_summary "search path"         "$search_path"

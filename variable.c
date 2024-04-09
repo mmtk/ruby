@@ -40,6 +40,10 @@
 #include "ractor_core.h"
 #include "vm_sync.h"
 
+#if USE_MMTK
+#include "internal/mmtk.h"
+#endif
+
 RUBY_EXTERN rb_serial_t ruby_vm_global_cvar_state;
 #define GET_GLOBAL_CVAR_STATE() (ruby_vm_global_cvar_state)
 
@@ -1109,7 +1113,18 @@ rb_mark_generic_ivar(VALUE obj)
 {
     struct gen_ivtbl *ivtbl;
 
+#if USE_MMTK
+    int r = 0;
+    if (rb_mmtk_enabled_p()) {
+        ivtbl = mmtk_get_givtbl_during_gc((MMTk_ObjectReference)obj);
+        r = (ivtbl != NULL);
+    } else {
+        r = rb_gen_ivtbl_get(obj, 0, &ivtbl);
+    }
+    if (r) {
+#else
     if (rb_gen_ivtbl_get(obj, 0, &ivtbl)) {
+#endif
         if (rb_shape_obj_too_complex(obj)) {
             rb_mark_tbl_no_pin(ivtbl->as.complex.table);
         }
@@ -1126,7 +1141,18 @@ rb_ref_update_generic_ivar(VALUE obj)
 {
     struct gen_ivtbl *ivtbl;
 
+#if USE_MMTK
+    int r = 0;
+    if (rb_mmtk_enabled_p()) {
+        ivtbl = mmtk_get_givtbl_during_gc((MMTk_ObjectReference)obj);
+        r = (ivtbl != NULL);
+    } else {
+        r = rb_gen_ivtbl_get(obj, 0, &ivtbl);
+    }
+    if (r) {
+#else
     if (rb_gen_ivtbl_get(obj, 0, &ivtbl)) {
+#endif
         if (rb_shape_obj_too_complex(obj)) {
             rb_gc_ref_update_table_values_only(ivtbl->as.complex.table);
         }
@@ -1137,6 +1163,45 @@ rb_ref_update_generic_ivar(VALUE obj)
         }
     }
 }
+
+#if USE_MMTK
+
+static int
+rb_mmtk_cleanup_generic_iv_tbl_check(st_data_t key, st_data_t value, st_data_t argp, int error)
+{
+    MMTk_ObjectReference key_objref = (MMTk_ObjectReference)key;
+    // Delete gen_ivtbl for dead objects.
+    if (!mmtk_is_live_object(key_objref)) {
+        struct gen_ivtbl *tbl = (struct gen_ivtbl*)value;
+        RUBY_ASSERT(tbl != NULL);
+        xfree(tbl);
+
+        return ST_DELETE;
+    }
+
+    // Live objects should have been forwarded in mmtk-ruby.
+#if RUBY_DEBUG
+    MMTk_ObjectReference new_key = mmtk_get_forwarded_object(key_objref);
+    RUBY_ASSERT(new_key == NULL);
+#endif
+
+    return ST_CONTINUE;
+}
+
+/**
+ * Remove entries in generic_iv_tbl_ where the key is dead.
+ * Only used when using MMTk.  In vanilla Ruby, the gen_ivtbl of an object is
+ * removed from generic_iv_tbl_ in obj_free when the object dies.
+ */
+void
+rb_mmtk_cleanup_generic_iv_tbl(void)
+{
+    st_foreach_with_replace(generic_iv_tbl_,
+                            rb_mmtk_cleanup_generic_iv_tbl_check,
+                            NULL,
+                            0);
+}
+#endif
 
 void
 rb_mv_generic_ivar(VALUE rsrc, VALUE dst)

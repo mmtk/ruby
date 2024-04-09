@@ -111,6 +111,10 @@
 #include "internal/st.h"
 #endif
 
+#if USE_MMTK
+#include "internal/mmtk.h"
+#endif
+
 #include <stdio.h>
 #ifdef HAVE_STDLIB_H
 #include <stdlib.h>
@@ -2322,7 +2326,6 @@ rb_st_nth_key(st_table *tab, st_index_t index)
         rb_bug("unreachable");
     }
 }
-
 void
 rb_st_compact_table(st_table *tab)
 {
@@ -2335,5 +2338,67 @@ rb_st_compact_table(st_table *tab)
         rebuild_cleanup(tab);
     }
 }
+
+#if USE_MMTK
+// Update a deduplication table.
+//
+// This function forwards reachable entries and removes dead entries of deduplication tables.
+// The frozen string table and the CI table are such tables.  We assume keys are always equal to
+// their respective values.
+//
+// This function is intended to be faster than existing updating functions based on st_foreach.
+// This function never attempts to compare elements by value or by hash (which is unsafe during GC
+// because some value-comparing or hash-computing operations may depend on weak tables or fields
+// which are not yet updated), and never touches entries that hold non-reference values
+// (SPECIAL_CONST_P).
+void
+rb_mmtk_st_update_dedup_table(st_table *tab)
+{
+    for (st_index_t ind = tab->entries_start; ind < tab->entries_bound; ind++) {
+        if (DELETED_ENTRY_P(&tab->entries[ind])) {
+            continue;
+        }
+
+        st_data_t key = tab->entries[ind].key;
+        RUBY_ASSERT(key == tab->entries[ind].record);
+
+        // A Ruby value can be (1) non-reference, (2) ref to reachable object, or (3) ref to unreachable object.
+        bool key_is_ref = !RB_SPECIAL_CONST_P(key);
+        bool key_points_to_unreachable_object = key_is_ref && !mmtk_is_reachable((MMTk_ObjectReference)key);
+
+        // If the key points to unreachable object, delete this entry.
+        // We assume the key is equal to the value.
+        if (key_points_to_unreachable_object) {
+            MARK_ENTRY_DELETED(&tab->entries[ind]);
+            tab->num_entries--;
+            continue;
+        }
+
+        // If the key points to reachable object, forward it.
+        if (key_is_ref && !key_points_to_unreachable_object) {
+            st_data_t new_key = (st_data_t)mmtk_get_forwarded_object((MMTk_ObjectReference)key);
+            if (new_key != 0) {
+                tab->entries[ind].key = new_key;
+                tab->entries[ind].record = new_key;
+            }
+        }
+    }
+
+    if (tab->bins == NULL) {
+        return;
+    }
+
+    st_index_t num_bins = get_bins_num(tab);
+    unsigned int const size_ind = get_size_ind(tab);
+
+    // Delete bins that point to deleted entries.
+    for (st_index_t ind = 0; ind < num_bins; ind++) {
+        st_index_t bin = get_bin(tab->bins, size_ind, ind);
+        if (DELETED_ENTRY_P(&tab->entries[bin])) {
+            MARK_BIN_DELETED(tab, ind);
+        }
+    }
+}
+#endif
 
 #endif

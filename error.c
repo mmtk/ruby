@@ -35,6 +35,7 @@
 #include "internal/class.h"
 #include "internal/error.h"
 #include "internal/eval.h"
+#include "internal/gc.h"
 #include "internal/hash.h"
 #include "internal/io.h"
 #include "internal/load.h"
@@ -50,6 +51,10 @@
 #include "ruby_assert.h"
 #include "vm_core.h"
 #include "yjit.h"
+
+#if USE_MMTK
+#include "internal/mmtk_support.h"
+#endif
 
 #include "builtin.h"
 
@@ -1057,6 +1062,11 @@ rb_bug_without_die(const char *fmt, va_list args)
     const char *file = NULL;
     int line = 0;
 
+#if USE_MMTK
+    if (rb_mmtk_enabled_p() && rb_mmtk_is_mmtk_worker()) {
+        file = NULL;
+    } else
+#endif
     if (GET_EC()) {
         file = rb_source_location_cstr(&line);
     }
@@ -1080,7 +1090,13 @@ rb_bug_for_fatal_signal(ruby_sighandler_t default_sighandler, int sig, const voi
     const char *file = NULL;
     int line = 0;
 
+#ifdef USE_MMTK
+    // When using MMTk, this function may be called from GC worker threads,
+    // in which case there will not be a Ruby execution context.
+    if (rb_current_execution_context(!rb_mmtk_enabled_p())) {
+#else
     if (GET_EC()) {
+#endif
         file = rb_source_location_cstr(&line);
     }
 

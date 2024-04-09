@@ -797,4 +797,8 @@ def rjit_enabled?
   ENV.fetch('RUN_OPTS', '').include?('rjit')
 end
 
+def mmtk?
+  `#{BT.ruby} -e 'print (defined?(GC::MMTk.enabled?) && GC::MMTk.enabled?) || false'` == 'true'
+end
+
 exit main

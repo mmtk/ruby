@@ -4,6 +4,7 @@ module JITSupport
   module_function
 
   def yjit_supported?
+    return false if defined?(GC::MMTk) && GC::MMTk.enabled?
     return @yjit_supported if defined?(@yjit_supported)
     # nil in mswin
     @yjit_supported = ![nil, 'no'].include?(RbConfig::CONFIG['YJIT_SUPPORT'])
@@ -18,6 +19,7 @@ module JITSupport
   end
 
   def rjit_supported?
+    return false if defined?(GC::MMTk) && GC::MMTk.enabled?
     return @rjit_supported if defined?(@rjit_supported)
     # nil in mswin
     @rjit_supported = ![nil, 'no'].include?(RbConfig::CONFIG['RJIT_SUPPORT'])

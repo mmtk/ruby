@@ -840,6 +840,13 @@ rb_intern_str(VALUE str)
 void
 rb_gc_free_dsymbol(VALUE sym)
 {
+#if USE_MMTK
+    if (rb_mmtk_enabled_p()) {
+        // With MMTk, we handle global symbol table during weak ref processing.
+        // So we don't need to unregister symbols when they are dead.
+        rb_bug("obj_free is not needed for symbols.");
+    }
+#endif
     VALUE str = RSYMBOL(sym)->fstr;
 
     if (str) {
@@ -933,11 +940,25 @@ rb_sym2id(VALUE sym)
                 RSYMBOL(sym)->id = id |= num;
                 /* make it permanent object */
 
+#if USE_MMTK
+                if (rb_mmtk_enabled_p()) {
+                    // Symbols with associated ID are implicitly pinned (see gc_is_moveable_obj).
+                    // When using MMTk, we need to inform MMTk not to move the object.
+                    rb_mmtk_pin_object(sym);
+                }
+#endif
+
                 set_id_entry(symbols, rb_id_to_serial(num), fstr, sym);
                 rb_hash_delete_entry(symbols->dsymbol_fstr_hash, fstr);
             }
         }
         GLOBAL_SYMBOLS_LEAVE();
+#if USE_MMTK && RUBY_DEBUG
+        if (rb_mmtk_enabled_p()) {
+            // Assert that all dynamic symbols returned from this function are pinned.
+            rb_mmtk_assert_is_pinned(sym);
+        }
+#endif
     }
     else {
         rb_raise(rb_eTypeError, "wrong argument type %s (expected Symbol)",

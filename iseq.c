@@ -249,7 +249,15 @@ rb_iseq_mark_and_move_each_value(const rb_iseq_t *iseq, VALUE *original_iseq)
         for (unsigned int i = 0; i < body->icvarc_size; i++, is_entries++) {
             ICVARC icvarc = (ICVARC)is_entries;
             if (icvarc->entry) {
+#if USE_MMTK
+                // Note: with an evacuating GC (such as Immix),
+                // class_value may point to a moved object now.
+                if (!rb_mmtk_enabled_p()) {
+#endif
                 RUBY_ASSERT(!RB_TYPE_P(icvarc->entry->class_value, T_NONE));
+#if USE_MMTK
+                }
+#endif
 
                 rb_gc_mark_and_move(&icvarc->entry->class_value);
             }
@@ -292,6 +300,25 @@ static bool
 cc_is_active(const struct rb_callcache *cc, bool reference_updating)
 {
     if (cc) {
+#if USE_MMTK
+        if (rb_mmtk_enabled_p()) {
+            // vm_empty_cc is an off-heap object, but has the layout of a heap object.
+            // In vanilla Ruby, rb_gc_location looks at the header to see if it is T_MOVED.
+            // Since vm_empty_cc is not T_MOVED, it treats it like an un-moved object.
+            // But MMTk will think it is not a heap object and will crash.
+            // We simply skip it if cc is vm_empty_cc.
+            if (cc == rb_vm_empty_cc() || cc == rb_vm_empty_cc_for_super()) {
+                // Both vm_empty_cc and vm_empty_cc_for_super are UNMARKABLE.
+                // We return false as they would when running vanilla Ruby.
+                return false;
+            }
+
+            // For evacuating collectors, we always have to trace the objects
+            // before looking at their fields.
+            reference_updating = true;
+        }
+#endif
+
         if (reference_updating) {
             cc = (const struct rb_callcache *)rb_gc_location((VALUE)cc);
         }

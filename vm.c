@@ -1864,6 +1864,14 @@ rb_sourceline(void)
 VALUE
 rb_source_location(int *pline)
 {
+#if USE_MMTK
+    if (rb_mmtk_enabled_p() && rb_gc_obj_free_on_exit_started()) {
+        // The GC has started calling `obj_free` on everything.
+        // Source location information is held in heap objects which may have been corrupted by now.
+        if (pline) *pline = 0;
+        return Qnil;
+    }
+#endif
     const rb_execution_context_t *ec = GET_EC();
     const rb_control_frame_t *cfp = rb_vm_get_ruby_level_next_cfp(ec, ec->cfp);
 
@@ -3325,6 +3333,11 @@ rb_execution_context_update(rb_execution_context_t *ec)
 
         while (cfp != limit_cfp) {
             const VALUE *ep = cfp->ep;
+
+#if USE_MMTK
+            if (!rb_mmtk_enabled_p() || VM_FRAME_TYPE(cfp) != VM_FRAME_MAGIC_DUMMY) {
+#endif
+
             cfp->self = rb_gc_location(cfp->self);
             cfp->iseq = (rb_iseq_t *)rb_gc_location((VALUE)cfp->iseq);
             cfp->block_code = (void *)rb_gc_location((VALUE)cfp->block_code);
@@ -3340,6 +3353,10 @@ rb_execution_context_update(rb_execution_context_t *ec)
                     VM_FORCE_WRITE(&ep[VM_ENV_DATA_INDEX_ME_CREF], rb_gc_location(ep[VM_ENV_DATA_INDEX_ME_CREF]));
                 }
             }
+
+#if USE_MMTK
+            }
+#endif
 
             cfp = RUBY_VM_PREVIOUS_CONTROL_FRAME(cfp);
         }
@@ -3396,9 +3413,12 @@ rb_execution_context_mark(const rb_execution_context_t *ec)
     }
 
     /* mark machine stack */
-    if (ec->machine.stack_start && ec->machine.stack_end &&
+    if (ec->machine.stack_start && ec->machine.stack_end && (
+#if USE_MMTK
+            rb_mmtk_enabled_p() || // When using MMTk, stacks are marked by a GC worker thread which doesn't have "current ec".
+#endif
         ec != GET_EC() /* marked for current ec at the first stage of marking */
-        ) {
+        )) {
         rb_gc_mark_machine_context(ec);
     }
 
@@ -4198,6 +4218,13 @@ Init_VM(void)
          */
         rb_define_global_const("TOPLEVEL_BINDING", rb_binding_new());
 
+#if USE_MMTK
+        if (rb_mmtk_enabled_p()) {
+            // Now that the VM says it's time to enable GC, we enable GC for MMTk, too.
+            mmtk_enable_collection();
+        }
+#endif
+
 #ifdef _WIN32
         rb_objspace_gc_enable(vm->objspace);
 #endif
@@ -4264,6 +4291,17 @@ Init_BareVM(void)
     // setup ractor system
     rb_native_mutex_initialize(&vm->ractor.sync.lock);
     rb_native_cond_initialize(&vm->ractor.sync.terminate_cond);
+
+#if USE_MMTK
+    if (rb_mmtk_enabled_p()) {
+        // The threading system is ready.  Initialize collection.
+        mmtk_initialize_collection(th);
+        // Bind the main thread.
+        rb_mmtk_bind_mutator(th);
+        // Temporarily disable GC.
+        mmtk_disable_collection();
+    }
+#endif
 
     vm_opt_method_def_table = st_init_numtable();
     vm_opt_mid_table = st_init_numtable();

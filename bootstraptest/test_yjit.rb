@@ -1,3 +1,5 @@
+return if mmtk?
+
 # To run the tests in this file only, with YJIT enabled:
 # make btest BTESTS=bootstraptest/test_yjit.rb RUN_OPTS="--yjit-call-threshold=1"
 

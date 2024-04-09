@@ -17,6 +17,11 @@
 #include "yjit.h"
 #include <stdio.h>
 
+#if USE_MMTK
+#include "internal/gc.h"
+#include "internal/mmtk.h"
+#endif
+
 #ifndef EXIT_SUCCESS
 #define EXIT_SUCCESS 0
 #endif
@@ -150,21 +155,37 @@ define_ruby_description(const char *const jit_opt)
         sizeof(ruby_description)
         + rb_strlen_lit(YJIT_DESCRIPTION)
         + rb_strlen_lit(" +MN")
+#if USE_MMTK
+        // This should be long enough for all plans we have.
+        + rb_strlen_lit(" +MMTk(XXXXXXXXXXXXXXXX)")
+#endif
         ];
 
     const char *const threads_opt = ruby_mn_threads_enabled ? " +MN" : "";
     const char *const parser_opt = (*rb_ruby_prism_ptr()) ? " +PRISM" : "";
+
+#if USE_MMTK
+    const char *const mmtk_opt1 = rb_mmtk_enabled_p() ? " +MMTk(" : "";
+    const char *const mmtk_opt2 = rb_mmtk_enabled_p() ? mmtk_plan_name() : "";
+    const char *const mmtk_opt3 = rb_mmtk_enabled_p() ? ")" : "";
+#endif
 
     int n = snprintf(desc, sizeof(desc),
                      "%.*s"
                      "%s" // jit_opt
                      "%s" // threads_opts
                      "%s" // parser_opt
+#if USE_MMTK
+                     "%s%s%s" // mmtk_opt1, mmtk_opt2, mmtk_opt3
+#endif
                      "%s",
                      ruby_description_opt_point, ruby_description,
                      jit_opt,
                      threads_opt,
                      parser_opt,
+#if USE_MMTK
+                     mmtk_opt1, mmtk_opt2, mmtk_opt3,
+#endif
                      ruby_description + ruby_description_opt_point);
 
     VALUE description = rb_obj_freeze(rb_usascii_str_new_static(desc, n));

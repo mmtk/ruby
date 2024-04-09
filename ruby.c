@@ -62,6 +62,10 @@
 #include "ruby/version.h"
 #include "ruby/internal/error.h"
 
+#if USE_MMTK
+#include "internal/mmtk_support.h"
+#endif
+
 #define singlebit_only_p(x) !((x) & ((x)-1))
 STATIC_ASSERT(Qnil_1bit_from_Qfalse, singlebit_only_p(Qnil^Qfalse));
 STATIC_ASSERT(Qundef_1bit_from_Qnil, singlebit_only_p(Qundef^Qnil));
@@ -108,6 +112,8 @@ void rb_warning_category_update(unsigned int mask, unsigned int bits);
     X(rjit) \
     SEP \
     X(yjit) \
+    SEP \
+    X(mmtk) \
     /* END OF FEATURES */
 #define EACH_DEBUG_FEATURES(X, SEP) \
     X(frozen_string_literal) \
@@ -198,6 +204,7 @@ enum {
 #endif
         & ~FEATURE_BIT(frozen_string_literal)
         & ~feature_jit_mask
+        & ~FEATURE_BIT(mmtk)
         )
 };
 
@@ -220,6 +227,9 @@ cmdline_options_init(ruby_cmdline_options_t *opt)
     opt->features.set |= FEATURE_BIT(yjit);
 #endif
     opt->dump |= DUMP_BIT(opt_optimize);
+#ifdef MMTK_FORCE_ENABLE /* to use with: ./configure cppflags="-DMMTK_FORCE_ENABLE" */
+    opt->features.set |= FEATURE_BIT(mmtk);
+#endif
     opt->backtrace_length_limit = LONG_MIN;
 
     return opt;
@@ -351,8 +361,11 @@ usage(const char *name, int help, int highlight, int columns)
         M("--rjit",        "",                     "Enable pure-Ruby JIT compiler (experimental)."),
 #endif
         M("-h",		   "",			   "Print this help message; use --help for longer message."),
+#if USE_MMTK
+        M("--mmtk",        "",                     "use MMTk for garbage collection (experimental)"),
+#endif
     };
-    STATIC_ASSERT(usage_msg_size, numberof(usage_msg) < 25);
+    STATIC_ASSERT(usage_msg_size, numberof(usage_msg) < 26);
 
     static const struct ruby_opt_message help_msg[] = {
         M("--backtrace-limit=num",        "",            "Set backtrace limit."),
@@ -390,6 +403,9 @@ usage(const char *name, int help, int highlight, int columns)
 #if USE_RJIT
         M("rjit",                  "", "Pure-Ruby JIT compiler (experimental, default: disabled)."),
 #endif
+#if USE_MMTK
+        M("mmtk", "",           "MMTk garbage collection (default: disabled)"),
+#endif
     };
     static const struct ruby_opt_message warn_categories[] = {
         M("deprecated",   "", "Deprecated features."),
@@ -398,6 +414,11 @@ usage(const char *name, int help, int highlight, int columns)
     };
 #if USE_RJIT
     extern const struct ruby_opt_message rb_rjit_option_messages[];
+#endif
+#if USE_MMTK
+    static const struct ruby_opt_message mmtk_options[] = {
+        M("--mmtk-plan=name",          "", "MMTk garbage collection plan to use (default: " MMTK_DEFAULT_PLAN ")"),
+    };
 #endif
     int i;
     const char *sb = highlight ? esc_standout+1 : esc_none;
@@ -433,6 +454,11 @@ usage(const char *name, int help, int highlight, int columns)
     printf("%s""RJIT options (experimental):%s\n", sb, se);
     for (i = 0; rb_rjit_option_messages[i].str; ++i)
         SHOW(rb_rjit_option_messages[i]);
+#endif
+#if USE_MMTK
+    printf("%s""MMTk options (experimental):%s\n", sb, se);
+    for (i = 0; i < numberof(mmtk_options); ++i)
+        SHOW(mmtk_options[i]);
 #endif
 }
 
@@ -1469,6 +1495,16 @@ proc_long_options(ruby_cmdline_options_t *opt, const char *s, long argc, char **
                 " You may need to install rustc to build Ruby with YJIT.");
 #endif
     }
+    else if (is_option_with_optarg("mmtk", '-', true, false, false)) {
+#if USE_MMTK
+        FEATURE_SET(opt->features, FEATURE_BIT(mmtk));
+        rb_mmtk_post_process_opts(s);
+#undef opt_match_noarg
+#undef opt_match_arg
+#else
+        rb_warn("Ruby was built without MMTk support");
+#endif
+    }
     else if (strcmp("yydebug", s) == 0) {
         if (envopt) goto noenvopt_long;
         opt->dump |= DUMP_BIT(yydebug);
@@ -2272,6 +2308,10 @@ process_options(int argc, char **argv, ruby_cmdline_options_t *opt)
     if (FEATURE_SET_P(opt->features, rubyopt) && (s = getenv("RUBYOPT"))) {
         moreswitches(s, opt, 1);
     }
+
+#if USE_MMTK
+    rb_mmtk_post_process_opts_finish(FEATURE_SET_P(opt->features, mmtk));
+#endif
 
     if (opt->src.enc.name)
         /* cannot set deprecated category, as enabling deprecation warnings based on flags

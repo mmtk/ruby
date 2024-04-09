@@ -48,6 +48,13 @@ class Object
       <%=arg['RUBY_DESCRIPTION_WITH_YJIT'].inspect%>
     else
       <%=v.inspect%>
+    end.then do |v|
+      if defined?(GC::MMTk) && GC::MMTk.enabled?
+        insertion_point = v.rindex('[') || v.length
+        (v[...insertion_point] + "+MMTK(#{GC::MMTk.plan_name}) " + v[insertion_point...]).freeze
+      else
+        v
+      end
     end<%else%><%=v.inspect%><%end%>
 % }
 end

@@ -100,6 +100,10 @@
 #include "vm_debug.h"
 #include "vm_sync.h"
 
+#if USE_MMTK
+#include "internal/mmtk.h"
+#endif
+
 #if USE_RJIT && defined(HAVE_SYS_WAIT_H)
 #include <sys/wait.h>
 #endif
@@ -639,6 +643,14 @@ thread_start_func_2(rb_thread_t *th, VALUE *stack_start)
     VALUE errinfo = Qnil;
     rb_thread_t *ractor_main_th = th->ractor->threads.main;
 
+#if USE_MMTK
+    // We initialize MMTk-related mutator local structs.
+    if (rb_mmtk_enabled_p()) {
+        RUBY_ASSERT(th->mutator == NULL);
+        rb_mmtk_bind_mutator(th);
+    }
+#endif
+
     // setup ractor
     if (rb_ractor_status_p(th->ractor, ractor_blocking)) {
         RB_VM_LOCK();
@@ -762,6 +774,17 @@ thread_start_func_2(rb_thread_t *th, VALUE *stack_start)
 
     thread_cleanup_func(th, FALSE);
     VM_ASSERT(th->ec->vm_stack == NULL);
+
+#if USE_MMTK
+    // Release MMTk-specific per-mutator structs.
+    // We are still holding the thread_sched, so other threads cannot inspect the following
+    // per-mutator structs.  It's safe for us to clean them up at this time.
+    if (rb_mmtk_enabled_p()) {
+        RUBY_ASSERT(th->mutator != NULL);
+        RUBY_ASSERT(th->mutator_local != NULL);
+        rb_mmtk_destroy_mutator(th);
+    }
+#endif
 
     if (th->invoke_type == thread_invoke_type_ractor_proc) {
         // after rb_ractor_living_threads_remove()

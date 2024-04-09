@@ -231,6 +231,17 @@ void rb_gc_initial_stress_set(VALUE flag);
     if (_obj != (VALUE)*(ptr)) *(ptr) = (void *)_obj; \
 } while (0)
 
+#if USE_MMTK
+void rb_mmtk_mark_roots(void);
+void rb_mmtk_mark_children(VALUE obj);
+void rb_mmtk_update_object_references(VALUE obj);
+void rb_mmtk_obj_free(VALUE obj);
+void rb_mmtk_run_finalizer(VALUE obj, VALUE table);
+void rb_mmtk_set_during_gc(bool is_during_gc);
+void rb_mmtk_get_vanilla_times(uint64_t *mark, uint64_t *sweep);
+VALUE rb_mmtk_newobj_raw(VALUE klass, VALUE flags, int wb_protected, size_t payload_size);
+#endif
+
 RUBY_SYMBOL_EXPORT_BEGIN
 /* exports for objspace module */
 void rb_objspace_reachable_objects_from(VALUE obj, void (func)(VALUE, void *), void *data);

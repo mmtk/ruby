@@ -106,6 +106,10 @@ extern int ruby_assert_critical_section_entered;
 
 #include "ruby/thread_native.h"
 
+#if USE_MMTK
+#include "internal/mmtk_support.h"
+#endif
+
 /*
  * implementation selector of get_insn_info algorithm
  *   0: linear search
@@ -1168,6 +1172,13 @@ typedef struct rb_thread_struct {
     void **specific_storage;
 
     struct rb_ext_config ext_config;
+
+#if USE_MMTK
+    /* Point to a MMTk Mutator struct allocated by MMTk core. */
+    void* mutator;
+    /* Point to a thread_local struct allocated in mmtk_support.c */
+    void* mutator_local;
+#endif
 } rb_thread_t;
 
 static inline unsigned int
@@ -1482,7 +1493,16 @@ int rb_vm_ep_in_heap_p(const VALUE *ep);
 static inline int
 VM_ENV_ESCAPED_P(const VALUE *ep)
 {
+#if USE_MMTK
+    // This function is called in `obj_free`.
+    // When using MMTk, `obj_free` is  executed in a GC worker thread,
+    // and it cannot get execution context via GET_EC().
+    if (!rb_mmtk_enabled_p()) {
+#endif
     VM_ASSERT(rb_vm_ep_in_heap_p(ep) == !!VM_ENV_FLAGS(ep, VM_ENV_FLAG_ESCAPED));
+#if USE_MMTK
+    }
+#endif
     return VM_ENV_FLAGS(ep, VM_ENV_FLAG_ESCAPED) ? 1 : 0;
 }
 
@@ -1500,8 +1520,19 @@ static inline VALUE
 VM_ENV_ENVVAL(const VALUE *ep)
 {
     VALUE envval = ep[VM_ENV_DATA_INDEX_ENV];
+#if USE_MMTK
+    if (!rb_mmtk_enabled_p()) {
+#endif
+    // This function may be called during GC when scanning imemo_env.
+    // If that happens, the object ep[VM_ENV_DATA_INDEX_ENV] points to may have been moved.
+    // If moved, there will be a tombstone (equivalent to T_MOVED) in that place,
+    // and it should not be read from.
+    // Therefore, we disable the following assertions when MMTk is enabled.
     VM_ASSERT(VM_ENV_ESCAPED_P(ep));
     VM_ASSERT(vm_assert_env(envval));
+#if USE_MMTK
+    }
+#endif
     return envval;
 }
 

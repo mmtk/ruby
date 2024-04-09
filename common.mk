@@ -142,6 +142,7 @@ COMMONOBJS    = array.$(OBJEXT) \
 		marshal.$(OBJEXT) \
 		math.$(OBJEXT) \
 		memory_view.$(OBJEXT) \
+		mmtk_support.$(OBJEXT) \
 		rjit.$(OBJEXT) \
 		rjit_c.$(OBJEXT) \
 		node.$(OBJEXT) \
@@ -307,7 +308,7 @@ INSTALL_DATA_MODE = 0644
 BOOTSTRAPRUBY_COMMAND = $(BOOTSTRAPRUBY) $(BOOTSTRAPRUBY_OPT)
 TESTSDIR      = $(srcdir)/test
 TOOL_TESTSDIR = $(tooldir)/test
-TEST_EXCLUDES = --excludes-dir=$(TESTSDIR)/.excludes --name=!/memory_leak/
+TEST_EXCLUDES = --excludes-dir=$(TESTSDIR)/.excludes $(ADDITIONAL_EXCLUDES) --name=!/memory_leak/
 TESTWORKDIR   = testwork
 TESTOPTS      = $(RUBY_TESTOPTS)
 
@@ -406,6 +407,7 @@ configure-ext: $(EXTS_MK)
 
 build-ext: $(EXTS_MK)
 	$(Q)$(MAKE) -f $(EXTS_MK) $(mflags) libdir="$(libdir)" LIBRUBY_EXTS=$(LIBRUBY_EXTS) \
+	    EXTLIBS="$(EXTLIBS)" \
 	    EXTENCS="$(ENCOBJS)" BASERUBY="$(BASERUBY)" MINIRUBY="$(MINIRUBY)" \
 	    UPDATE_LIBRARIES=no $(EXTSTATIC)
 	$(Q)$(MAKE) $(EXTS_NOTE)
