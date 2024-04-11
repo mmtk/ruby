@@ -4925,8 +4925,8 @@ id2ref(VALUE objid)
         if (ptr == Qtrue) return Qtrue;
         if (ptr == Qfalse) return Qfalse;
         if (NIL_P(ptr)) return Qnil;
-        if (FIXNUM_P(ptr)) return (VALUE)ptr;
-        if (FLONUM_P(ptr)) return (VALUE)ptr;
+        if (FIXNUM_P(ptr)) return ptr;
+        if (FLONUM_P(ptr)) return ptr;
 
         ptr = obj_id_to_ref(objid);
         if ((ptr % sizeof(RVALUE)) == (4 << 2)) {
@@ -9961,15 +9961,15 @@ gc_set_candidate_object_i(void *vstart, void *vend, size_t stride, void *data)
     for (; v != (VALUE)vend; v += stride) {
         asan_unpoisoning_object(v) {
             switch (BUILTIN_TYPE(v)) {
-            case T_NONE:
-            case T_ZOMBIE:
+              case T_NONE:
+              case T_ZOMBIE:
                 break;
-            case T_STRING:
+              case T_STRING:
                 // precompute the string coderange. This both save time for when it will be
                 // eventually needed, and avoid mutating heap pages after a potential fork.
                 rb_enc_str_coderange(v);
                 // fall through
-            default:
+              default:
                 if (!RVALUE_OLD_P(v) && !RVALUE_WB_UNPROTECTED(v)) {
                     RVALUE_AGE_SET_CANDIDATE(objspace, v);
                 }
