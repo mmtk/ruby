@@ -1,8 +1,11 @@
 # frozen_string_literal: false
 require 'test/unit'
+require_relative '../lib/omit_if_alternate_gc'
 EnvUtil.suppress_warning {require 'continuation'}
 
 class TestSetTraceFunc < Test::Unit::TestCase
+  include OmitIfAlternateGC
+
   def setup
     if defined?(RubyVM)
       @original_compile_option = RubyVM::InstructionSequence.compile_option
@@ -767,6 +770,8 @@ CODE
   end
 
   def test_tracepoint_access_from_outside
+    omit_if_alternate_gc
+
     tp_store = nil
     trace = TracePoint.trace(){|tp|
       next if !target_thread?
@@ -1051,6 +1056,8 @@ CODE
   end
 
   def test_tracepoint_block
+    omit_if_alternate_gc
+
     events = []
     TracePoint.new(:call, :return, :c_call, :b_call, :c_return, :b_return){|tp|
       next if !target_thread?
@@ -1202,6 +1209,8 @@ CODE
   end
 
   def test_trace_point_at_return_when_exception
+    omit_if_alternate_gc
+
     bug_7624 = '[ruby-core:51128] [ruby-trunk - Bug #7624]'
     TracePoint.new{|tp|
       next if !target_thread?
@@ -1372,6 +1381,8 @@ CODE
   end
 
   def test_a_call
+    omit_if_alternate_gc
+
     events = []
     TracePoint.new(:a_call){|tp|
       next if !target_thread?
@@ -1394,6 +1405,8 @@ CODE
   end
 
   def test_a_return
+    omit_if_alternate_gc
+
     events = []
     TracePoint.new(:a_return){|tp|
       next if !target_thread?
@@ -1509,6 +1522,8 @@ CODE
   end
 
   def test_define_method_on_exception
+    omit_if_alternate_gc
+
     events = []
     obj = C9759.new
     TracePoint.new(:call, :return){|tp|
@@ -1700,6 +1715,8 @@ CODE
   end
 
   def test_b_call_with_redo
+    omit_if_alternate_gc
+
     assert_consistent_call_return '[Bug #9964]' do
       i = 0
       1.times{

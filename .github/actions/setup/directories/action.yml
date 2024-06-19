@@ -161,7 +161,7 @@ runs:
         echo distclean='make -C ${{ inputs.builddir }} distclean' >> $GITHUB_OUTPUT
         echo remained-files='find ${{ inputs.builddir }} -ls' >> $GITHUB_OUTPUT
         [ "${{ inputs.builddir }}" = "${{ inputs.srcdir }}" ] ||
-        echo final='rmdir ${{ inputs.builddir }}' >> $GITHUB_OUTPUT
+        echo final='rm -rf ${{ inputs.builddir }}' >> $GITHUB_OUTPUT
 
     - name: clean
       uses: gacts/run-and-post-run@4683764dd706df847f57b9bed39d08164bcd2690 # v1.4.1

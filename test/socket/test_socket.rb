@@ -9,7 +9,11 @@ begin
 rescue LoadError
 end
 
+require_relative '../lib/omit_if_alternate_gc'
+
 class TestSocket < Test::Unit::TestCase
+  include OmitIfAlternateGC
+
   def test_socket_new
     begin
       s = Socket.new(:INET, :STREAM)
@@ -95,6 +99,7 @@ class TestSocket < Test::Unit::TestCase
   end
 
   def test_getaddrinfo_raises_no_errors_on_port_argument_of_0 # [ruby-core:29427]
+    omit_if_alternate_gc
     assert_nothing_raised('[ruby-core:29427]'){ Socket.getaddrinfo('localhost', 0, Socket::AF_INET, Socket::SOCK_STREAM, nil, Socket::AI_CANONNAME) }
     assert_nothing_raised('[ruby-core:29427]'){ Socket.getaddrinfo('localhost', '0', Socket::AF_INET, Socket::SOCK_STREAM, nil, Socket::AI_CANONNAME) }
     assert_nothing_raised('[ruby-core:29427]'){ Socket.getaddrinfo('localhost', '00', Socket::AF_INET, Socket::SOCK_STREAM, nil, Socket::AI_CANONNAME) }

@@ -1,8 +1,11 @@
 # -*- coding: us-ascii -*-
 # frozen_string_literal: false
 require 'test/unit'
+require_relative '../lib/omit_if_alternate_gc'
 
 class TestMethod < Test::Unit::TestCase
+  include OmitIfAlternateGC
+
   def setup
     @verbose = $VERBOSE
   end
@@ -451,7 +454,9 @@ class TestMethod < Test::Unit::TestCase
   end
 
   def test_clone_under_gc_compact_stress
+    omit_if_alternate_gc
     omit "compaction doesn't work well on s390x" if RUBY_PLATFORM =~ /s390x/ # https://github.com/ruby/ruby/pull/5077
+
     EnvUtil.under_gc_compact_stress do
       o = Object.new
       def o.foo; :foo; end
@@ -1571,6 +1576,10 @@ class TestMethod < Test::Unit::TestCase
   end
 
   def test_method_list
+    # MMTk doesn't provide a way of iterating all objects with ObjectSpace
+    omit_if_alternate_gc
+
+
     # chkbuild lists all methods.
     # The following code emulate this listing.
 

@@ -2026,6 +2026,7 @@ array.$(OBJEXT): $(top_srcdir)/internal/fixnum.h
 array.$(OBJEXT): $(top_srcdir)/internal/gc.h
 array.$(OBJEXT): $(top_srcdir)/internal/hash.h
 array.$(OBJEXT): $(top_srcdir)/internal/imemo.h
+array.$(OBJEXT): $(top_srcdir)/internal/mmtk_macros.h
 array.$(OBJEXT): $(top_srcdir)/internal/numeric.h
 array.$(OBJEXT): $(top_srcdir)/internal/object.h
 array.$(OBJEXT): $(top_srcdir)/internal/proc.h
@@ -7242,6 +7243,7 @@ gc.$(OBJEXT): $(top_srcdir)/internal/gc.h
 gc.$(OBJEXT): $(top_srcdir)/internal/hash.h
 gc.$(OBJEXT): $(top_srcdir)/internal/imemo.h
 gc.$(OBJEXT): $(top_srcdir)/internal/io.h
+gc.$(OBJEXT): $(top_srcdir)/internal/mmtk_macros.h
 gc.$(OBJEXT): $(top_srcdir)/internal/numeric.h
 gc.$(OBJEXT): $(top_srcdir)/internal/object.h
 gc.$(OBJEXT): $(top_srcdir)/internal/proc.h
@@ -7743,6 +7745,7 @@ hash.$(OBJEXT): $(top_srcdir)/internal/error.h
 hash.$(OBJEXT): $(top_srcdir)/internal/gc.h
 hash.$(OBJEXT): $(top_srcdir)/internal/hash.h
 hash.$(OBJEXT): $(top_srcdir)/internal/imemo.h
+hash.$(OBJEXT): $(top_srcdir)/internal/mmtk_macros.h
 hash.$(OBJEXT): $(top_srcdir)/internal/object.h
 hash.$(OBJEXT): $(top_srcdir)/internal/proc.h
 hash.$(OBJEXT): $(top_srcdir)/internal/sanitizers.h
@@ -10624,6 +10627,17 @@ miniinit.$(OBJEXT): {$(VPATH)}vm_core.h
 miniinit.$(OBJEXT): {$(VPATH)}vm_opts.h
 miniinit.$(OBJEXT): {$(VPATH)}warning.rb
 miniinit.$(OBJEXT): {$(VPATH)}yjit.rb
+mmtk_support.$(OBJEXT): {$(VPATH)}config.h
+mmtk_support.$(OBJEXT): {$(VPATH)}internal/compiler_is.h
+mmtk_support.$(OBJEXT): {$(VPATH)}internal/compiler_is/apple.h
+mmtk_support.$(OBJEXT): {$(VPATH)}internal/compiler_is/clang.h
+mmtk_support.$(OBJEXT): {$(VPATH)}internal/compiler_is/gcc.h
+mmtk_support.$(OBJEXT): {$(VPATH)}internal/compiler_is/intel.h
+mmtk_support.$(OBJEXT): {$(VPATH)}internal/compiler_is/msvc.h
+mmtk_support.$(OBJEXT): {$(VPATH)}internal/compiler_is/sunpro.h
+mmtk_support.$(OBJEXT): {$(VPATH)}internal/compiler_since.h
+mmtk_support.$(OBJEXT): {$(VPATH)}internal/config.h
+mmtk_support.$(OBJEXT): {$(VPATH)}mmtk_support.c
 node.$(OBJEXT): $(CCAN_DIR)/check_type/check_type.h
 node.$(OBJEXT): $(CCAN_DIR)/container_of/container_of.h
 node.$(OBJEXT): $(CCAN_DIR)/list/list.h

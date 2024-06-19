@@ -1,7 +1,14 @@
 # frozen_string_literal: false
 require 'test/unit'
+require_relative "../lib/omit_if_alternate_gc.rb"
 
 class TestGc < Test::Unit::TestCase
+  include OmitIfAlternateGC
+
+  def setup
+    omit_if_alternate_gc
+  end
+
   class S
     def initialize(a)
       @a = a

@@ -3,9 +3,12 @@ require 'tempfile'
 require 'irb'
 
 require_relative "helper"
+require_relative "../lib/omit_if_alternate_gc"
 
 module TestIRB
   class ContextTest < TestCase
+    include OmitIfAlternateGC
+
     def setup
       IRB.init_config(nil)
       IRB.conf[:USE_SINGLELINE] = false
@@ -646,6 +649,8 @@ module TestIRB
     end
 
     def test_prompt_main_truncate
+      omit_if_alternate_gc
+
       main = Struct.new(:to_s).new("a" * 100)
       def main.inspect; to_s.inspect; end
       irb = IRB::Irb.new(IRB::WorkSpace.new(main), TestInputMethod.new)
