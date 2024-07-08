@@ -15,8 +15,8 @@
 #include "vm_core.h"
 #include "prism_compile.h"
 
-#if USE_MMTK
 #include "internal/mmtk_macros.h"
+#if USE_MMTK
 #include "internal/mmtk_support.h"
 #endif
 
