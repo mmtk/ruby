@@ -446,7 +446,7 @@ rb_mmtk_iseq_is_ppp(VALUE iseq)
 void
 rb_mmtk_iseq_register_ppp(rb_iseq_t *iseq)
 {
-    mmtk_register_ppp((MMTk_ObjectReference)iseq);
+    rb_mmtk_register_ppp((VALUE)iseq);
 }
 #endif
 

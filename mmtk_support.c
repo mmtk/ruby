@@ -606,8 +606,12 @@ rb_mmtk_maybe_forward(VALUE value)
 // PPP support
 ////////////////////////////////////////////////////////////////////////////////
 
+// Return true if an object is a PPP since allocation.
+// Note: Some types only become PPP later during execution.
+// - A Hash only becomes PPP when compare_by_identity is called.  This is irreversible.
+// - An iseq only becomes PPP when ISEQ_USE_COMPILE_DATA is set.  Will revert to non-PPP when cleared.
 static bool
-rb_mmtk_is_ppp(VALUE obj) {
+rb_mmtk_is_ppp_from_start(VALUE obj) {
     RUBY_ASSERT(!rb_special_const_p(obj));
 
     switch (RB_BUILTIN_TYPE(obj)) {
@@ -615,8 +619,6 @@ rb_mmtk_is_ppp(VALUE obj) {
         return true;
       case T_IMEMO:
         switch (imemo_type(obj)) {
-          case imemo_iseq:
-            return rb_mmtk_iseq_is_ppp(obj);
           case imemo_tmpbuf:
           case imemo_ast:
           case imemo_ifunc:
@@ -631,10 +633,30 @@ rb_mmtk_is_ppp(VALUE obj) {
     }
 }
 
+// Return true if a previously registered PPP is no longer a PPP.
+// Only usable for conditional PPPs.
 static bool
-rb_mmtk_is_ppp_wrapper(MMTk_ObjectReference obj)
+rb_mmtk_is_no_longer_ppp(VALUE obj)
 {
-    return rb_mmtk_is_ppp((VALUE)obj);
+    RUBY_ASSERT(!rb_special_const_p(obj));
+
+    switch (RB_BUILTIN_TYPE(obj)) {
+      case T_IMEMO:
+        switch (imemo_type(obj)) {
+          case imemo_iseq:
+            return !rb_mmtk_iseq_is_ppp(obj);
+          default:
+            return false;
+        }
+      default:
+        return false;
+    }
+}
+
+static bool
+rb_mmtk_is_no_longer_ppp_wrapper(MMTk_ObjectReference obj)
+{
+    return rb_mmtk_is_no_longer_ppp((VALUE)obj);
 }
 
 static void
@@ -646,14 +668,21 @@ rb_mmtk_flush_ppp_buffer(struct rb_mmtk_values_buffer *buffer)
 }
 
 void
-rb_mmtk_maybe_register_ppp(VALUE obj) {
+rb_mmtk_register_ppp(VALUE obj)
+{
+    struct rb_mmtk_values_buffer *buffer = &rb_mmtk_mutator_local.ppp_buffer;
+    if (rb_mmtk_values_buffer_append(buffer, obj)) {
+        rb_mmtk_flush_ppp_buffer(buffer);
+    }
+}
+
+void
+rb_mmtk_maybe_register_ppp(VALUE obj)
+{
     RUBY_ASSERT(!rb_special_const_p(obj));
 
-    if (rb_mmtk_is_ppp(obj)) {
-        struct rb_mmtk_values_buffer *buffer = &rb_mmtk_mutator_local.ppp_buffer;
-        if (rb_mmtk_values_buffer_append(buffer, obj)) {
-            rb_mmtk_flush_ppp_buffer(buffer);
-        }
+    if (rb_mmtk_is_ppp_from_start(obj)) {
+        rb_mmtk_register_ppp(obj);
     }
 }
 
@@ -1637,7 +1666,7 @@ MMTk_RubyUpcalls ruby_upcalls = {
     rb_mmtk_get_original_givtbl,
     rb_mmtk_move_givtbl,
     rb_mmtk_vm_live_bytes,
-    rb_mmtk_is_ppp_wrapper,
+    rb_mmtk_is_no_longer_ppp_wrapper,
     rb_mmtk_update_frozen_strings_table,
     rb_mmtk_update_finalizer_table,
     rb_mmtk_update_obj_id_tables,

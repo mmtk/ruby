@@ -4444,7 +4444,7 @@ rb_hash_compare_by_id(VALUE hash)
 
 #if USE_MMTK
     if (rb_mmtk_enabled_p()) {
-        mmtk_register_ppp((MMTk_ObjectReference)hash);
+        rb_mmtk_register_ppp(hash);
     }
 #endif
 
@@ -4472,7 +4472,7 @@ rb_ident_hash_new(void)
 
 #if USE_MMTK
     if (rb_mmtk_enabled_p()) {
-        mmtk_register_ppp((MMTk_ObjectReference)hash);
+        rb_mmtk_register_ppp(hash);
     }
 #endif
 
@@ -4487,7 +4487,7 @@ rb_ident_hash_new_with_size(st_index_t size)
 
 #if USE_MMTK
     if (rb_mmtk_enabled_p()) {
-        mmtk_register_ppp((MMTk_ObjectReference)hash);
+        rb_mmtk_register_ppp(hash);
     }
 #endif
 
