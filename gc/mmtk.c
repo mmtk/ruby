@@ -2,9 +2,17 @@
 
 #include <stdbool.h>
 
+#include "ruby/assert.h"
+
 #include "gc/gc.h"
 #include "gc/gc_impl.h"
 #include "gc/mmtk.h"
+
+struct objspace {
+    st_table *id_to_obj_tbl;
+    st_table *obj_to_id_tbl;
+    unsigned long long next_object_id;
+};
 
 bool
 rb_mmtk_is_mutator(void)
@@ -66,14 +74,24 @@ rb_gc_impl_objspace_alloc(void)
     MMTk_Builder *builder = mmtk_builder_default();
     mmtk_init_binding(builder, NULL, &ruby_upcalls);
 
-    return NULL;
+    return calloc(1, sizeof(struct objspace));
 }
 
-static st_table *obj_id_to_obj_table_alloc(void);
+static void objspace_obj_id_init(struct objspace *objspace);
 
-void rb_gc_impl_objspace_init(void *objspace_ptr) { }
+void
+rb_gc_impl_objspace_init(void *objspace_ptr)
+{
+    struct objspace *objspace = objspace_ptr;
 
-void rb_gc_impl_objspace_free(void *objspace_ptr) { }
+    objspace_obj_id_init(objspace);
+}
+
+void
+rb_gc_impl_objspace_free(void *objspace_ptr)
+{
+    free(objspace_ptr);
+}
 
 void *
 rb_gc_impl_ractor_cache_alloc(void *objspace_ptr)
@@ -345,8 +363,85 @@ rb_gc_impl_shutdown_call_finalizer(void *objspace_ptr)
 }
 
 // Object ID
-VALUE rb_gc_impl_object_id(void *objspace_ptr, VALUE obj) { }
-VALUE rb_gc_impl_object_id_to_ref(void *objspace_ptr, VALUE object_id) { }
+static int
+object_id_cmp(st_data_t x, st_data_t y)
+{
+    if (RB_TYPE_P(x, T_BIGNUM)) {
+        return !rb_big_eql(x, y);
+    }
+    else {
+        return x != y;
+    }
+}
+
+static st_index_t
+object_id_hash(st_data_t n)
+{
+    return FIX2LONG(rb_hash((VALUE)n));
+}
+
+#define OBJ_ID_INCREMENT (RUBY_IMMEDIATE_MASK + 1)
+#define OBJ_ID_INITIAL (OBJ_ID_INCREMENT)
+
+static const struct st_hash_type object_id_hash_type = {
+    object_id_cmp,
+    object_id_hash,
+};
+
+static void
+objspace_obj_id_init(struct objspace *objspace)
+{
+    objspace->id_to_obj_tbl = st_init_table(&object_id_hash_type);
+    objspace->obj_to_id_tbl = st_init_numtable();
+    objspace->next_object_id = OBJ_ID_INITIAL;
+}
+
+VALUE
+rb_gc_impl_object_id(void *objspace_ptr, VALUE obj)
+{
+    struct objspace *objspace = objspace_ptr;
+
+    unsigned int lev = rb_gc_vm_lock();
+
+    VALUE id;
+    if (st_lookup(objspace->obj_to_id_tbl, (st_data_t)obj, &id)) {
+        RUBY_ASSERT(FL_TEST(obj, FL_SEEN_OBJ_ID));
+    }
+    else {
+        RUBY_ASSERT(!FL_TEST(obj, FL_SEEN_OBJ_ID));
+
+        id = ULL2NUM(objspace->next_object_id);
+        objspace->next_object_id += OBJ_ID_INCREMENT;
+
+        st_insert(objspace->obj_to_id_tbl, (st_data_t)obj, (st_data_t)id);
+        st_insert(objspace->id_to_obj_tbl, (st_data_t)id, (st_data_t)obj);
+        FL_SET(obj, FL_SEEN_OBJ_ID);
+    }
+
+    rb_gc_vm_unlock(lev);
+
+    return id;
+}
+
+VALUE
+rb_gc_impl_object_id_to_ref(void *objspace_ptr, VALUE object_id)
+{
+    struct objspace *objspace = objspace_ptr;
+
+    VALUE obj;
+    if (st_lookup(objspace->id_to_obj_tbl, object_id, &obj) &&
+            !rb_gc_impl_garbage_object_p(objspace, obj)) {
+        return obj;
+    }
+
+    if (rb_funcall(object_id, rb_intern(">="), 1, ULL2NUM(objspace->next_object_id))) {
+        rb_raise(rb_eRangeError, "%+"PRIsVALUE" is not id value", rb_funcall(object_id, rb_intern("to_s"), 1, INT2FIX(10)));
+    }
+    else {
+        rb_raise(rb_eRangeError, "%+"PRIsVALUE" is recycled object", rb_funcall(object_id, rb_intern("to_s"), 1, INT2FIX(10)));
+    }
+}
+
 // Statistics
 VALUE rb_gc_impl_set_measure_total_time(void *objspace_ptr, VALUE flag) { }
 VALUE rb_gc_impl_get_measure_total_time(void *objspace_ptr) { }
@@ -358,6 +453,12 @@ size_t rb_gc_impl_stat_heap(void *objspace_ptr, VALUE heap_name, VALUE hash_or_s
 // Miscellaneous
 size_t rb_gc_impl_obj_flags(void *objspace_ptr, VALUE obj, ID* flags, size_t max) { }
 bool rb_gc_impl_pointer_to_heap_p(void *objspace_ptr, const void *ptr) { }
-bool rb_gc_impl_garbage_object_p(void *objspace_ptr, VALUE obj) { }
+
+bool
+rb_gc_impl_garbage_object_p(void *objspace_ptr, VALUE obj)
+{
+    return false;
+}
+
 void rb_gc_impl_set_event_hook(void *objspace_ptr, const rb_event_flag_t event) { }
 void rb_gc_impl_copy_attributes(void *objspace_ptr, VALUE dest, VALUE obj) { }
