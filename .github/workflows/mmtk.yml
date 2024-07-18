@@ -13,6 +13,28 @@ on:
     # https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/troubleshooting-required-status-checks#handling-skipped-but-required-checks
   merge_group:
 
+env:
+  # -O1 is faster than -O3 in our tests... Majority of time are consumed trying
+  # to optimize binaries.  Also GitHub Actions run on relatively modern CPUs
+  # compared to, say, GCC 4 or Clang 3.  We don't specify `-march=native`
+  # because compilers tend not understand what the CPU is.
+  optflags: '-O1'
+
+  # -g0 disables backtraces when SEGV.  Do not set that.
+  debugflags: '-ggdb3'
+
+  default_configure: >-
+    --enable-debug-env
+    --disable-install-doc
+
+  CONFIGURE_TTY: never
+  GITPULLOPTIONS: --no-tags origin ${{ github.ref }}
+  RUBY_DEBUG: ci
+  RUBY_TESTOPTS: >-
+    -q
+    --color=always
+    --tty=no
+
 concurrency:
   group: ${{ github.workflow }} / ${{ startsWith(github.event_name, 'pull') && github.ref_name || github.sha }}
   cancel-in-progress: ${{ startsWith(github.event_name, 'pull') }}
@@ -28,10 +50,6 @@ jobs:
         entry:
           - { name: "MMTk disabled", opts: '' }
           - { name: "MMTk enabled", opts: '--mmtk --mmtk-plan=StickyImmix' }
-
-    env:
-      - GITPULLOPTIONS: --no-tags origin ${{ github.ref }}
-      - RUBY_DEBUG: ci
 
     name : ${{ matrix.entry.name }}
     runs-on: ubuntu-latest
@@ -82,11 +100,8 @@ jobs:
       - name: Run configure
         env:
           arch: ${{ matrix.arch }}
-          configure: ${{ matrix.configure }}
         run: >-
-          $SETARCH ../src/configure -C --disable-install-doc ${configure:-cppflags=-DRUBY_DEBUG}
-          ${arch:+--target=$arch-$OSTYPE --host=$arch-$OSTYPE}
-          --with-mmtk-ruby=./mmtk-ruby
+          $SETARCH ../src/configure -C ${default_configure} --with-mmtk-ruby=./mmtk-ruby
 
       - run: $SETARCH make
 
