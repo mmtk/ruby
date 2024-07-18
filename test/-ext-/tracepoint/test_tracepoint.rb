@@ -2,7 +2,7 @@
 require 'test/unit'
 require '-test-/tracepoint'
 
-require_relative "../lib/omit_if_alternate_gc"
+require_relative "../../lib/omit_if_alternate_gc"
 
 class TestTracepointObj < Test::Unit::TestCase
   include OmitIfAlternateGC
