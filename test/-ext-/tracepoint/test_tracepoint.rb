@@ -2,7 +2,15 @@
 require 'test/unit'
 require '-test-/tracepoint'
 
+require_relative "../lib/omit_if_alternate_gc"
+
 class TestTracepointObj < Test::Unit::TestCase
+  include OmitIfAlternateGC
+
+  def setup
+    omit_if_alternate_gc
+  end
+
   def test_not_available_from_ruby
     assert_raise ArgumentError do
       TracePoint.trace(:obj_new){}
