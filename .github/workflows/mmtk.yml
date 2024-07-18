@@ -26,7 +26,6 @@ jobs:
       matrix:
         include:
           - test_task: test-all
-            os: ubuntu-20.04
       fail-fast: false
 
     env:
