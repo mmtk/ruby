@@ -23,16 +23,18 @@ permissions:
 jobs:
   make:
     strategy:
-      matrix:
-        include:
-          - test_task: test-all
       fail-fast: false
+      matrix:
+        entry: 
+          - { name: "MMTk disabled", opts: '' },
+          - { name: "MMTk enabled", opts: '--mmtk --mmtk-plan=StickyImmix' }
+        env:
+          GITPULLOPTIONS: --no-tags origin ${{ github.ref }}
+          RUBY_DEBUG: ci
 
-    env:
-      GITPULLOPTIONS: --no-tags origin ${{ github.ref }}
-      RUBY_DEBUG: ci
 
-    runs-on: ${{ matrix.os || 'ubuntu-22.04' }}
+    name : ${{ matrix.entry.name }}
+    runs-on: ubuntu-latest
 
     if: >-
       ${{!(false
@@ -43,6 +45,8 @@ jobs:
       || contains(github.event.pull_request.labels.*.name, 'Document')
       || (github.event_name == 'push' && github.actor == 'dependabot[bot]')
       )}}
+
+    env: $${{ matrix.env }}
 
     steps:
       - uses: actions/checkout@a5ac7e51b41094c92402da3b24376905380afc29 # v4.1.6
@@ -86,21 +90,16 @@ jobs:
           ${arch:+--target=$arch-$OSTYPE --host=$arch-$OSTYPE}
           --with-mmtk-ruby=./mmtk-ruby
 
-      - run: $SETARCH make prepare-gems
-        if: ${{ matrix.test_task == 'test-bundled-gems' }}
-
       - run: $SETARCH make
 
-      - name: make ${{ matrix.test_task }} RUN_OPTS="$RUN_OPTS"
+      - name: make test-all (${{ matrix.entry.name }})
         run: >-
-          $SETARCH make -s ${{ matrix.test_task }}
-          ${{ !contains(matrix.test_task, 'bundle') && 'RUBYOPT=-w' || '' }}
+          $SETARCH make -s test-all RUN_OPTS="${{ matrix.entry.opts }}"
         timeout-minutes: 40
         env:
           RUBY_TESTOPTS: '-q --tty=no'
           TEST_BUNDLED_GEMS_ALLOW_FAILURES: ''
           PRECHECK_BUNDLED_GEMS: 'no'
-          RUN_OPTS: '--mmtk --mmtk-plan=StickyImmix'
 
       - name: Clean build directory
         run: rm -rf $builddir/mmtk-ruby
