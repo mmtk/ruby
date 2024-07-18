@@ -14,6 +14,10 @@ require_relative '../lib/omit_if_alternate_gc'
 class TestSocket < Test::Unit::TestCase
   include OmitIfAlternateGC
 
+  def setup
+    omit_if_alternate_gc
+  end
+
   def test_socket_new
     begin
       s = Socket.new(:INET, :STREAM)
