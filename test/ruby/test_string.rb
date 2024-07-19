@@ -1,7 +1,10 @@
 # frozen_string_literal: false
 require 'test/unit'
+require_relative '../lib/omit_if_alternate_gc.rb'
 
 class TestString < Test::Unit::TestCase
+  include OmitIfAlternateGC
+
   WIDE_ENCODINGS = [
      Encoding::UTF_16BE, Encoding::UTF_16LE,
      Encoding::UTF_32BE, Encoding::UTF_32LE,
@@ -898,6 +901,7 @@ CODE
   end
 
   def test_undump_gc_compact_stress
+    omit_if_alternate_gc
     omit "compaction doesn't work well on s390x" if RUBY_PLATFORM =~ /s390x/ # https://github.com/ruby/ruby/pull/5077
     a = S("Test") << 1 << 2 << 3 << 9 << 13 << 10
     EnvUtil.under_gc_compact_stress do
@@ -1279,6 +1283,7 @@ CODE
   end
 
   def test_gsub_gc_compact_stress
+    omit_if_alternate_gc
     omit "compaction doesn't work well on s390x" if RUBY_PLATFORM =~ /s390x/ # https://github.com/ruby/ruby/pull/5077
     EnvUtil.under_gc_compact_stress { assert_equal(S("h<e>ll<o>"), S("hello").gsub(/([aeiou])/, S('<\1>'))) }
   end
@@ -1327,6 +1332,7 @@ CODE
   end
 
   def test_gsub_bang_gc_compact_stress
+    omit_if_alternate_gc
     omit "compaction doesn't work well on s390x" if RUBY_PLATFORM =~ /s390x/ # https://github.com/ruby/ruby/pull/5077
     EnvUtil.under_gc_compact_stress do
       a = S("hello")
@@ -1669,6 +1675,7 @@ CODE
   end
 
   def test_scan_gc_compact_stress
+    omit_if_alternate_gc
     omit "compaction doesn't work well on s390x" if RUBY_PLATFORM =~ /s390x/ # https://github.com/ruby/ruby/pull/5077
     EnvUtil.under_gc_compact_stress { assert_equal([["1a"], ["2b"], ["3c"]], S("1a2b3c").scan(/(\d.)/)) }
   end
@@ -2068,6 +2075,7 @@ CODE
   end
 
   def test_sub_gc_compact_stress
+    omit_if_alternate_gc
     omit "compaction doesn't work well on s390x" if RUBY_PLATFORM =~ /s390x/ # https://github.com/ruby/ruby/pull/5077
     EnvUtil.under_gc_compact_stress do
       m = /&(?<foo>.*?);/.match(S("aaa &amp; yyy"))
