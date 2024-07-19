@@ -105,6 +105,6 @@ class TestMMTk < Test::Unit::TestCase
   end
 
   def scrub_desc(desc)
-    desc.gsub(/\((MarkSweep|NoGC)\)/, '(XGC)')
+    desc.gsub(/\((MarkSweep|NoGC|Immix|StickyImmix)\)/, '(XGC)')
   end
 end
