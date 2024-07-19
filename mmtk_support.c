@@ -1698,6 +1698,16 @@ void rb_mmtk_pre_process_opts(int argc, char **argv) {
         else if (strcmp(argv[n], "--mmtk") == 0) {
             mmtk_enable = true;
         }
+        else if (strcmp(argv[n], "--enable") == 0
+                && argc > (n + 1) && strcmp(argv[n+1], "all") == 0) {
+            mmtk_enable = true;
+            enable_rubyopt = true;
+        }
+        else if (strcmp(argv[n], "--enable-all") == 0
+                || strcmp(argv[n], "--enable=all") == 0) {
+            mmtk_enable = true;
+            enable_rubyopt = true;
+        }
         else if (strcmp(argv[n], "--enable-rubyopt") == 0
                 || strcmp(argv[n], "--enable=rubyopt") == 0) {
             enable_rubyopt = true;

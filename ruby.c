@@ -1036,6 +1036,7 @@ feature_option(const char *str, int len, void *arg, const unsigned int enable)
     if (NAME_MATCH_P("all", str, len)) {
         // YJIT and RJIT cannot be enabled at the same time. We enable only one for --enable=all.
         mask &= ~feature_jit_mask | FEATURE_BIT(jit);
+        mask &= FEATURE_BIT(mmtk);
         goto found;
     }
 #if AMBIGUOUS_FEATURE_NAMES
