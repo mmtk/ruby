@@ -7,6 +7,8 @@ class TestSetTraceFunc < Test::Unit::TestCase
   include OmitIfAlternateGC
 
   def setup
+    omit_if_alternate_gc
+
     if defined?(RubyVM)
       @original_compile_option = RubyVM::InstructionSequence.compile_option
       RubyVM::InstructionSequence.compile_option = {
@@ -770,8 +772,6 @@ CODE
   end
 
   def test_tracepoint_access_from_outside
-    omit_if_alternate_gc
-
     tp_store = nil
     trace = TracePoint.trace(){|tp|
       next if !target_thread?
