@@ -130,4 +130,4 @@ jobs:
 
 defaults:
   run:
-    working-directory: $builddir
+    working-directory: build
