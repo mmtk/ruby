@@ -347,6 +347,11 @@ defined?(PTY) and defined?(IO.console) and TestIO_Console.class_eval do
   end
 
   def test_cursor_position
+    # This is falling to the same missing symbol issue as test_socket.rb is. We
+    # need to refactor the rb_mmtk_enabled_p code to deal with native
+    # extensions.
+    omit
+
     run_pty("#{<<~"begin;"}\n#{<<~'end;'}") do |r, w, _|
       begin;
         con = IO.console
