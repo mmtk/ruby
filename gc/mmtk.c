@@ -12,6 +12,8 @@ struct objspace {
     st_table *id_to_obj_tbl;
     st_table *obj_to_id_tbl;
     unsigned long long next_object_id;
+
+    st_table *finalizer_table;
 };
 
 bool
@@ -85,6 +87,8 @@ rb_gc_impl_objspace_init(void *objspace_ptr)
     struct objspace *objspace = objspace_ptr;
 
     objspace_obj_id_init(objspace);
+
+    objspace->finalizer_table = st_init_numtable();
 }
 
 void
@@ -195,7 +199,6 @@ rb_gc_impl_config_set(void *objspace_ptr, VALUE hash)
 VALUE
 rb_gc_impl_new_obj(void *objspace_ptr, void *cache_ptr, VALUE klass, VALUE flags, VALUE v1, VALUE v2, VALUE v3, bool wb_protected, size_t alloc_size)
 {
-#define MMTK_MIN_OBJ_ALIGN 8
 #define MMTK_ALLOCATION_SEMANTICS_DEFAULT 0
     if (alloc_size > 640) rb_bug("too big");
     for (int i = 0; i < 5; i++) {
@@ -206,7 +209,7 @@ rb_gc_impl_new_obj(void *objspace_ptr, void *cache_ptr, VALUE klass, VALUE flags
         }
     }
 
-    VALUE *alloc_obj = mmtk_alloc(cache_ptr, alloc_size + 8, MMTK_MIN_OBJ_ALIGN, 0, MMTK_ALLOCATION_SEMANTICS_DEFAULT);
+    VALUE *alloc_obj = mmtk_alloc(cache_ptr, alloc_size + 8, MMTk_MIN_OBJ_ALIGN, 0, MMTK_ALLOCATION_SEMANTICS_DEFAULT);
     alloc_obj++;
     alloc_obj[-1] = alloc_size;
     alloc_obj[0] = flags;
@@ -344,13 +347,119 @@ rb_gc_impl_make_zombie(void *objspace_ptr, VALUE obj, void (*dfree)(void *), voi
     dfree(data);
 }
 
-VALUE rb_gc_impl_define_finalizer(void *objspace_ptr, VALUE obj, VALUE block) { }
-VALUE rb_gc_impl_undefine_finalizer(void *objspace_ptr, VALUE obj) { }
-void rb_gc_impl_copy_finalizer(void *objspace_ptr, VALUE dest, VALUE obj) { }
+VALUE
+rb_gc_impl_define_finalizer(void *objspace_ptr, VALUE obj, VALUE block)
+{
+    struct objspace *objspace = objspace_ptr;
+    VALUE table;
+    st_data_t data;
+
+    RBASIC(obj)->flags |= FL_FINALIZE;
+
+    if (st_lookup(objspace->finalizer_table, obj, &data)) {
+        table = (VALUE)data;
+
+        /* avoid duplicate block, table is usually small */
+        {
+            long len = RARRAY_LEN(table);
+            long i;
+
+            for (i = 0; i < len; i++) {
+                VALUE recv = RARRAY_AREF(table, i);
+                if (rb_equal(recv, block)) {
+                    return recv;
+                }
+            }
+        }
+
+        rb_ary_push(table, block);
+    }
+    else {
+        table = rb_ary_new3(1, block);
+        rb_obj_hide(table);
+        st_add_direct(objspace->finalizer_table, obj, table);
+    }
+
+    return block;
+}
+
+void
+rb_gc_impl_undefine_finalizer(void *objspace_ptr, VALUE obj)
+{
+    struct objspace *objspace = objspace_ptr;
+
+    st_data_t data = obj;
+    st_delete(objspace->finalizer_table, &data, 0);
+    FL_UNSET(obj, FL_FINALIZE);
+}
+
+void
+rb_gc_impl_copy_finalizer(void *objspace_ptr, VALUE dest, VALUE obj)
+{
+    struct objspace *objspace = objspace_ptr;
+    VALUE table;
+    st_data_t data;
+
+    if (!FL_TEST(obj, FL_FINALIZE)) return;
+
+    if (RB_LIKELY(st_lookup(objspace->finalizer_table, obj, &data))) {
+        table = (VALUE)data;
+        st_insert(objspace->finalizer_table, dest, table);
+        FL_SET(dest, FL_FINALIZE);
+    }
+    else {
+        rb_bug("rb_gc_copy_finalizer: FL_FINALIZE set but not found in finalizer_table: %s", rb_obj_info(obj));
+    }
+}
+
+struct force_finalize_list {
+    VALUE obj;
+    VALUE table;
+    struct force_finalize_list *next;
+};
+
+static int
+force_chain_object(st_data_t key, st_data_t val, st_data_t arg)
+{
+    struct force_finalize_list **prev = (struct force_finalize_list **)arg;
+    struct force_finalize_list *curr = ALLOC(struct force_finalize_list);
+    curr->obj = key;
+    curr->table = val;
+    curr->next = *prev;
+    *prev = curr;
+    return ST_CONTINUE;
+}
+
+static VALUE
+get_final(long i, void *data)
+{
+    VALUE table = (VALUE)data;
+
+    return RARRAY_AREF(table, i);
+}
 
 void
 rb_gc_impl_shutdown_call_finalizer(void *objspace_ptr)
 {
+    struct objspace *objspace = objspace_ptr;
+
+    while (objspace->finalizer_table->num_entries) {
+        struct force_finalize_list *list = NULL;
+        st_foreach(objspace->finalizer_table, force_chain_object, (st_data_t)&list);
+        while (list) {
+            struct force_finalize_list *curr = list;
+
+            st_data_t obj = (st_data_t)curr->obj;
+            st_delete(objspace->finalizer_table, &obj, 0);
+            FL_UNSET(curr->obj, FL_FINALIZE);
+
+            rb_gc_run_obj_finalizer(rb_gc_impl_object_id(objspace, curr->obj), RARRAY_LEN(curr->table), get_final, (void *)curr->table);
+
+            list = curr->next;
+            xfree(curr);
+        }
+    }
+
     struct MMTk_RawVecOfObjRef registered_candidates = mmtk_get_all_obj_free_candidates();
     for (size_t i = 0; i < registered_candidates.len; i++) {
         VALUE obj = (VALUE)registered_candidates.ptr[i];
