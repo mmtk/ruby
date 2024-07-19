@@ -51,7 +51,6 @@ jobs:
           - { name: "MMTk disabled", opts: '' }
           - { name: "MMTk enabled", opts: '--mmtk --mmtk-plan=StickyImmix' }
 
-    name : ${{ matrix.entry.name }}
     runs-on: ubuntu-latest
 
     if: >-
@@ -128,4 +127,4 @@ jobs:
 
 defaults:
   run:
-    working-directory: build
+    working-directory: $builddir
