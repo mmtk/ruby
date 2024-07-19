@@ -1,7 +1,9 @@
 # frozen_string_literal: false
 require 'test/unit'
+require_relative '../lib/omit_if_alternate_gc.rb'
 
 class TestSymbol < Test::Unit::TestCase
+  include OmitIfAlternateGC
   # [ruby-core:3573]
 
   def assert_eval_inspected(sym, valid = true)
@@ -119,6 +121,7 @@ class TestSymbol < Test::Unit::TestCase
   end
 
   def test_inspect_under_gc_compact_stress
+    omit_if_alternate_gc
     omit "compaction doesn't work well on s390x" if RUBY_PLATFORM =~ /s390x/ # https://github.com/ruby/ruby/pull/5077
 
     EnvUtil.under_gc_compact_stress do
