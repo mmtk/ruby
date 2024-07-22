@@ -1,11 +1,8 @@
 # coding: US-ASCII
 # frozen_string_literal: false
 require 'test/unit'
-require_relative '../lib/omit_if_alternate_gc.rb'
 
 class TestRegexp < Test::Unit::TestCase
-  include OmitIfAlternateGC
-
   def setup
     @verbose = $VERBOSE
   end
@@ -76,7 +73,6 @@ class TestRegexp < Test::Unit::TestCase
   end
 
   def test_to_s_under_gc_compact_stress
-    omit_if_alternate_gc
     omit "compaction doesn't work well on s390x" if RUBY_PLATFORM =~ /s390x/ # https://github.com/ruby/ruby/pull/5077
     EnvUtil.under_gc_compact_stress do
       str = "abcd\u3042"
@@ -475,7 +471,6 @@ class TestRegexp < Test::Unit::TestCase
   end
 
   def test_inspect_under_gc_compact_stress
-    omit_if_alternate_gc
     omit "compaction doesn't work well on s390x" if RUBY_PLATFORM =~ /s390x/ # https://github.com/ruby/ruby/pull/5077
     EnvUtil.under_gc_compact_stress do
       assert_equal('/(?-mix:\\/)|/', Regexp.union(/\//, "").inspect)
@@ -898,7 +893,6 @@ class TestRegexp < Test::Unit::TestCase
   end
 
   def test_match_under_gc_compact_stress
-    omit_if_alternate_gc
     omit "compaction doesn't work well on s390x" if RUBY_PLATFORM =~ /s390x/ # https://github.com/ruby/ruby/pull/5077
     EnvUtil.under_gc_compact_stress do
       m = /(?<foo>.)(?<n>[^aeiou])?(?<bar>.+)/.match("hoge\u3042")

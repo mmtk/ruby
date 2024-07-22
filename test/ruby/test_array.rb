@@ -3,11 +3,8 @@
 require 'test/unit'
 require "delegate"
 require "rbconfig/sizeof"
-require_relative "../lib/omit_if_alternate_gc"
 
 class TestArray < Test::Unit::TestCase
-  include OmitIfAlternateGC
-
   def setup
     @verbose = $VERBOSE
     @cls = Array
@@ -1717,8 +1714,6 @@ class TestArray < Test::Unit::TestCase
   end
 
   def test_slice_gc_compact_stress
-    omit_if_alternate_gc
-
     omit "compaction doesn't work well on s390x" if RUBY_PLATFORM =~ /s390x/ # https://github.com/ruby/ruby/pull/5077
     EnvUtil.under_gc_compact_stress { assert_equal([1, 2, 3, 4, 5], (0..10).to_a[1, 5]) }
     EnvUtil.under_gc_compact_stress do

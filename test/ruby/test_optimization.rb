@@ -1,11 +1,8 @@
 # frozen_string_literal: false
 require 'test/unit'
 require 'objspace'
-require_relative "../lib/omit_if_alternate_gc"
 
 class TestRubyOptimization < Test::Unit::TestCase
-  include OmitIfAlternateGC
-
   def assert_redefine_method(klass, method, code, msg = nil)
     assert_separately([], "#{<<-"begin;"}\n#{<<~"end;"}")
     begin;
@@ -209,9 +206,6 @@ class TestRubyOptimization < Test::Unit::TestCase
   end
 
   def test_trace_optimized_methods
-    # TODO: MMTk doesn't work with Tracepoints
-    omit_if_alternate_gc
-
     bug14870 = "[ruby-core:87638]"
     expected = [:-@, :max, :min, :+, :-, :*, :/, :%, :==, :<, :<=, :>, :>=, :<<,
                 :&, :|, :[], :[]=, :length, :empty?, :nil?, :succ, :!, :=~]

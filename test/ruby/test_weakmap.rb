@@ -1,12 +1,8 @@
 # frozen_string_literal: false
 require 'test/unit'
-require_relative '../lib/omit_if_alternate_gc'
 
 class TestWeakMap < Test::Unit::TestCase
-  include OmitIfAlternateGC
-
   def setup
-    omit_if_alternate_gc
     @wm = ObjectSpace::WeakMap.new
   end
 

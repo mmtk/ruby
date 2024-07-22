@@ -2,12 +2,9 @@
 require 'test/unit'
 require 'objspace'
 require 'json'
-require_relative '../lib/omit_if_alternate_gc.rb'
 
 # These test the functionality of object shapes
 class TestShapes < Test::Unit::TestCase
-  include OmitIfAlternateGC
-
   MANY_IVS = 80
 
   class IVOrder
@@ -256,7 +253,6 @@ class TestShapes < Test::Unit::TestCase
   end
 
   def test_evacuate_class_ivar_and_compaction
-    omit_if_alternate_gc
     assert_separately([], "#{<<~"begin;"}\n#{<<~'end;'}")
     begin;
       count = 20
@@ -282,7 +278,6 @@ class TestShapes < Test::Unit::TestCase
   end
 
   def test_evacuate_generic_ivar_and_compaction
-    omit_if_alternate_gc
     assert_separately([], "#{<<~"begin;"}\n#{<<~'end;'}")
     begin;
       count = 20
@@ -310,7 +305,6 @@ class TestShapes < Test::Unit::TestCase
   end
 
   def test_evacuate_object_ivar_and_compaction
-    omit_if_alternate_gc
     assert_separately([], "#{<<~"begin;"}\n#{<<~'end;'}")
     begin;
       count = 20

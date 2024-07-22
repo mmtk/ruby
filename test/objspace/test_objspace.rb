@@ -6,14 +6,7 @@ begin
 rescue LoadError
 end
 
-require_relative "../lib/omit_if_alternate_gc"
-
 class TestObjSpace < Test::Unit::TestCase
-  include OmitIfAlternateGC
-  def setup
-    omit_if_alternate_gc
-  end
-
   def test_memsize_of
     assert_equal(0, ObjectSpace.memsize_of(true))
     assert_equal(0, ObjectSpace.memsize_of(nil))

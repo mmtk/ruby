@@ -1,11 +1,8 @@
 require 'test/unit'
 require 'tempfile'
-require_relative "../lib/omit_if_alternate_gc"
 
 class TestISeq < Test::Unit::TestCase
   ISeq = RubyVM::InstructionSequence
-
-  include OmitIfAlternateGC
 
   def test_no_linenum
     bug5894 = '[ruby-dev:45130]'
@@ -687,8 +684,6 @@ class TestISeq < Test::Unit::TestCase
   end
 
   def test_to_binary_line_tracepoint
-    omit_if_alternate_gc
-
     filename = "#{File.basename(__FILE__)}_#{__LINE__}"
     lines = collect_from_binary_tracepoint_lines(:line, filename)
 
@@ -696,8 +691,6 @@ class TestISeq < Test::Unit::TestCase
   end
 
   def test_to_binary_class_tracepoint
-    omit_if_alternate_gc
-
     filename = "#{File.basename(__FILE__)}_#{__LINE__}"
     lines = collect_from_binary_tracepoint_lines(:class, filename)
 
@@ -705,8 +698,6 @@ class TestISeq < Test::Unit::TestCase
   end
 
   def test_to_binary_end_tracepoint
-    omit_if_alternate_gc
-
     filename = "#{File.basename(__FILE__)}_#{__LINE__}"
     lines = collect_from_binary_tracepoint_lines(:end, filename)
 
@@ -714,8 +705,6 @@ class TestISeq < Test::Unit::TestCase
   end
 
   def test_to_binary_return_tracepoint
-    omit_if_alternate_gc
-
     filename = "#{File.basename(__FILE__)}_#{__LINE__}"
     lines = collect_from_binary_tracepoint_lines(:return, filename)
 
@@ -723,8 +712,6 @@ class TestISeq < Test::Unit::TestCase
   end
 
   def test_to_binary_b_call_tracepoint
-    omit_if_alternate_gc
-
     filename = "#{File.basename(__FILE__)}_#{__LINE__}"
     lines = collect_from_binary_tracepoint_lines(:b_call, filename)
 
@@ -732,8 +719,6 @@ class TestISeq < Test::Unit::TestCase
   end
 
   def test_to_binary_b_return_tracepoint
-    omit_if_alternate_gc
-
     filename = "#{File.basename(__FILE__)}_#{__LINE__}"
     lines = collect_from_binary_tracepoint_lines(:b_return, filename)
 

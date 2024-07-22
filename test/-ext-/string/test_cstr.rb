@@ -1,17 +1,8 @@
 # frozen_string_literal: false
 require 'test/unit'
 require "-test-/string"
-require_relative "../../lib/omit_if_alternate_gc"
 
 class Test_StringCStr < Test::Unit::TestCase
-  include OmitIfAlternateGC
-
-  def setup
-    # NOTE: This test explicitly calls `rb_gc` in order to exercise a bug within
-    # the Ruby default GC. We can probably just not run these
-    omit_if_alternate_gc
-  end
-
   Bug4319 = '[ruby-dev:43094]'
 
   def test_embed

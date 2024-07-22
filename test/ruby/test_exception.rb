@@ -1,11 +1,8 @@
 # frozen_string_literal: false
 require 'test/unit'
 require 'tempfile'
-require_relative '../lib/omit_if_alternate_gc.rb'
 
 class TestException < Test::Unit::TestCase
-  include OmitIfAlternateGC
-
   def test_exception_rescued
     begin
       raise "this must be handled"
@@ -1444,7 +1441,6 @@ $stderr = $stdout; raise "\x82\xa0"') do |outs, errs, status|
   end
 
   def test_detailed_message_under_gc_compact_stress
-    omit_if_alternate_gc
     omit "compaction doesn't work well on s390x" if RUBY_PLATFORM =~ /s390x/ # https://github.com/ruby/ruby/pull/5077
     EnvUtil.under_gc_compact_stress do
       e = RuntimeError.new("foo\nbar\nbaz")
