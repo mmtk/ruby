@@ -21,8 +21,9 @@ class Test_StrSetLen < Test::Unit::TestCase
   end
 
   def test_shared
+    s2 = Bug::String.new(@s0 * 2)
     assert_raise(RuntimeError) {
-      @s1.set_len(3)
+      s2.set_len(3)
     }
   end
 
