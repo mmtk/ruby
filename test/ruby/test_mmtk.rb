@@ -17,7 +17,7 @@ class TestMMTk < Test::Unit::TestCase
   ENABLE_OPTIONS = [
     ['--mmtk'],
     ["--mmtk-plan=#{GC::MMTk.plan_name}"],
-    ['--mmtk-max-heap=1024000'],
+    ['--mmtk-max-heap=20480000'],
     ['--enable-mmtk'],
     ['--enable=mmtk'],
 
@@ -81,8 +81,10 @@ class TestMMTk < Test::Unit::TestCase
   end
 
   def test_plan_name
-    assert_in_out_err(['--mmtk-plan=NoGC', '-e puts GC::MMTk.plan_name'], '', ['NoGC'])
+    assert_in_out_err(['--mmtk-plan=NoGC', '--mmtk-max-heap=4MiB', '-e puts GC::MMTk.plan_name'], '', ['NoGC'])
     assert_in_out_err(['--mmtk-plan=MarkSweep', '-e puts GC::MMTk.plan_name'], '', ['MarkSweep'])
+    assert_in_out_err(['--mmtk-plan=Immix', '-e puts GC::MMTk.plan_name'], '', ['Immix'])
+    assert_in_out_err(['--mmtk-plan=StickyImmix', '-e puts GC::MMTk.plan_name'], '', ['StickyImmix'])
   end
 
   def test_max_heap
@@ -103,6 +105,6 @@ class TestMMTk < Test::Unit::TestCase
   end
 
   def scrub_desc(desc)
-    desc.gsub(/\((MarkSweep|NoGC)\)/, '(XGC)')
+    desc.gsub(/\((MarkSweep|NoGC|Immix|StickyImmix)\)/, '(XGC)')
   end
 end

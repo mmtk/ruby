@@ -311,14 +311,16 @@ rb_mmtk_resize_capa_term(VALUE str, size_t capacity, size_t termlen)
         }
     }
     else {
-        assert(!FL_TEST((str), STR_SHARED));
-        rb_mmtk_str_new_strbuf_copy(
-            str,
-            (size_t)(capacity) + (termlen),
-            RSTRING_EXT(str)->strbuf,
-            RSTRING(str)->as.heap.ptr,
-            STR_HEAP_SIZE(str));
-        RSTRING(str)->as.heap.aux.capa = (capacity);
+        if ((size_t)STR_HEAP_SIZE(str) < capacity + termlen) {
+            assert(!FL_TEST((str), STR_SHARED));
+            rb_mmtk_str_new_strbuf_copy(
+                    str,
+                    (size_t)(capacity) + (termlen),
+                    RSTRING_EXT(str)->strbuf,
+                    RSTRING(str)->as.heap.ptr,
+                    STR_HEAP_SIZE(str));
+            RSTRING(str)->as.heap.aux.capa = (capacity);
+        }
     }
 }
 

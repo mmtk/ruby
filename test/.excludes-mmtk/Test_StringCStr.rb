@@ -1,0 +1,6 @@
+exclude(:test_wchar_long, "Function garbage_collect should be unreachable when using MMTk")
+exclude(:test_wchar_embed, "Function garbage_collect should be unreachable when using MMTk")
+exclude(:test_long, "Function garbage_collect should be unreachable when using MMTk")
+exclude(:test_shared, "Function garbage_collect should be unreachable when using MMTk")
+exclude(:test_frozen, "Function garbage_collect should be unreachable when using MMTk")
+exclude(:test_embed, "Function garbage_collect should be unreachable when using MMTk")
