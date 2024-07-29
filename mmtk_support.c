@@ -289,7 +289,7 @@ set_variables_from_options(MMTk_Builder *mmtk_builder)
     RUBY_DEBUG_LOG("mmtk_plan_uses_bump_pointer = %d\n", rb_mmtk_plan_uses_bump_pointer);
 
     rb_mmtk_plan_implicitly_pinning = mmtk_builder_is_mark_sweep(mmtk_builder);
-    RUBY_DEBUG_LOG("mmtk_plan_implicitly_pinning = %d\n", mmtk_plan_implicitly_pinning);
+    RUBY_DEBUG_LOG("mmtk_plan_implicitly_pinning = %d\n", rb_mmtk_plan_implicitly_pinning);
 
     // We sometimes for disabling or enabling barriers to measure the impact of barriers.
     const char* barrier_env_var = getenv("RB_MMTK_FORCE_BARRIER");
