@@ -2,9 +2,6 @@
 require 'test/unit'
 
 class TestObjectSpace < Test::Unit::TestCase
-  def setup
-  end
-
   def self.deftest_id2ref(obj)
     /:(\d+)/ =~ caller[0]
     file = $`

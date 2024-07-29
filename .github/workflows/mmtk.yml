@@ -50,10 +50,10 @@ jobs:
       matrix:
         entry:
           - { name: "MMTk disabled", opts: '' }
-          - { name: "MMTk enabled", opts: '--mmtk --mmtk-plan=NoGC --mmtk-max-heap=16GiB' }
-          - { name: "MMTk enabled", opts: '--mmtk --mmtk-plan=MarkSweep' }
-          - { name: "MMTk enabled", opts: '--mmtk --mmtk-plan=Immix' }
-          - { name: "MMTk enabled", opts: '--mmtk --mmtk-plan=StickyImmix' }
+          - { name: "MMTk enabled", opts: '--mmtk-plan=NoGC --mmtk-max-heap=16GiB' }
+          - { name: "MMTk enabled", opts: '--mmtk-plan=MarkSweep' }
+          - { name: "MMTk enabled", opts: '--mmtk-plan=Immix' }
+          - { name: "MMTk enabled", opts: '--mmtk-plan=StickyImmix' }
 
     runs-on: ubuntu-latest
 
