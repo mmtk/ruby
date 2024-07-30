@@ -125,7 +125,14 @@ MMTk_Address mmtk_alloc(MMTk_Mutator *mutator,
                         size_t offset,
                         MMTk_AllocationSemantics semantics);
 
+void mmtk_post_alloc(MMTk_Mutator *mutator,
+                     MMTk_ObjectReference refer,
+                     size_t bytes,
+                     MMTk_AllocationSemantics semantics);
+
 void mmtk_add_obj_free_candidate(MMTk_ObjectReference object);
+
+void mmtk_enumerate_objects(void (*callback)(MMTk_ObjectReference, void*), void *data);
 
 struct MMTk_RawVecOfObjRef mmtk_get_all_obj_free_candidates(void);
 

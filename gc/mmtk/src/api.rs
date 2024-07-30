@@ -77,10 +77,32 @@ pub extern "C" fn mmtk_alloc(
     )
 }
 
+#[no_mangle]
+pub extern "C" fn mmtk_post_alloc(
+    mutator: *mut RubyMutator,
+    refer: ObjectReference,
+    bytes: usize,
+    semantics: AllocationSemantics,
+) {
+    memory_manager::post_alloc::<Ruby>(unsafe { &mut *mutator }, refer, bytes, semantics)
+}
+
 // TODO: Replace with buffered mmtk_add_obj_free_candidates
 #[no_mangle]
 pub extern "C" fn mmtk_add_obj_free_candidate(object: ObjectReference) {
     binding().weak_proc.add_obj_free_candidate(object)
+}
+
+// =============== Heap walking ===============
+
+#[no_mangle]
+pub extern "C" fn mmtk_enumerate_objects(
+    callback: extern "C" fn(ObjectReference, *mut libc::c_void),
+    data: *mut libc::c_void,
+) {
+    crate::mmtk().enumerate_objects(|object| {
+        callback(object, data);
+    })
 }
 
 // =============== Finalizers ===============

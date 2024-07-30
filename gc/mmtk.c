@@ -218,6 +218,7 @@ rb_gc_impl_new_obj(void *objspace_ptr, void *cache_ptr, VALUE klass, VALUE flags
     if (alloc_size > 24) alloc_obj[3] = v2;
     if (alloc_size > 32) alloc_obj[4] = v3;
 
+    mmtk_post_alloc(cache_ptr, (void*)alloc_obj, alloc_size + 8, MMTK_ALLOCATION_SEMANTICS_DEFAULT);
 
     if (rb_gc_shutdown_call_finalizer_p((VALUE)alloc_obj)) {
         mmtk_add_obj_free_candidate(alloc_obj);
@@ -337,7 +338,38 @@ void rb_gc_impl_writebarrier(void *objspace_ptr, VALUE a, VALUE b) { }
 void rb_gc_impl_writebarrier_unprotect(void *objspace_ptr, VALUE obj) { }
 void rb_gc_impl_writebarrier_remember(void *objspace_ptr, VALUE obj) { }
 // Heap walking
-void rb_gc_impl_each_objects(void *objspace_ptr, int (*callback)(void *, void *, size_t, void *), void *data) { }
+struct each_objects_data {
+    bool stop;
+    int (*callback)(void *, void *, size_t, void *);
+    void *data;
+};
+
+static void
+each_objects_i(MMTk_ObjectReference obj, void *d)
+{
+    struct each_objects_data *data = d;
+
+    if (data->stop) return;
+
+    size_t slot_size = rb_gc_impl_obj_slot_size((VALUE)obj);
+
+    if (data->callback(obj, (void *)((char *)obj + slot_size), slot_size, data->data) != 0) {
+        data->stop = true;
+    }
+}
+
+void
+rb_gc_impl_each_objects(void *objspace_ptr, int (*callback)(void *, void *, size_t, void *), void *data)
+{
+    struct each_objects_data each_objects_data = {
+        .stop = false,
+        .callback = callback,
+        .data = data,
+    };
+
+    mmtk_enumerate_objects(each_objects_i, &each_objects_data);
+}
+
 void rb_gc_impl_each_object(void *objspace_ptr, void (*func)(VALUE obj, void *data), void *data) { }
 // Finalizers
 void

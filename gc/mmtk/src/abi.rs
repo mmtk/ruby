@@ -402,3 +402,10 @@ pub struct RubyUpcalls {
 }
 
 unsafe impl Sync for RubyUpcalls {}
+
+#[repr(C)]
+#[derive(Clone)]
+pub struct HeapBounds {
+    pub start: *mut libc::c_void,
+    pub end: *mut libc::c_void,
+}
