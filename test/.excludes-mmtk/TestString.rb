@@ -1,0 +1,5 @@
+exclude(:test_undump_gc_compact_stress, "compaction")
+exclude(:test_gsub_gc_compact_stress, "compaction")
+exclude(:test_gsub_bang_gc_compact_stress, "compaction")
+exclude(:test_scan_gc_compact_stress, "compaction")
+exclude(:test_sub_gc_compact_stress, "compaction")

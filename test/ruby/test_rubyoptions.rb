@@ -45,7 +45,8 @@ class TestRubyOptions < Test::Unit::TestCase
 
   def test_usage
     assert_in_out_err(%w(-h)) do |r, e|
-      assert_operator(r.size, :<=, 25)
+      opts_count = defined?(GC::MMTk) ? 26 : 25
+      assert_operator(r.size, :<=, opts_count)
       longer = r[1..-1].select {|x| x.size >= 80}
       assert_equal([], longer)
       assert_equal([], e)

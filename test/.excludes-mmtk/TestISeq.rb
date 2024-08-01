@@ -1,0 +1,6 @@
+exclude(:test_to_binary_line_tracepoint, "tracepoints not implemented")
+exclude(:test_to_binary_class_tracepoint, "tracepoints not implemented")
+exclude(:test_to_binary_end_tracepoint, "tracepoints not implemented")
+exclude(:test_to_binary_return_tracepoint, "tracepoints not implemented")
+exclude(:test_to_binary_b_call_tracepoint, "tracepoints not implemented")
+exclude(:test_to_binary_b_return_tracepoint, "tracepoints not implemented")

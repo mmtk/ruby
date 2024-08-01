@@ -1,0 +1,5 @@
+exclude(:test_include?, "auto_compact is not implemented")
+exclude(:test_gc_compact_stress, "auto_compact is not implemented")
+exclude(:test_key?, "auto_compact is not implemented")
+exclude(:test_member?, "auto_compact is not implemented")
+exclude(:test_recycled, "auto_compact is not implemented")
