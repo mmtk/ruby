@@ -5,18 +5,31 @@ use crate::binding;
 use crate::binding::RubyBinding;
 use crate::mmtk;
 use crate::Ruby;
+use crate::RubySlot;
 use mmtk::memory_manager;
 use mmtk::memory_manager::mmtk_init;
 use mmtk::util::constants::MIN_OBJECT_SIZE;
+use mmtk::util::options::GCTriggerSelector;
 use mmtk::util::options::PlanSelector;
 use mmtk::util::Address;
 use mmtk::util::ObjectReference;
 use mmtk::util::VMMutatorThread;
+use mmtk::util::VMThread;
 use mmtk::AllocationSemantics;
 use mmtk::MMTKBuilder;
 use mmtk::Mutator;
 
 pub type RubyMutator = Mutator<Ruby>;
+
+#[no_mangle]
+pub extern "C" fn mmtk_is_live_object(object: ObjectReference) -> bool {
+    memory_manager::is_live_object::<Ruby>(object)
+}
+
+#[no_mangle]
+pub extern "C" fn mmtk_is_reachable(object: ObjectReference) -> bool {
+    object.is_reachable::<Ruby>()
+}
 
 // =============== Bootup ===============
 
@@ -26,8 +39,11 @@ pub extern "C" fn mmtk_builder_default() -> *mut MMTKBuilder {
     builder.options.no_finalizer.set(true);
 
     // Hard code NoGC for now
-    let plan_selector = "NoGC".parse::<PlanSelector>().unwrap();
+    let plan_selector = "MarkSweep".parse::<PlanSelector>().unwrap();
     builder.options.plan.set(plan_selector);
+
+    // 100MiB
+    builder.options.gc_trigger.set(GCTriggerSelector::FixedHeapSize(100 << 20));
 
     Box::into_raw(Box::new(builder))
 }
@@ -53,8 +69,20 @@ pub extern "C" fn mmtk_init_binding(
 }
 
 #[no_mangle]
+pub extern "C" fn mmtk_initialize_collection(tls: VMThread) {
+    memory_manager::initialize_collection(mmtk(), tls)
+}
+
+#[no_mangle]
 pub extern "C" fn mmtk_bind_mutator(tls: VMMutatorThread) -> *mut RubyMutator {
     Box::into_raw(memory_manager::bind_mutator(mmtk(), tls))
+}
+
+// =============== GC ===============
+
+#[no_mangle]
+pub extern "C" fn mmtk_handle_user_collection_request(tls: VMMutatorThread) {
+    memory_manager::handle_user_collection_request::<Ruby>(mmtk(), tls);
 }
 
 // =============== Object allocation ===============
@@ -93,6 +121,28 @@ pub extern "C" fn mmtk_add_obj_free_candidate(object: ObjectReference) {
     binding().weak_proc.add_obj_free_candidate(object)
 }
 
+// =============== Write barriers ===============
+
+#[no_mangle]
+pub extern "C" fn mmtk_object_reference_write_post(
+    mutator: *mut RubyMutator,
+    object: ObjectReference,
+) {
+    let ignored_slot = RubySlot::from_address(Address::ZERO);
+    let ignored_target = ObjectReference::from_raw_address(Address::ZERO);
+    mmtk::memory_manager::object_reference_write_post(
+        unsafe { &mut *mutator },
+        object,
+        ignored_slot,
+        ignored_target,
+    )
+}
+
+#[no_mangle]
+pub extern "C" fn mmtk_register_wb_unprotected_object(object: ObjectReference) {
+    crate::binding().register_wb_unprotected_object(object)
+}
+
 // =============== Heap walking ===============
 
 #[no_mangle]
@@ -116,4 +166,13 @@ pub extern "C" fn mmtk_get_all_obj_free_candidates() -> RawVecOfObjRef {
 #[no_mangle]
 pub extern "C" fn mmtk_free_raw_vec_of_obj_ref(raw_vec: RawVecOfObjRef) {
     unsafe { raw_vec.into_vec() };
+}
+
+// =============== Miscellaneous ===============
+
+#[no_mangle]
+pub extern "C" fn mmtk_is_mmtk_object(addr: Address) -> bool {
+    debug_assert!(!addr.is_zero());
+    debug_assert!(addr.is_aligned_to(mmtk::util::is_mmtk_object::VO_BIT_REGION_SIZE));
+    memory_manager::is_mmtk_object(addr).is_some()
 }

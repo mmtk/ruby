@@ -347,21 +347,16 @@ pub struct RubyUpcalls {
     pub init_gc_worker_thread: extern "C" fn(gc_worker_tls: *mut GCThreadTLS),
     pub get_gc_thread_tls: extern "C" fn() -> *mut GCThreadTLS,
     pub is_mutator: extern "C" fn() -> bool,
-    pub stop_the_world: extern "C" fn(tls: VMWorkerThread),
-    pub resume_mutators: extern "C" fn(tls: VMWorkerThread),
+    pub stop_the_world: extern "C" fn(),
+    pub resume_mutators: extern "C" fn(),
     pub block_for_gc: extern "C" fn(tls: VMMutatorThread),
     pub number_of_mutators: extern "C" fn() -> usize,
     pub get_mutators: extern "C" fn(
         visit_mutator: extern "C" fn(*mut RubyMutator, *mut libc::c_void),
         data: *mut libc::c_void,
     ),
-    pub scan_vm_roots: extern "C" fn(),
-    pub scan_finalizer_tbl_roots: extern "C" fn(),
-    pub scan_end_proc_roots: extern "C" fn(),
-    pub scan_global_tbl_roots: extern "C" fn(),
-    pub scan_obj_to_id_tbl_roots: extern "C" fn(),
-    pub scan_misc_roots: extern "C" fn(),
-    pub scan_final_jobs_roots: extern "C" fn(),
+    pub scan_gc_roots: extern "C" fn(),
+    pub scan_objspace: extern "C" fn(),
     pub scan_roots_in_mutator_thread:
         extern "C" fn(mutator_tls: VMMutatorThread, worker_tls: VMWorkerThread),
     pub scan_object_ruby_style: extern "C" fn(object: ObjectReference),
@@ -383,22 +378,23 @@ pub struct RubyUpcalls {
     pub get_global_symbols_table: extern "C" fn() -> *mut st_table,
     pub get_overloaded_cme_table: extern "C" fn() -> *mut st_table,
     pub get_ci_table: extern "C" fn() -> *mut st_table,
-    pub st_get_size_info: extern "C" fn(
-        table: *const st_table,
-        entries_start: *mut libc::size_t,
-        entries_bound: *mut libc::size_t,
-        bins_num: *mut libc::size_t,
-    ),
-    pub st_update_entries_range: extern "C" fn(
-        table: *mut st_table,
-        begin: libc::size_t,
-        end: libc::size_t,
-        weak_keys: bool,
-        weak_records: bool,
-        forward: bool,
-    ),
-    pub st_update_bins_range:
-        extern "C" fn(table: *mut st_table, begin: libc::size_t, end: libc::size_t),
+
+    // pub st_get_size_info: extern "C" fn(
+    //     table: *const st_table,
+    //     entries_start: *mut libc::size_t,
+    //     entries_bound: *mut libc::size_t,
+    //     bins_num: *mut libc::size_t,
+    // ),
+    // pub st_update_entries_range: extern "C" fn(
+    //     table: *mut st_table,
+    //     begin: libc::size_t,
+    //     end: libc::size_t,
+    //     weak_keys: bool,
+    //     weak_records: bool,
+    //     forward: bool,
+    // ),
+    // pub st_update_bins_range:
+    //     extern "C" fn(table: *mut st_table, begin: libc::size_t, end: libc::size_t),
 }
 
 unsafe impl Sync for RubyUpcalls {}

@@ -78,13 +78,8 @@ impl Scanning<Ruby> for VMScanning {
     fn scan_vm_specific_roots(tls: VMWorkerThread, factory: impl RootsWorkFactory<RubySlot>) {
         let gc_tls = unsafe { GCThreadTLS::from_vwt_check(tls) };
         let root_scanning_work_packets: Vec<Box<dyn GCWork<Ruby>>> = vec![
-            Box::new(ScanVMRoots::new(factory.clone())),
-            Box::new(ScanFinalizerTblRoots::new(factory.clone())),
-            Box::new(ScanEndProcRoots::new(factory.clone())),
-            Box::new(ScanGlobalTblRoots::new(factory.clone())),
-            Box::new(ScanObjToIdTblRoots::new(factory.clone())),
-            Box::new(ScanMiscRoots::new(factory.clone())),
-            Box::new(ScanFinalJobsRoots::new(factory.clone())),
+            Box::new(ScanGCRoots::new(factory.clone())),
+            Box::new(ScanObjspace::new(factory.clone())),
         ];
         gc_tls.worker().scheduler().work_buckets[WorkBucketStage::Prepare]
             .bulk_add(root_scanning_work_packets);
@@ -237,32 +232,12 @@ macro_rules! define_global_root_scanner {
     };
 }
 
-define_global_root_scanner!(ScanVMRoots, {
-    (crate::upcalls().scan_vm_roots)();
+define_global_root_scanner!(ScanGCRoots, {
+    (crate::upcalls().scan_gc_roots)();
 });
 
-define_global_root_scanner!(ScanFinalizerTblRoots, {
-    (crate::upcalls().scan_finalizer_tbl_roots)();
-});
-
-define_global_root_scanner!(ScanEndProcRoots, {
-    (crate::upcalls().scan_end_proc_roots)();
-});
-
-define_global_root_scanner!(ScanGlobalTblRoots, {
-    (crate::upcalls().scan_global_tbl_roots)();
-});
-
-define_global_root_scanner!(ScanObjToIdTblRoots, {
-    (crate::upcalls().scan_obj_to_id_tbl_roots)();
-});
-
-define_global_root_scanner!(ScanMiscRoots, {
-    (crate::upcalls().scan_misc_roots)();
-});
-
-define_global_root_scanner!(ScanFinalJobsRoots, {
-    (crate::upcalls().scan_final_jobs_roots)();
+define_global_root_scanner!(ScanObjspace, {
+    (crate::upcalls().scan_objspace)();
 });
 
 struct ScanWbUnprotectedRoots<F: RootsWorkFactory<RubySlot>> {

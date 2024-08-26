@@ -4665,6 +4665,8 @@ mark_roots(rb_objspace_t *objspace, const char **categoryp)
     if (stress_to_class) rb_gc_mark(stress_to_class);
 
     rb_gc_mark_roots(objspace, categoryp);
+
+    rb_gc_mark_thread_roots(objspace, NULL, categoryp);
 }
 
 static inline void
@@ -6264,7 +6266,7 @@ rb_gc_impl_obj_flags(void *objspace_ptr, VALUE obj, ID* flags, size_t max)
 }
 
 void *
-rb_gc_impl_ractor_cache_alloc(void *objspace_ptr)
+rb_gc_impl_ractor_cache_alloc(void *objspace_ptr, void *ractor)
 {
     rb_objspace_t *objspace = objspace_ptr;
 

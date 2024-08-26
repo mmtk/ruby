@@ -25,12 +25,14 @@ void rb_gc_update_object_references(void *objspace, VALUE obj);
 void rb_gc_update_vm_references(void *objspace);
 void rb_gc_event_hook(VALUE obj, rb_event_flag_t event);
 void *rb_gc_get_objspace(void);
+void *rb_gc_get_ractor_newobj_cache(void);
 size_t rb_size_mul_or_raise(size_t x, size_t y, VALUE exc);
 void rb_gc_run_obj_finalizer(VALUE objid, long count, VALUE (*callback)(long i, void *data), void *data);
 void rb_gc_set_pending_interrupt(void);
 void rb_gc_unset_pending_interrupt(void);
 bool rb_gc_obj_free(void *objspace, VALUE obj);
 void rb_gc_mark_roots(void *objspace, const char **categoryp);
+void rb_gc_mark_thread_roots(void *objspace, void *ractor, const char **categoryp);
 void rb_gc_ractor_newobj_cache_foreach(void (*func)(void *cache, void *data), void *data);
 bool rb_gc_multi_ractor_p(void);
 void rb_objspace_reachable_objects_from_root(void (func)(const char *category, VALUE, void *), void *passing_data);
@@ -42,6 +44,11 @@ uint32_t rb_gc_get_shape(VALUE obj);
 void rb_gc_set_shape(VALUE obj, uint32_t shape_id);
 uint32_t rb_gc_rebuild_shape(VALUE obj, size_t size_pool_id);
 size_t rb_obj_memsize_of(VALUE obj);
+struct st_table *rb_gc_get_generic_ivar_table(void);
+struct st_table *rb_gc_get_frozen_strings_table(void);
+struct st_table *rb_gc_get_global_symbols_table(void);
+struct st_table *rb_gc_get_overloaded_cme_table(void);
+struct st_table *rb_gc_get_ci_table(void);
 RUBY_SYMBOL_EXPORT_END
 
 void rb_ractor_finish_marking(void);

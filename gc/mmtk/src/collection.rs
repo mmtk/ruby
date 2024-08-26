@@ -20,7 +20,7 @@ impl Collection<Ruby> for VMCollection {
     where
         F: FnMut(&'static mut mmtk::Mutator<Ruby>),
     {
-        (upcalls().stop_the_world)(tls);
+        (upcalls().stop_the_world)();
         crate::binding().ppp_registry.pin_ppp_children(tls);
         (upcalls().get_mutators)(
             Self::notify_mutator_ready::<F>,
@@ -28,8 +28,8 @@ impl Collection<Ruby> for VMCollection {
         );
     }
 
-    fn resume_mutators(tls: VMWorkerThread) {
-        (upcalls().resume_mutators)(tls);
+    fn resume_mutators(_tls: VMWorkerThread) {
+        (upcalls().resume_mutators)();
     }
 
     fn block_for_gc(tls: VMMutatorThread) {

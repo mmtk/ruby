@@ -190,6 +190,12 @@ rb_gc_get_objspace(void)
     return GET_VM()->gc.objspace;
 }
 
+void *
+rb_gc_get_ractor_newobj_cache(void)
+{
+    return GET_RACTOR()->newobj_cache;
+}
+
 void
 rb_gc_ractor_newobj_cache_foreach(void (*func)(void *cache, void *data), void *data)
 {
@@ -322,6 +328,41 @@ rb_gc_rebuild_shape(VALUE obj, size_t size_pool_id)
     if (!new_shape) return 0;
 
     return (uint32_t)rb_shape_id(new_shape);
+}
+
+struct st_table *generic_ivtbl_get(void);
+
+struct st_table *
+rb_gc_get_generic_ivar_table(void)
+{
+    return generic_ivtbl_get();
+}
+
+struct st_table *
+rb_gc_get_frozen_strings_table(void)
+{
+    return rb_vm_fstring_table();
+}
+
+extern rb_symbols_t ruby_global_symbols;
+#define global_symbols ruby_global_symbols
+
+struct st_table *
+rb_gc_get_global_symbols_table(void)
+{
+    return global_symbols.str_sym;
+}
+
+struct st_table *
+rb_gc_get_overloaded_cme_table(void)
+{
+    return GET_VM()->overloaded_cme_table;
+}
+
+struct st_table *
+rb_gc_get_ci_table(void)
+{
+    return GET_VM()->ci_table;
 }
 
 void rb_vm_update_references(void *ptr);
@@ -577,7 +618,7 @@ typedef struct gc_function_map {
     void *(*objspace_alloc)(void);
     void (*objspace_init)(void *objspace_ptr);
     void (*objspace_free)(void *objspace_ptr);
-    void *(*ractor_cache_alloc)(void *objspace_ptr);
+    void *(*ractor_cache_alloc)(void *objspace_ptr, void *ractor);
     void (*ractor_cache_free)(void *objspace_ptr, void *cache);
     void (*set_params)(void *objspace_ptr);
     void (*init)(void);
@@ -2445,8 +2486,7 @@ mark_const_table_i(VALUE value, void *objspace)
 void
 rb_gc_mark_roots(void *objspace, const char **categoryp)
 {
-    rb_execution_context_t *ec = GET_EC();
-    rb_vm_t *vm = rb_ec_vm_ptr(ec);
+    rb_vm_t *vm = GET_VM();
 
 #define MARK_CHECKPOINT(category) do { \
     if (categoryp) *categoryp = category; \
@@ -2455,9 +2495,6 @@ rb_gc_mark_roots(void *objspace, const char **categoryp)
     MARK_CHECKPOINT("vm");
     rb_vm_mark(vm);
     if (vm->self) gc_mark_internal(vm->self);
-
-    MARK_CHECKPOINT("machine_context");
-    mark_current_machine_context(ec);
 
     MARK_CHECKPOINT("end_proc");
     rb_mark_end_proc();
@@ -2475,6 +2512,17 @@ rb_gc_mark_roots(void *objspace, const char **categoryp)
 #endif
 
     MARK_CHECKPOINT("finish");
+}
+
+void
+rb_gc_mark_thread_roots(void *objspace, void *ractor, const char **categoryp)
+{
+    if (ractor == NULL) ractor = GET_RACTOR();
+
+    rb_execution_context_t *ec = ((rb_ractor_t *)ractor)->threads.running_ec;
+
+    MARK_CHECKPOINT("machine_context");
+    mark_current_machine_context(objspace, ec);
 #undef MARK_CHECKPOINT
 }
 
@@ -2760,9 +2808,9 @@ rb_obj_gc_flags(VALUE obj, ID* flags, size_t max)
 /* GC */
 
 void *
-rb_gc_ractor_cache_alloc(void)
+rb_gc_ractor_cache_alloc(rb_ractor_t *ractor)
 {
-    return rb_gc_impl_ractor_cache_alloc(rb_gc_get_objspace());
+    return rb_gc_impl_ractor_cache_alloc(rb_gc_get_objspace(), ractor);
 }
 
 void
