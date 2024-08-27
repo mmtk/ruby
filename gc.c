@@ -196,6 +196,12 @@ rb_gc_get_ractor_newobj_cache(void)
     return GET_RACTOR()->newobj_cache;
 }
 
+void *
+rb_gc_get_current_execution_context(void)
+{
+    return GET_EC();
+}
+
 void
 rb_gc_ractor_newobj_cache_foreach(void (*func)(void *cache, void *data), void *data)
 {
@@ -2334,6 +2340,12 @@ rb_mark_locations(void *begin, void *end)
 
 # if defined(__EMSCRIPTEN__)
 
+void
+rb_gc_save_machine_context(void)
+{
+    // no-op
+}
+
 static void
 mark_current_machine_context(rb_execution_context_t *ec)
 {
@@ -2361,35 +2373,19 @@ mark_current_machine_context(rb_execution_context_t *ec)
 
 #else // !defined(__wasm__)
 
-static void
-mark_current_machine_context(rb_execution_context_t *ec)
+void
+rb_gc_save_machine_context(void)
 {
-    union {
-        rb_jmp_buf j;
-        VALUE v[sizeof(rb_jmp_buf) / (sizeof(VALUE))];
-    } save_regs_gc_mark;
-    VALUE *stack_start, *stack_end;
+    rb_thread_t *thread = GET_THREAD();
 
-    FLUSH_REGISTER_WINDOWS;
-    memset(&save_regs_gc_mark, 0, sizeof(save_regs_gc_mark));
-    /* This assumes that all registers are saved into the jmp_buf (and stack) */
-    rb_setjmp(save_regs_gc_mark.j);
+    RB_VM_SAVE_MACHINE_CONTEXT(thread);
+}
 
-    /* SET_STACK_END must be called in this function because
-     * the stack frame of this function may contain
-     * callee save registers and they should be marked. */
-    SET_STACK_END;
-    GET_STACK_BOUNDS(stack_start, stack_end, 1);
 
-    void *data =
-#ifdef RUBY_ASAN_ENABLED
-        ec;
-#else
-        NULL;
-#endif
-
-    each_location(save_regs_gc_mark.v, numberof(save_regs_gc_mark.v), gc_mark_machine_stack_location_maybe, data);
-    each_location_ptr(stack_start, stack_end, gc_mark_machine_stack_location_maybe, data);
+static void
+mark_current_machine_context(void *objspace, const rb_execution_context_t *ec)
+{
+    rb_gc_mark_machine_context(ec);
 }
 #endif
 
@@ -2484,7 +2480,7 @@ mark_const_table_i(VALUE value, void *objspace)
 }
 
 void
-rb_gc_mark_roots(void *objspace, const char **categoryp)
+rb_gc_mark_roots(void *objspace, const void *ec, const char **categoryp)
 {
     rb_vm_t *vm = GET_VM();
 
@@ -2511,18 +2507,11 @@ rb_gc_mark_roots(void *objspace, const char **categoryp)
     }
 #endif
 
-    MARK_CHECKPOINT("finish");
-}
-
-void
-rb_gc_mark_thread_roots(void *objspace, void *ractor, const char **categoryp)
-{
-    if (ractor == NULL) ractor = GET_RACTOR();
-
-    rb_execution_context_t *ec = ((rb_ractor_t *)ractor)->threads.running_ec;
-
     MARK_CHECKPOINT("machine_context");
     mark_current_machine_context(objspace, ec);
+
+    MARK_CHECKPOINT("finish");
+
 #undef MARK_CHECKPOINT
 }
 
@@ -3638,7 +3627,8 @@ rb_objspace_reachable_objects_from_root(void (func)(const char *category, VALUE,
     };
 
     vm->gc.mark_func_data = &mfd;
-    rb_gc_mark_roots(rb_gc_get_objspace(), &data.category);
+    rb_gc_save_machine_context();
+    rb_gc_mark_roots(vm->gc.objspace, GET_EC(), &data.category);
     vm->gc.mark_func_data = prev_mfd;
 }
 

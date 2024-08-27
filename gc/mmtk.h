@@ -12,10 +12,8 @@
 typedef struct MMTk_Builder MMTk_Builder;
 typedef struct MMTk_Mutator MMTk_Mutator;
 
-struct rb_thread_struct;
-typedef struct rb_thread_struct rb_thread_t;
-typedef rb_thread_t *MMTk_VMThread;
-typedef rb_thread_t *MMTk_VMMutatorThread;
+typedef struct MMTk_ractor_cache *MMTk_VMThread;
+typedef struct MMTk_ractor_cache *MMTk_VMMutatorThread;
 typedef struct MMTk_GCThreadTLS *MMTk_VMWorkerThread;
 typedef void *MMTk_Address;
 typedef void *MMTk_ObjectReference;

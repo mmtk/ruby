@@ -4664,9 +4664,8 @@ mark_roots(rb_objspace_t *objspace, const char **categoryp)
 
     if (stress_to_class) rb_gc_mark(stress_to_class);
 
-    rb_gc_mark_roots(objspace, categoryp);
-
-    rb_gc_mark_thread_roots(objspace, NULL, categoryp);
+    rb_gc_save_machine_context();
+    rb_gc_mark_roots(objspace, rb_gc_get_current_execution_context(), categoryp);
 }
 
 static inline void
