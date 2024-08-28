@@ -1057,7 +1057,7 @@ generic_ivtbl_no_ractor_check(VALUE obj)
 }
 
 struct st_table *
-generic_ivtbl_get(void)
+rb_generic_ivtbl_get(void)
 {
     return generic_iv_tbl_;
 }

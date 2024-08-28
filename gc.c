@@ -336,12 +336,12 @@ rb_gc_rebuild_shape(VALUE obj, size_t size_pool_id)
     return (uint32_t)rb_shape_id(new_shape);
 }
 
-struct st_table *generic_ivtbl_get(void);
+struct st_table *rb_generic_ivtbl_get(void);
 
 struct st_table *
 rb_gc_get_generic_ivar_table(void)
 {
-    return generic_ivtbl_get();
+    return rb_generic_ivtbl_get();
 }
 
 struct st_table *
