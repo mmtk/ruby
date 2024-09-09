@@ -23,12 +23,10 @@ struct objspace {
     struct MMTk_ractor_cache *ractor_caches;
     unsigned long live_ractor_cache_count;
 
-    int lock_lev;
-
     pthread_mutex_t mutex;
+    bool world_stopped;
     pthread_cond_t cond_world_stopped;
     pthread_cond_t cond_world_started;
-    size_t stopped_ractors;
     size_t start_the_world_count;
 };
 
@@ -82,15 +80,12 @@ rb_mmtk_stop_the_world(void)
 {
     struct objspace *objspace = rb_gc_get_objspace();
 
-    RUBY_ASSERT(objspace->lock_lev == 0);
-    objspace->lock_lev = rb_gc_vm_lock();
-
     int err;
     if ((err = pthread_mutex_lock(&objspace->mutex)) != 0) {
         rb_bug("ERROR: cannot lock objspace->mutex: %s", strerror(err));
     }
 
-    while (objspace->stopped_ractors < 1) {
+    while (!objspace->world_stopped) {
         pthread_cond_wait(&objspace->cond_world_stopped, &objspace->mutex);
     }
 
@@ -104,15 +99,12 @@ rb_mmtk_resume_mutators(void)
 {
     struct objspace *objspace = rb_gc_get_objspace();
 
-    rb_gc_vm_unlock(objspace->lock_lev);
-    objspace->lock_lev = 0;
-
     int err;
     if ((err = pthread_mutex_lock(&objspace->mutex)) != 0) {
         rb_bug("ERROR: cannot lock objspace->mutex: %s", strerror(err));
     }
 
-    objspace->start_the_world_count++;
+    objspace->world_stopped = false;
     pthread_cond_broadcast(&objspace->cond_world_started);
 
     if ((err = pthread_mutex_unlock(&objspace->mutex)) != 0) {
@@ -130,23 +122,31 @@ rb_mmtk_block_for_gc(MMTk_VMMutatorThread mutator)
         rb_bug("ERROR: cannot lock objspace->mutex: %s", strerror(err));
     }
 
-    // Increment the stopped ractor count
-    objspace->stopped_ractors++;
-    if (objspace->stopped_ractors == 1) {
+    if (RB_UNLIKELY(objspace->world_stopped)) {
+        // Wait for GC end
+        while (objspace->world_stopped) {
+            pthread_cond_wait(&objspace->cond_world_started, &objspace->mutex);
+        }
+    }
+    else {
+        int lock_lev = rb_gc_vm_lock();
+        rb_gc_vm_barrier();
+
         rb_gc_save_machine_context();
         mutator->execution_context = rb_gc_get_current_execution_context();
+
+        objspace->world_stopped = true;
         pthread_cond_broadcast(&objspace->cond_world_stopped);
+
+        // Wait for GC end
+        while (objspace->world_stopped) {
+            pthread_cond_wait(&objspace->cond_world_started, &objspace->mutex);
+        }
+
+        mutator->execution_context = NULL;
+
+        rb_gc_vm_unlock(lock_lev);
     }
-
-    // Wait for GC end
-    size_t my_count = objspace->start_the_world_count;
-
-    while (objspace->start_the_world_count < my_count + 1) {
-        pthread_cond_wait(&objspace->cond_world_started, &objspace->mutex);
-    }
-
-    // Decrement the stopped ractor count
-    objspace->stopped_ractors--;
 
     if ((err = pthread_mutex_unlock(&objspace->mutex)) != 0) {
         rb_bug("ERROR: cannot release objspace->mutex: %s", strerror(err));
@@ -203,7 +203,9 @@ rb_mmtk_scan_objspace(void)
 static void
 rb_mmtk_scan_roots_in_mutator_thread(MMTk_VMMutatorThread mutator, MMTk_VMWorkerThread worker)
 {
-    rb_gc_mark_roots(rb_gc_get_objspace(), mutator->execution_context, NULL);
+    if (mutator->execution_context != NULL) {
+        rb_gc_mark_roots(rb_gc_get_objspace(), mutator->execution_context, NULL);
+    }
 }
 
 static void
