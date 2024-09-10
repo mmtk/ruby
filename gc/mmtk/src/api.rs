@@ -25,12 +25,12 @@ pub type RubyMutator = Mutator<Ruby>;
 
 #[no_mangle]
 pub extern "C" fn mmtk_is_live_object(object: ObjectReference) -> bool {
-    memory_manager::is_live_object::<Ruby>(object)
+    memory_manager::is_live_object(object)
 }
 
 #[no_mangle]
 pub extern "C" fn mmtk_is_reachable(object: ObjectReference) -> bool {
-    object.is_reachable::<Ruby>()
+    object.is_reachable()
 }
 
 // =============== Bootup ===============
