@@ -35,8 +35,13 @@ typedef struct {
 // Write barrier
 extern bool rb_mmtk_use_barrier;
 
+RUBY_SYMBOL_EXPORT_BEGIN
 // Enabled?
+// Note: C extensions (in the form of .so) may call inline functions that call rb_mmtk_enabled_p.
+// One example is that io/console.so calls RARRAY_ASET.
+// That will cause "undefined symbol: rb_mmtk_enabled_p" error at load time.
 bool rb_mmtk_enabled_p(void);
+RUBY_SYMBOL_EXPORT_END
 
 // Initialization
 void rb_mmtk_bind_mutator(MMTk_VMMutatorThread cur_thread);
