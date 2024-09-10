@@ -2383,7 +2383,7 @@ rb_gc_save_machine_context(void)
 
 
 static void
-mark_current_machine_context(void *objspace, const rb_execution_context_t *ec)
+mark_current_machine_context(const rb_execution_context_t *ec)
 {
     rb_gc_mark_machine_context(ec);
 }
@@ -2508,7 +2508,7 @@ rb_gc_mark_roots(void *objspace, const void *ec, const char **categoryp)
 #endif
 
     MARK_CHECKPOINT("machine_context");
-    mark_current_machine_context(objspace, ec);
+    mark_current_machine_context(ec);
 
     MARK_CHECKPOINT("finish");
 
