@@ -13,7 +13,7 @@ pub struct VMCollection {}
 
 impl Collection<Ruby> for VMCollection {
     fn is_collection_enabled() -> bool {
-        crate::BINDING_FAST.gc_enabled.load(Ordering::Relaxed)
+        crate::CONFIGURATION.gc_enabled.load(Ordering::Relaxed)
     }
 
     fn stop_all_mutators<F>(tls: VMWorkerThread, mut mutator_visitor: F)

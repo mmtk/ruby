@@ -1,3 +1,5 @@
+use std::sync::atomic::Ordering;
+
 use crate::abi::RawVecOfObjRef;
 use crate::abi::RubyBindingOptions;
 use crate::abi::RubyUpcalls;
@@ -83,6 +85,16 @@ pub extern "C" fn mmtk_bind_mutator(tls: VMMutatorThread) -> *mut RubyMutator {
 #[no_mangle]
 pub extern "C" fn mmtk_handle_user_collection_request(tls: VMMutatorThread) {
     memory_manager::handle_user_collection_request::<Ruby>(mmtk(), tls);
+}
+
+#[no_mangle]
+pub extern "C" fn mmtk_set_gc_enabled(enable: bool) {
+    crate::CONFIGURATION.gc_enabled.store(enable, Ordering::Relaxed);
+}
+
+#[no_mangle]
+pub extern "C" fn mmtk_gc_enabled_p() -> bool {
+    crate::CONFIGURATION.gc_enabled.load(Ordering::Relaxed)
 }
 
 // =============== Object allocation ===============

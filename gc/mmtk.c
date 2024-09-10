@@ -533,20 +533,19 @@ rb_gc_impl_prepare_heap(void *objspace_ptr)
 void
 rb_gc_impl_gc_enable(void *objspace_ptr)
 {
-    // TODO
+    mmtk_set_gc_enabled(true);
 }
 
 void
 rb_gc_impl_gc_disable(void *objspace_ptr, bool finish_current_gc)
 {
-    // TODO
+    mmtk_set_gc_enabled(false);
 }
 
 bool
 rb_gc_impl_gc_enabled_p(void *objspace_ptr)
 {
-    // TODO
-    return true;
+    return mmtk_gc_enabled_p();
 }
 
 void

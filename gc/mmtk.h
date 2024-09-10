@@ -109,6 +109,10 @@ MMTk_Mutator *mmtk_bind_mutator(MMTk_VMMutatorThread tls);
 
 void mmtk_handle_user_collection_request(MMTk_VMMutatorThread tls);
 
+void mmtk_set_gc_enabled(bool enable);
+
+bool mmtk_gc_enabled_p(void);
+
 MMTk_Address mmtk_alloc(MMTk_Mutator *mutator,
                         size_t size,
                         size_t align,
