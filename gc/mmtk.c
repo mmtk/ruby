@@ -13,6 +13,7 @@
 
 struct objspace {
     size_t gc_count;
+    size_t total_gc_time;
     size_t total_allocated_objects;
 
     st_table *id_to_obj_tbl;
@@ -134,6 +135,9 @@ rb_mmtk_block_for_gc(MMTk_VMMutatorThread mutator)
     else {
         objspace->gc_count++;
 
+        struct timespec gc_start_time;
+        clock_gettime(CLOCK_MONOTONIC, &gc_start_time);
+
         int lock_lev = rb_gc_vm_lock();
         rb_gc_vm_barrier();
 
@@ -151,6 +155,13 @@ rb_mmtk_block_for_gc(MMTk_VMMutatorThread mutator)
         mutator->execution_context = NULL;
 
         rb_gc_vm_unlock(lock_lev);
+
+        struct timespec gc_end_time;
+        clock_gettime(CLOCK_MONOTONIC, &gc_end_time);
+
+        objspace->total_gc_time +=
+            (gc_end_time.tv_sec - gc_start_time.tv_sec) * (1000 * 1000 * 1000) +
+                (gc_end_time.tv_nsec - gc_start_time.tv_nsec);
     }
 
     if ((err = pthread_mutex_unlock(&objspace->mutex)) != 0) {
@@ -1076,6 +1087,7 @@ VALUE rb_gc_impl_latest_gc_info(void *objspace_ptr, VALUE key) { }
 
 enum gc_stat_sym {
     gc_stat_sym_count,
+    gc_stat_sym_time,
     gc_stat_sym_total_allocated_objects,
     gc_stat_sym_total_bytes,
     gc_stat_sym_used_bytes,
@@ -1093,6 +1105,7 @@ setup_gc_stat_symbols(void)
     if (gc_stat_symbols[0] == 0) {
 #define S(s) gc_stat_symbols[gc_stat_sym_##s] = ID2SYM(rb_intern_const(#s))
         S(count);
+        S(time);
         S(total_allocated_objects);
         S(total_bytes);
         S(used_bytes);
@@ -1127,6 +1140,7 @@ rb_gc_impl_stat(void *objspace_ptr, VALUE hash_or_sym)
         rb_hash_aset(hash, gc_stat_symbols[gc_stat_sym_##name], SIZET2NUM(attr));
 
         SET(count, objspace->gc_count);
+        SET(time, objspace->total_gc_time / (1000 * 1000));
         SET(total_allocated_objects, objspace->total_allocated_objects);
         SET(total_bytes, mmtk_total_bytes());
         SET(used_bytes, mmtk_used_bytes());
