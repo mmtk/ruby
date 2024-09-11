@@ -493,7 +493,32 @@ rb_gc_impl_ractor_cache_free(void *objspace_ptr, void *cache)
 
 void rb_gc_impl_set_params(void *objspace_ptr) { }
 
-void rb_gc_impl_init(void) { }
+static VALUE gc_verify_internal_consistency(VALUE self) { return Qnil; }
+static VALUE gc_compact(VALUE self) { return Qnil; }
+static VALUE gc_get_auto_compact(VALUE self) { return Qnil; }
+static VALUE gc_set_auto_compact(VALUE self, VALUE val) { return Qnil; }
+static VALUE gc_compact_stats(VALUE self) { return Qnil; }
+static VALUE gc_verify_compaction_references(int argc, VALUE* argv, VALUE self) { return Qnil; }
+
+void
+rb_gc_impl_init(void)
+{
+    VALUE gc_constants = rb_hash_new();
+    rb_hash_aset(gc_constants, ID2SYM(rb_intern("BASE_SLOT_SIZE")), SIZET2NUM(sizeof(VALUE) * 5));
+    // Pretend we have 5 size pools
+    rb_hash_aset(gc_constants, ID2SYM(rb_intern("SIZE_POOL_COUNT")), LONG2FIX(5));
+    OBJ_FREEZE(gc_constants);
+    rb_define_const(rb_mGC, "INTERNAL_CONSTANTS", gc_constants);
+
+    // no-ops for compatibility
+    rb_define_singleton_method(rb_mGC, "verify_internal_consistency", gc_verify_internal_consistency, 0);
+
+    rb_define_singleton_method(rb_mGC, "compact", gc_compact, 0);
+    rb_define_singleton_method(rb_mGC, "auto_compact", gc_get_auto_compact, 0);
+    rb_define_singleton_method(rb_mGC, "auto_compact=", gc_set_auto_compact, 1);
+    rb_define_singleton_method(rb_mGC, "latest_compact_info", gc_compact_stats, 0);
+    rb_define_singleton_method(rb_mGC, "verify_compaction_references", gc_verify_compaction_references, -1);
+}
 
 void rb_gc_impl_initial_stress_set(VALUE flag) { }
 
@@ -1043,7 +1068,11 @@ size_t rb_gc_impl_stat(void *objspace_ptr, VALUE hash_or_sym) { }
 size_t rb_gc_impl_stat_heap(void *objspace_ptr, VALUE heap_name, VALUE hash_or_sym) { }
 
 // Miscellaneous
-size_t rb_gc_impl_obj_flags(void *objspace_ptr, VALUE obj, ID* flags, size_t max) { }
+size_t
+rb_gc_impl_obj_flags(void *objspace_ptr, VALUE obj, ID* flags, size_t max)
+{
+    return 0;
+}
 
 bool
 rb_gc_impl_pointer_to_heap_p(void *objspace_ptr, const void *ptr)
