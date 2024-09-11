@@ -555,7 +555,7 @@ void rb_gc_impl_shutdown_free_objects(void *objspace_ptr) { }
 void
 rb_gc_impl_start(void *objspace_ptr, bool full_mark, bool immediate_mark, bool immediate_sweep, bool compact)
 {
-    // TODO
+    mmtk_handle_user_collection_request(rb_gc_get_ractor_newobj_cache());
 }
 
 bool
