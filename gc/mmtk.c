@@ -12,6 +12,8 @@
 #include "gc/mmtk.h"
 
 struct objspace {
+    size_t total_allocated_objects;
+
     st_table *id_to_obj_tbl;
     st_table *obj_to_id_tbl;
     unsigned long long next_object_id;
@@ -605,6 +607,8 @@ VALUE
 rb_gc_impl_new_obj(void *objspace_ptr, void *cache_ptr, VALUE klass, VALUE flags, VALUE v1, VALUE v2, VALUE v3, bool wb_protected, size_t alloc_size)
 {
 #define MMTK_ALLOCATION_SEMANTICS_DEFAULT 0
+    struct objspace *objspace = objspace_ptr;
+
     if (alloc_size > 640) rb_bug("too big");
     for (int i = 0; i < 5; i++) {
         if (alloc_size == size_pool_sizes[i]) break;
@@ -629,6 +633,8 @@ rb_gc_impl_new_obj(void *objspace_ptr, void *cache_ptr, VALUE klass, VALUE flags
 
     // TODO: only add when object needs obj_free to be called
     mmtk_add_obj_free_candidate(alloc_obj);
+
+    objspace->total_allocated_objects++;
 
     return (VALUE)alloc_obj;
 }
@@ -1066,6 +1072,7 @@ size_t rb_gc_impl_gc_count(void *objspace_ptr) { }
 VALUE rb_gc_impl_latest_gc_info(void *objspace_ptr, VALUE key) { }
 
 enum gc_stat_sym {
+    gc_stat_sym_total_allocated_objects,
     gc_stat_sym_total_bytes,
     gc_stat_sym_used_bytes,
     gc_stat_sym_free_bytes,
@@ -1081,6 +1088,7 @@ setup_gc_stat_symbols(void)
 {
     if (gc_stat_symbols[0] == 0) {
 #define S(s) gc_stat_symbols[gc_stat_sym_##s] = ID2SYM(rb_intern_const(#s))
+        S(total_allocated_objects);
         S(total_bytes);
         S(used_bytes);
         S(free_bytes);
@@ -1113,6 +1121,7 @@ rb_gc_impl_stat(void *objspace_ptr, VALUE hash_or_sym)
     else if (hash != Qnil) \
         rb_hash_aset(hash, gc_stat_symbols[gc_stat_sym_##name], SIZET2NUM(attr));
 
+        SET(total_allocated_objects, objspace->total_allocated_objects);
         SET(total_bytes, mmtk_total_bytes());
         SET(used_bytes, mmtk_used_bytes());
         SET(free_bytes, mmtk_free_bytes());
