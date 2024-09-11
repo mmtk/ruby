@@ -12,6 +12,7 @@
 #include "gc/mmtk.h"
 
 struct objspace {
+    size_t gc_count;
     size_t total_allocated_objects;
 
     st_table *id_to_obj_tbl;
@@ -131,6 +132,8 @@ rb_mmtk_block_for_gc(MMTk_VMMutatorThread mutator)
         }
     }
     else {
+        objspace->gc_count++;
+
         int lock_lev = rb_gc_vm_lock();
         rb_gc_vm_barrier();
 
@@ -1072,6 +1075,7 @@ size_t rb_gc_impl_gc_count(void *objspace_ptr) { }
 VALUE rb_gc_impl_latest_gc_info(void *objspace_ptr, VALUE key) { }
 
 enum gc_stat_sym {
+    gc_stat_sym_count,
     gc_stat_sym_total_allocated_objects,
     gc_stat_sym_total_bytes,
     gc_stat_sym_used_bytes,
@@ -1088,6 +1092,7 @@ setup_gc_stat_symbols(void)
 {
     if (gc_stat_symbols[0] == 0) {
 #define S(s) gc_stat_symbols[gc_stat_sym_##s] = ID2SYM(rb_intern_const(#s))
+        S(count);
         S(total_allocated_objects);
         S(total_bytes);
         S(used_bytes);
@@ -1121,6 +1126,7 @@ rb_gc_impl_stat(void *objspace_ptr, VALUE hash_or_sym)
     else if (hash != Qnil) \
         rb_hash_aset(hash, gc_stat_symbols[gc_stat_sym_##name], SIZET2NUM(attr));
 
+        SET(count, objspace->gc_count);
         SET(total_allocated_objects, objspace->total_allocated_objects);
         SET(total_bytes, mmtk_total_bytes());
         SET(used_bytes, mmtk_used_bytes());
@@ -1128,9 +1134,19 @@ rb_gc_impl_stat(void *objspace_ptr, VALUE hash_or_sym)
         SET(starting_heap_address, (size_t)mmtk_starting_heap_address());
         SET(last_heap_address, (size_t)mmtk_last_heap_address());
 #undef SET
+
+    if (!NIL_P(key)) { /* matched key should return above */
+        rb_raise(rb_eArgError, "unknown key: %"PRIsVALUE, rb_sym2str(key));
+    }
+
+    return 0;
 }
 
-size_t rb_gc_impl_stat_heap(void *objspace_ptr, VALUE heap_name, VALUE hash_or_sym) { }
+size_t
+rb_gc_impl_stat_heap(void *objspace_ptr, VALUE heap_name, VALUE hash_or_sym)
+{
+    return 0;
+}
 
 // Miscellaneous
 size_t
