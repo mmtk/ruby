@@ -136,6 +136,16 @@ struct MMTk_RawVecOfObjRef mmtk_get_all_obj_free_candidates(void);
 
 void mmtk_free_raw_vec_of_obj_ref(struct MMTk_RawVecOfObjRef raw_vec);
 
+size_t mmtk_total_bytes(void);
+
+size_t mmtk_used_bytes(void);
+
+size_t mmtk_free_bytes(void);
+
+MMTk_Address mmtk_starting_heap_address(void);
+
+MMTk_Address mmtk_last_heap_address(void);
+
 bool mmtk_is_mmtk_object(MMTk_Address addr);
 
 #endif /* MMTK_H */

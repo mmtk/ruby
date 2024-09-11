@@ -180,6 +180,33 @@ pub extern "C" fn mmtk_free_raw_vec_of_obj_ref(raw_vec: RawVecOfObjRef) {
     unsafe { raw_vec.into_vec() };
 }
 
+// =============== Statistics ===============
+
+#[no_mangle]
+pub extern "C" fn mmtk_total_bytes() -> usize {
+    memory_manager::total_bytes(mmtk())
+}
+
+#[no_mangle]
+pub extern "C" fn mmtk_used_bytes() -> usize {
+    memory_manager::used_bytes(mmtk())
+}
+
+#[no_mangle]
+pub extern "C" fn mmtk_free_bytes() -> usize {
+    memory_manager::free_bytes(mmtk())
+}
+
+#[no_mangle]
+pub extern "C" fn mmtk_starting_heap_address() -> Address {
+    memory_manager::starting_heap_address()
+}
+
+#[no_mangle]
+pub extern "C" fn mmtk_last_heap_address() -> Address {
+    memory_manager::last_heap_address()
+}
+
 // =============== Miscellaneous ===============
 
 #[no_mangle]

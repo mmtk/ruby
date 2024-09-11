@@ -1064,7 +1064,63 @@ VALUE rb_gc_impl_get_measure_total_time(void *objspace_ptr) { }
 VALUE rb_gc_impl_get_profile_total_time(void *objspace_ptr) { }
 size_t rb_gc_impl_gc_count(void *objspace_ptr) { }
 VALUE rb_gc_impl_latest_gc_info(void *objspace_ptr, VALUE key) { }
-size_t rb_gc_impl_stat(void *objspace_ptr, VALUE hash_or_sym) { }
+
+enum gc_stat_sym {
+    gc_stat_sym_total_bytes,
+    gc_stat_sym_used_bytes,
+    gc_stat_sym_free_bytes,
+    gc_stat_sym_starting_heap_address,
+    gc_stat_sym_last_heap_address,
+    gc_stat_sym_last
+};
+
+static VALUE gc_stat_symbols[gc_stat_sym_last];
+
+static void
+setup_gc_stat_symbols(void)
+{
+    if (gc_stat_symbols[0] == 0) {
+#define S(s) gc_stat_symbols[gc_stat_sym_##s] = ID2SYM(rb_intern_const(#s))
+        S(total_bytes);
+        S(used_bytes);
+        S(free_bytes);
+        S(starting_heap_address);
+        S(last_heap_address);
+    }
+}
+
+size_t
+rb_gc_impl_stat(void *objspace_ptr, VALUE hash_or_sym)
+{
+    struct objspace *objspace = objspace_ptr;
+    VALUE hash = Qnil, key = Qnil;
+
+    setup_gc_stat_symbols();
+
+    if (RB_TYPE_P(hash_or_sym, T_HASH)) {
+        hash = hash_or_sym;
+    }
+    else if (SYMBOL_P(hash_or_sym)) {
+        key = hash_or_sym;
+    }
+    else {
+        rb_raise(rb_eTypeError, "non-hash or symbol given");
+    }
+
+#define SET(name, attr) \
+    if (key == gc_stat_symbols[gc_stat_sym_##name]) \
+        return attr; \
+    else if (hash != Qnil) \
+        rb_hash_aset(hash, gc_stat_symbols[gc_stat_sym_##name], SIZET2NUM(attr));
+
+        SET(total_bytes, mmtk_total_bytes());
+        SET(used_bytes, mmtk_used_bytes());
+        SET(free_bytes, mmtk_free_bytes());
+        SET(starting_heap_address, (size_t)mmtk_starting_heap_address());
+        SET(last_heap_address, (size_t)mmtk_last_heap_address());
+#undef SET
+}
+
 size_t rb_gc_impl_stat_heap(void *objspace_ptr, VALUE heap_name, VALUE hash_or_sym) { }
 
 // Miscellaneous
