@@ -2338,16 +2338,16 @@ rb_mark_locations(void *begin, void *end)
     rb_stack_range_tmp[1] = end;
 }
 
-# if defined(__EMSCRIPTEN__)
-
 void
 rb_gc_save_machine_context(void)
 {
     // no-op
 }
 
+# if defined(__EMSCRIPTEN__)
+
 static void
-mark_current_machine_context(rb_execution_context_t *ec)
+mark_current_machine_context(const rb_execution_context_t *ec)
 {
     emscripten_scan_stack(rb_mark_locations);
     each_location_ptr(rb_stack_range_tmp[0], rb_stack_range_tmp[1], gc_mark_maybe_each_location, NULL);
@@ -2358,7 +2358,7 @@ mark_current_machine_context(rb_execution_context_t *ec)
 # else // use Asyncify version
 
 static void
-mark_current_machine_context(rb_execution_context_t *ec)
+mark_current_machine_context(const rb_execution_context_t *ec)
 {
     VALUE *stack_start, *stack_end;
     SET_STACK_END;
