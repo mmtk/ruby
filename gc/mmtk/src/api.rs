@@ -55,6 +55,7 @@ pub extern "C" fn mmtk_init_binding(
     builder: *mut MMTKBuilder,
     _binding_options: *const RubyBindingOptions,
     upcalls: *const RubyUpcalls,
+    weak_reference_dead_value: ObjectReference,
 ) {
     crate::set_panic_hook();
 
@@ -63,7 +64,7 @@ pub extern "C" fn mmtk_init_binding(
     let mmtk_boxed = mmtk_init(&builder);
     let mmtk_static = Box::leak(Box::new(mmtk_boxed));
 
-    let binding = RubyBinding::new(mmtk_static, &binding_options, upcalls);
+    let binding = RubyBinding::new(mmtk_static, &binding_options, upcalls, weak_reference_dead_value);
 
     crate::BINDING
         .set(binding)
@@ -131,6 +132,18 @@ pub extern "C" fn mmtk_post_alloc(
 #[no_mangle]
 pub extern "C" fn mmtk_add_obj_free_candidate(object: ObjectReference) {
     binding().weak_proc.add_obj_free_candidate(object)
+}
+
+// =============== Marking ===============
+
+#[no_mangle]
+pub extern "C" fn mmtk_mark_weak(ptr: &'static mut ObjectReference) {
+    binding().weak_proc.add_weak_reference(ptr);
+}
+
+#[no_mangle]
+pub extern "C" fn mmtk_remove_weak(ptr: &ObjectReference) {
+    binding().weak_proc.remove_weak_reference(ptr);
 }
 
 // =============== Write barriers ===============

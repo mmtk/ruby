@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
 use std::ffi::CString;
-use std::str::FromStr;
 use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
 use std::thread::JoinHandle;
@@ -66,38 +65,23 @@ pub struct RubyBinding {
     pub(crate) moved_givtbl: Mutex<HashMap<ObjectReference, MovedGIVTblEntry>>,
     pub gc_thread_join_handles: Mutex<Vec<JoinHandle<()>>>,
     pub wb_unprotected_objects: Mutex<HashSet<ObjectReference>>,
-    pub st_entries_chunk_size: usize,
-    pub st_bins_chunk_size: usize,
+
+    pub weak_reference_dead_value: ObjectReference,
 }
 
 unsafe impl Sync for RubyBinding {}
 unsafe impl Send for RubyBinding {}
-
-fn env_default<T>(name: &str, default: T) -> T
-where
-    T: FromStr,
-{
-    std::env::var(name)
-        .ok()
-        .and_then(|x| x.parse::<T>().ok())
-        .unwrap_or(default)
-}
 
 impl RubyBinding {
     pub fn new(
         mmtk: &'static MMTK<Ruby>,
         binding_options: &RubyBindingOptions,
         upcalls: *const abi::RubyUpcalls,
+        weak_reference_dead_value: ObjectReference,
     ) -> Self {
         unsafe {
             crate::BINDING_FAST.suffix_size = binding_options.suffix_size;
         }
-
-        let st_entries_chunk_size = env_default::<usize>("RUBY_MMTK_ENTRIES_CHUNK_SIZE", 1024);
-        let st_bins_chunk_size = env_default::<usize>("RUBY_MMTK_BINS_CHUNK_SIZE", 4096);
-
-        debug!("st_entries_chunk_size: {st_entries_chunk_size}");
-        debug!("st_bins_chunk_size: {st_bins_chunk_size}");
 
         Self {
             mmtk,
@@ -109,8 +93,8 @@ impl RubyBinding {
             moved_givtbl: Default::default(),
             gc_thread_join_handles: Default::default(),
             wb_unprotected_objects: Default::default(),
-            st_entries_chunk_size,
-            st_bins_chunk_size,
+
+            weak_reference_dead_value
         }
     }
 

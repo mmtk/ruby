@@ -18,6 +18,7 @@ pub struct WeakProcessor {
     /// If it is a bottleneck, replace it with a lock-free data structure,
     /// or add candidates in batch.
     obj_free_candidates: Mutex<Vec<ObjectReference>>,
+    weak_references: Mutex<Vec<&'static mut ObjectReference>>,
 }
 
 impl Default for WeakProcessor {
@@ -30,6 +31,7 @@ impl WeakProcessor {
     pub fn new() -> Self {
         Self {
             obj_free_candidates: Mutex::new(Vec::new()),
+            weak_references: Mutex::new(Vec::new()),
         }
     }
 
@@ -56,12 +58,28 @@ impl WeakProcessor {
         std::mem::take(obj_free_candidates.as_mut())
     }
 
+    pub fn add_weak_reference(&self, ptr: &'static mut ObjectReference) {
+        let mut weak_references = self.weak_references.lock().unwrap();
+        weak_references.push(ptr);
+    }
+
+    pub fn remove_weak_reference(&self, ptr: &ObjectReference) {
+        let mut weak_references = self.weak_references.lock().unwrap();
+        for (i, curr_ptr) in weak_references.iter().enumerate() {
+            if *curr_ptr == ptr {
+                weak_references.swap_remove(i);
+                break;
+            }
+        }
+    }
+
     pub fn process_weak_stuff(
         &self,
         worker: &mut GCWorker<Ruby>,
         _tracer_context: impl ObjectTracerContext<Ruby>,
     ) {
         worker.add_work(WorkBucketStage::VMRefClosure, ProcessObjFreeCandidates);
+        worker.add_work(WorkBucketStage::VMRefClosure, ProcessWeakReferences);
 
         worker.scheduler().work_buckets[WorkBucketStage::VMRefClosure].bulk_add(vec![
             Box::new(UpdateGenericIvTbl) as _,
@@ -138,6 +156,26 @@ impl GCWork<Ruby> for ProcessObjFreeCandidates {
         }
 
         *obj_free_candidates = new_candidates;
+    }
+}
+
+struct ProcessWeakReferences;
+
+impl GCWork<Ruby> for ProcessWeakReferences {
+    fn do_work(&mut self, _worker: &mut GCWorker<Ruby>, _mmtk: &'static mmtk::MMTK<Ruby>) {
+        let mut weak_references = crate::binding()
+            .weak_proc
+            .weak_references
+            .try_lock()
+            .expect("Mutators should not be holding the lock.");
+
+            for ptr_ptr in weak_references.iter_mut() {
+                if !(**ptr_ptr).is_reachable() {
+                    **ptr_ptr = crate::binding().weak_reference_dead_value;
+                }
+            }
+
+            weak_references.clear();
     }
 }
 

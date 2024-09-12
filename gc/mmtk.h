@@ -101,7 +101,8 @@ MMTk_Builder *mmtk_builder_default(void);
 
 void mmtk_init_binding(MMTk_Builder *builder,
                        const struct MMTk_RubyBindingOptions *_binding_options,
-                       const struct MMTk_RubyUpcalls *upcalls);
+                       const struct MMTk_RubyUpcalls *upcalls,
+                       MMTk_ObjectReference weak_reference_dead_value);
 
 void mmtk_initialize_collection(MMTk_VMThread tls);
 
@@ -125,6 +126,10 @@ void mmtk_post_alloc(MMTk_Mutator *mutator,
                      MMTk_AllocationSemantics semantics);
 
 void mmtk_add_obj_free_candidate(MMTk_ObjectReference object);
+
+void mmtk_mark_weak(const MMTk_ObjectReference *ptr);
+
+void mmtk_remove_weak(const MMTk_ObjectReference *ptr);
 
 void mmtk_object_reference_write_post(MMTk_Mutator *mutator, MMTk_ObjectReference object);
 

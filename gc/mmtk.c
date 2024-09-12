@@ -450,7 +450,7 @@ void *
 rb_gc_impl_objspace_alloc(void)
 {
     MMTk_Builder *builder = mmtk_builder_default();
-    mmtk_init_binding(builder, NULL, &ruby_upcalls);
+    mmtk_init_binding(builder, NULL, &ruby_upcalls, (MMTk_ObjectReference)Qundef);
 
     return calloc(1, sizeof(struct objspace));
 }
@@ -738,21 +738,23 @@ rb_gc_impl_mark_and_pin(void *objspace_ptr, VALUE obj)
 }
 
 void
-rb_gc_impl_mark_maybe(void *objspace_ptr, VALUE obj) {
+rb_gc_impl_mark_maybe(void *objspace_ptr, VALUE obj)
+{
     if (rb_gc_impl_pointer_to_heap_p(objspace_ptr, (const void *)obj)) {
         rb_gc_impl_mark_and_pin(objspace_ptr, obj);
     }
 }
 
 void
-rb_gc_impl_mark_weak(void *objspace_ptr, VALUE *ptr) {
-    rb_bug("unimplemented");
+rb_gc_impl_mark_weak(void *objspace_ptr, VALUE *ptr)
+{
+    mmtk_mark_weak((const MMTk_ObjectReference *)ptr);
 }
 
 void
 rb_gc_impl_remove_weak(void *objspace_ptr, VALUE parent_obj, VALUE *ptr)
 {
-    rb_bug("unimplemented");
+    mmtk_remove_weak((const MMTk_ObjectReference *)ptr);
 }
 
 // Compaction
