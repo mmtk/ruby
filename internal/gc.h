@@ -213,6 +213,9 @@ void rb_gc_ref_update_table_values_only(st_table *tbl);
 
 void rb_gc_initial_stress_set(VALUE flag);
 
+void rb_gc_before_fork(void);
+void rb_gc_after_fork(rb_pid_t pid);
+
 #define rb_gc_mark_and_move_ptr(ptr) do { \
     VALUE _obj = (VALUE)*(ptr); \
     rb_gc_mark_and_move(&_obj); \

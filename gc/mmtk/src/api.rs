@@ -193,6 +193,19 @@ pub extern "C" fn mmtk_free_raw_vec_of_obj_ref(raw_vec: RawVecOfObjRef) {
     unsafe { raw_vec.into_vec() };
 }
 
+// =============== Forking ===============
+
+#[no_mangle]
+pub extern "C" fn mmtk_before_fork() {
+    mmtk().prepare_to_fork();
+    binding().join_all_gc_threads();
+}
+
+#[no_mangle]
+pub extern "C" fn mmtk_after_fork(tls: VMThread) {
+    mmtk().after_fork(tls);
+}
+
 // =============== Statistics ===============
 
 #[no_mangle]

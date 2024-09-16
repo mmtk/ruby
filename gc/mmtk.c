@@ -748,13 +748,13 @@ rb_gc_impl_mark_maybe(void *objspace_ptr, VALUE obj)
 void
 rb_gc_impl_mark_weak(void *objspace_ptr, VALUE *ptr)
 {
-    mmtk_mark_weak((const MMTk_ObjectReference *)ptr);
+    mmtk_mark_weak((MMTk_ObjectReference *)ptr);
 }
 
 void
 rb_gc_impl_remove_weak(void *objspace_ptr, VALUE parent_obj, VALUE *ptr)
 {
-    mmtk_remove_weak((const MMTk_ObjectReference *)ptr);
+    mmtk_remove_weak((MMTk_ObjectReference *)ptr);
 }
 
 // Compaction
@@ -1078,6 +1078,20 @@ rb_gc_impl_object_id_to_ref(void *objspace_ptr, VALUE object_id)
     else {
         rb_raise(rb_eRangeError, "%+"PRIsVALUE" is recycled object", rb_funcall(object_id, rb_intern("to_s"), 1, INT2FIX(10)));
     }
+}
+
+// Forking
+
+void
+rb_gc_impl_before_fork(void *objspace_ptr)
+{
+    mmtk_before_fork();
+}
+
+void
+rb_gc_impl_after_fork(void *objspace_ptr, rb_pid_t pid)
+{
+    mmtk_after_fork(rb_gc_get_ractor_newobj_cache());
 }
 
 // Statistics

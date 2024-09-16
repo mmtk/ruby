@@ -127,7 +127,7 @@ void mmtk_post_alloc(MMTk_Mutator *mutator,
 
 void mmtk_add_obj_free_candidate(MMTk_ObjectReference object);
 
-void mmtk_mark_weak(const MMTk_ObjectReference *ptr);
+void mmtk_mark_weak(MMTk_ObjectReference *ptr);
 
 void mmtk_remove_weak(const MMTk_ObjectReference *ptr);
 
@@ -140,6 +140,10 @@ void mmtk_enumerate_objects(void (*callback)(MMTk_ObjectReference, void*), void 
 struct MMTk_RawVecOfObjRef mmtk_get_all_obj_free_candidates(void);
 
 void mmtk_free_raw_vec_of_obj_ref(struct MMTk_RawVecOfObjRef raw_vec);
+
+void mmtk_before_fork(void);
+
+void mmtk_after_fork(MMTk_VMThread tls);
 
 size_t mmtk_total_bytes(void);
 

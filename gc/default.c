@@ -9346,6 +9346,9 @@ gc_malloc_allocations(VALUE self)
 }
 #endif
 
+void rb_gc_impl_before_fork(void *objspace_ptr) { /* no-op */ }
+void rb_gc_impl_after_fork(void *objspace_ptr, rb_pid_t pid) { /* no-op */ }
+
 void *
 rb_gc_impl_objspace_alloc(void)
 {

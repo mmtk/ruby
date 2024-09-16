@@ -680,6 +680,9 @@ typedef struct gc_function_map {
     // Object ID
     VALUE (*object_id)(void *objspace_ptr, VALUE obj);
     VALUE (*object_id_to_ref)(void *objspace_ptr, VALUE object_id);
+    // Forking
+    void (*before_fork)(void *objspace_ptr);
+    void (*after_fork)(void *objspace_ptr, rb_pid_t pid);
     // Statistics
     void (*set_measure_total_time)(void *objspace_ptr, VALUE flag);
     bool (*get_measure_total_time)(void *objspace_ptr);
@@ -810,6 +813,9 @@ ruby_external_gc_init(void)
     // Object ID
     load_external_gc_func(object_id);
     load_external_gc_func(object_id_to_ref);
+    // Forking
+    load_external_gc_func(before_fork);
+    load_external_gc_func(after_fork);
     // Statistics
     load_external_gc_func(set_measure_total_time);
     load_external_gc_func(get_measure_total_time);
@@ -888,6 +894,9 @@ ruby_external_gc_init(void)
 // Object ID
 # define rb_gc_impl_object_id rb_gc_functions.object_id
 # define rb_gc_impl_object_id_to_ref rb_gc_functions.object_id_to_ref
+// Forking
+# define rb_gc_impl_before_fork rb_gc_functions.before_fork
+# define rb_gc_impl_after_fork rb_gc_functions.after_fork
 // Statistics
 # define rb_gc_impl_set_measure_total_time rb_gc_functions.set_measure_total_time
 # define rb_gc_impl_get_measure_total_time rb_gc_functions.get_measure_total_time
@@ -4372,6 +4381,18 @@ rb_obj_info_dump_loc(VALUE obj, const char *file, int line, const char *func)
 {
     char buff[0x100];
     fprintf(stderr, "<OBJ_INFO:%s@%s:%d> %s\n", func, file, line, rb_raw_obj_info(buff, 0x100, obj));
+}
+
+void
+rb_gc_before_fork(void)
+{
+    rb_gc_impl_before_fork(rb_gc_get_objspace());
+}
+
+void
+rb_gc_after_fork(rb_pid_t pid)
+{
+    rb_gc_impl_after_fork(rb_gc_get_objspace(), pid);
 }
 
 /*
