@@ -1128,7 +1128,14 @@ rb_gc_impl_get_total_time(void *objspace_ptr)
     return objspace->total_gc_time;
 }
 
-size_t rb_gc_impl_gc_count(void *objspace_ptr) { }
+size_t
+rb_gc_impl_gc_count(void *objspace_ptr)
+{
+    struct objspace *objspace = objspace_ptr;
+
+    return objspace->gc_count;
+}
+
 VALUE rb_gc_impl_latest_gc_info(void *objspace_ptr, VALUE key) { }
 
 enum gc_stat_sym {
