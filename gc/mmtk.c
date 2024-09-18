@@ -12,6 +12,8 @@
 #include "gc/mmtk.h"
 
 struct objspace {
+    bool measure_gc_time;
+
     size_t gc_count;
     size_t total_gc_time;
     size_t total_allocated_objects;
@@ -136,7 +138,9 @@ rb_mmtk_block_for_gc(MMTk_VMMutatorThread mutator)
         objspace->gc_count++;
 
         struct timespec gc_start_time;
-        clock_gettime(CLOCK_MONOTONIC, &gc_start_time);
+        if (objspace->measure_gc_time) {
+            clock_gettime(CLOCK_MONOTONIC, &gc_start_time);
+        }
 
         int lock_lev = rb_gc_vm_lock();
         rb_gc_vm_barrier();
@@ -156,12 +160,14 @@ rb_mmtk_block_for_gc(MMTk_VMMutatorThread mutator)
 
         rb_gc_vm_unlock(lock_lev);
 
-        struct timespec gc_end_time;
-        clock_gettime(CLOCK_MONOTONIC, &gc_end_time);
+        if (objspace->measure_gc_time) {
+            struct timespec gc_end_time;
+            clock_gettime(CLOCK_MONOTONIC, &gc_end_time);
 
-        objspace->total_gc_time +=
-            (gc_end_time.tv_sec - gc_start_time.tv_sec) * (1000 * 1000 * 1000) +
-                (gc_end_time.tv_nsec - gc_start_time.tv_nsec);
+            objspace->total_gc_time +=
+                (gc_end_time.tv_sec - gc_start_time.tv_sec) * (1000 * 1000 * 1000) +
+                    (gc_end_time.tv_nsec - gc_start_time.tv_nsec);
+        }
     }
 
     if ((err = pthread_mutex_unlock(&objspace->mutex)) != 0) {
@@ -462,6 +468,8 @@ void
 rb_gc_impl_objspace_init(void *objspace_ptr)
 {
     struct objspace *objspace = objspace_ptr;
+
+    objspace->measure_gc_time = true;
 
     objspace_obj_id_init(objspace);
 
@@ -1095,9 +1103,17 @@ rb_gc_impl_after_fork(void *objspace_ptr, rb_pid_t pid)
 }
 
 // Statistics
-VALUE rb_gc_impl_set_measure_total_time(void *objspace_ptr, VALUE flag) { }
-VALUE rb_gc_impl_get_measure_total_time(void *objspace_ptr) { }
-VALUE rb_gc_impl_get_profile_total_time(void *objspace_ptr) { }
+
+void
+rb_gc_impl_set_measure_total_time(void *objspace_ptr, VALUE flag)
+{
+    struct objspace *objspace = objspace_ptr;
+
+    objspace->measure_gc_time = RTEST(flag);
+}
+
+bool rb_gc_impl_get_measure_total_time(void *objspace_ptr) { }
+unsigned long long rb_gc_impl_get_total_time(void *objspace_ptr) { }
 size_t rb_gc_impl_gc_count(void *objspace_ptr) { }
 VALUE rb_gc_impl_latest_gc_info(void *objspace_ptr, VALUE key) { }
 
