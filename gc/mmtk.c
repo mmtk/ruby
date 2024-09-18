@@ -1120,7 +1120,14 @@ rb_gc_impl_get_measure_total_time(void *objspace_ptr)
     return objspace->measure_gc_time;
 }
 
-unsigned long long rb_gc_impl_get_total_time(void *objspace_ptr) { }
+unsigned long long
+rb_gc_impl_get_total_time(void *objspace_ptr)
+{
+    struct objspace *objspace = objspace_ptr;
+
+    return objspace->total_gc_time;
+}
+
 size_t rb_gc_impl_gc_count(void *objspace_ptr) { }
 VALUE rb_gc_impl_latest_gc_info(void *objspace_ptr, VALUE key) { }
 
