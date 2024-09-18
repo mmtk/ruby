@@ -1136,7 +1136,11 @@ rb_gc_impl_gc_count(void *objspace_ptr)
     return objspace->gc_count;
 }
 
-VALUE rb_gc_impl_latest_gc_info(void *objspace_ptr, VALUE key) { }
+VALUE
+rb_gc_impl_latest_gc_info(void *objspace_ptr, VALUE key)
+{
+    return Qnil;
+}
 
 enum gc_stat_sym {
     gc_stat_sym_count,
