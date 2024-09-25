@@ -34,6 +34,11 @@ jobs:
           - test_task: check
             configure: '--enable-shared --enable-load-relative'
           - test_task: check
+            gc_name: 'default'
+            shared_gc: true
+            configure: '--with-shared-gc=/home/runner/ruby_gc'
+          - test_task: check
+            gc_name: 'mmtk'
             shared_gc: true
             configure: '--with-shared-gc=/home/runner/ruby_gc'
           - test_task: test-bundler-parallel
@@ -99,7 +104,6 @@ jobs:
 
       - name: Build shared GC
         run: |
-          echo "RUBY_GC_LIBRARY=librubygc.default.so" >> $GITHUB_ENV
           make shared-gc SHARED_GC=default
         if: ${{ matrix.shared_gc }}
 
@@ -116,6 +120,19 @@ jobs:
             ./goruby -veh
             ;;
           esac
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Build MMTK Ruby lib
+        run: >-
+          cd ../src/gc/mmtk &&
+          cargo build --release &&
+          ldd target/release/libmmtk_ruby.so
+        if: $${{ matrix.shared_gc && matrix.gc_name == 'mmtk' }}
+
+      - name: Build shared GC (${{ matrix.gc_name }})
+        run: |
+          make shared-gc SHARED_GC=${{ matrix.gc_name }} MMTK_BUILD=release
+        if: ${{ matrix.shared_gc }}
 
       - name: Set test options for skipped tests
         run: |
@@ -140,10 +157,25 @@ jobs:
           ${TESTS:+TESTS="$TESTS"}
           ${{ !contains(matrix.test_task, 'bundle') && 'RUBYOPT=-w' || '' }}
         timeout-minutes: ${{ matrix.timeout || 40 }}
+        if: ${{ !matrix.shared_gc}}
         env:
           RUBY_TESTOPTS: '-q --tty=no'
           TEST_BUNDLED_GEMS_ALLOW_FAILURES: 'typeprof'
           PRECHECK_BUNDLED_GEMS: 'no'
+
+      - name: make ${{ matrix.test_task }}
+        run: >-
+          $SETARCH make -s ${{ matrix.test_task }}
+          ${TESTS:+TESTS="$TESTS"}
+          ${{ !contains(matrix.test_task, 'bundle') && 'RUBYOPT=-w' || '' }}
+        timeout-minutes: ${{ matrix.timeout || 40 }}
+        if: ${{ matrix.shared_gc}}
+        env:
+          RUBY_TESTOPTS: '-q --tty=no'
+          LD_LIBRARY_PATH: '/home/runner/work/ruby/ruby/src/gc/mmtk/target/release'
+          TEST_BUNDLED_GEMS_ALLOW_FAILURES: 'typeprof'
+          PRECHECK_BUNDLED_GEMS: 'no'
+          RUBY_GC_LIBRARY: 'librubygc.${{ matrix.gc_name }}.so'
 
       - name: make skipped tests
         run: |
