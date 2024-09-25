@@ -3229,6 +3229,90 @@ update_superclasses(void *objspace, VALUE obj)
 extern rb_symbols_t ruby_global_symbols;
 #define global_symbols ruby_global_symbols
 
+struct global_vm_tbl_iter_data {
+    vm_tbl_iter_callback_func callback;
+    vm_tbl_update_callback_func update_callback;
+    void *data;
+};
+
+static int
+vm_table_iter_wrapper(st_data_t key, st_data_t value, st_data_t data, int error)
+{
+    struct global_vm_tbl_iter_data *iter_data = (struct global_vm_tbl_iter_data *)data;
+    vm_tbl_iter_callback_func callback = iter_data->callback;
+
+    return (*callback)((VALUE)key, iter_data->data);
+}
+
+static int
+vm_table_update_wrapper(st_data_t *key, st_data_t *value, st_data_t data, int existing)
+{
+    struct global_vm_tbl_iter_data *iter_data = (struct global_vm_tbl_iter_data *)data;
+    vm_tbl_update_callback_func callback = iter_data->update_callback;
+
+    return (*callback)((VALUE *)key, iter_data->data);
+}
+
+static int
+vm_frozen_strings_iter_wrapper(st_data_t key, st_data_t value, st_data_t data, int error)
+{
+    GC_ASSERT(RB_TYPE_P((VALUE)key, T_STRING));
+
+    int retval = vm_table_iter_wrapper(key, value, data, error);
+    if( retval == ST_DELETE) {
+        FL_UNSET((VALUE)key, RSTRING_FSTR);
+    }
+    return retval;
+}
+
+static int
+vm_gen_ivar_iter_wrapper(st_data_t key, st_data_t value, st_data_t data, int error)
+{
+    int retval = vm_table_iter_wrapper(key, value, data, error);
+    if( retval == ST_DELETE) {
+        FL_UNSET((VALUE)key, FL_EXIVAR);
+    }
+    return retval;
+}
+
+
+void
+rb_gc_vm_weak_tbl_iter(vm_tbl_iter_callback_func cb, vm_tbl_update_callback_func ucb, void *data)
+{
+    rb_vm_t *vm = GET_VM();
+
+    struct global_vm_tbl_iter_data iter_data = {
+        .callback = cb,
+        .update_callback = ucb,
+        .data = data
+    };
+
+    #define ITER_TABLE_WITH_CB(tbl) do { \
+        if (tbl->num_entries > 0) {      \
+            st_foreach_with_replace(     \
+                tbl,                     \
+                vm_table_iter_wrapper,   \
+                vm_table_update_wrapper, \
+                (st_data_t)&iter_data    \
+            );                           \
+        }                                \
+    } while (0)
+
+    ITER_TABLE_WITH_CB(vm->ci_table);
+    ITER_TABLE_WITH_CB(vm->overloaded_cme_table);
+    ITER_TABLE_WITH_CB(global_symbols.str_sym);
+
+    st_table *generic_iv_tbl = rb_generic_ivtbl_get();
+    if (generic_iv_tbl->num_entries > 0) {
+        st_foreach_with_replace(generic_iv_tbl, vm_gen_ivar_iter_wrapper, vm_table_update_wrapper, (st_data_t)&iter_data);
+    }
+
+    st_table *frozen_strings = GET_VM()->frozen_strings;
+    if (frozen_strings->num_entries > 0) {
+        st_foreach_with_replace(frozen_strings, vm_frozen_strings_iter_wrapper, vm_table_update_wrapper, (st_data_t)&iter_data);
+    }
+}
+
 void
 rb_gc_update_vm_references(void *objspace)
 {

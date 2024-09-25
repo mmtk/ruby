@@ -18,6 +18,9 @@ struct rb_gc_vm_context {
     struct rb_execution_context_struct *ec;
 };
 
+typedef int (*vm_tbl_iter_callback_func)(VALUE value, void *data);
+typedef int (*vm_tbl_update_callback_func)(VALUE *value, void *data);
+
 RUBY_SYMBOL_EXPORT_BEGIN
 unsigned int rb_gc_vm_lock(void);
 void rb_gc_vm_unlock(unsigned int lev);
@@ -55,12 +58,9 @@ uint32_t rb_gc_get_shape(VALUE obj);
 void rb_gc_set_shape(VALUE obj, uint32_t shape_id);
 uint32_t rb_gc_rebuild_shape(VALUE obj, size_t size_pool_id);
 size_t rb_obj_memsize_of(VALUE obj);
-struct st_table *rb_gc_get_generic_ivar_table(void);
-struct st_table *rb_gc_get_frozen_strings_table(void);
-struct st_table *rb_gc_get_global_symbols_table(void);
-struct st_table *rb_gc_get_overloaded_cme_table(void);
-struct st_table *rb_gc_get_ci_table(void);
+void rb_gc_vm_weak_tbl_iter(vm_tbl_iter_callback_func cb, vm_tbl_update_callback_func ucb, void *data);
 RUBY_SYMBOL_EXPORT_END
+
 
 void rb_ractor_finish_marking(void);
 

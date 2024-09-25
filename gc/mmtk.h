@@ -27,8 +27,6 @@ typedef uint32_t MMTk_AllocationSemantics;
 
 #define MMTk_GC_THREAD_KIND_WORKER 1
 
-typedef struct MMTk_st_table MMTk_st_table;
-
 typedef struct MMTk_RubyBindingOptions {
     bool ractor_check_mode;
     size_t suffix_size;
@@ -73,18 +71,13 @@ typedef struct MMTk_RubyUpcalls {
     void *(*get_original_givtbl)(MMTk_ObjectReference object);
     void (*move_givtbl)(MMTk_ObjectReference old_objref, MMTk_ObjectReference new_objref);
     size_t (*vm_live_bytes)(void);
+    void (*update_global_tables)(void);
     void (*update_frozen_strings_table)(void);
     void (*update_finalizer_table)(void);
     void (*update_obj_id_tables)(void);
     void (*update_global_symbols_table)(void);
     void (*update_overloaded_cme_table)(void);
     void (*update_ci_table)(void);
-    struct MMTk_st_table *(*get_frozen_strings_table)(void);
-    struct MMTk_st_table *(*get_finalizer_table)(void);
-    struct MMTk_st_table *(*get_obj_id_tables)(void);
-    struct MMTk_st_table *(*get_global_symbols_table)(void);
-    struct MMTk_st_table *(*get_overloaded_cme_table)(void);
-    struct MMTk_st_table *(*get_ci_table)(void);
 } MMTk_RubyUpcalls;
 
 typedef struct MMTk_RawVecOfObjRef {

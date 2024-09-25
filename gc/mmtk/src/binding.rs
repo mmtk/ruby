@@ -51,7 +51,6 @@ impl RubyConfiguration {
 }
 
 pub(crate) struct MovedGIVTblEntry {
-    pub old_objref: ObjectReference,
     pub gen_ivtbl: *mut c_void,
 }
 
