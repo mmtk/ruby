@@ -1913,8 +1913,13 @@ shared-gc: probes.h
 		echo "You must specify SHARED_GC with the GC to build"; \
 		exit 1; \
 	else \
-		echo generating $(shared_gc_dir)librubygc.$(SHARED_GC).$(SOEXT); \
-		$(LDSHARED) -I$(srcdir)/include -I$(srcdir) -I$(arch_hdrdir) $(XDLDFLAGS) $(cflags) -DBUILDING_SHARED_GC -fPIC -o $(shared_gc_dir)librubygc.$(SHARED_GC).$(SOEXT) $(srcdir)/gc/$(SHARED_GC).c; \
+		if [ "$(SHARED_GC)" = "mmtk" ]; then \
+			echo generating $(shared_gc_dir)librubygc.$(SHARED_GC).$(SOEXT); \
+			$(LDSHARED) -I$(srcdir)/include -I$(srcdir) -I$(arch_hdrdir) $(XDLDFLAGS) -L$(srcdir)/gc/mmtk/target/debug -lmmtk_ruby $(cflags) -DBUILDING_SHARED_GC -fPIC -o $(shared_gc_dir)librubygc.$(SHARED_GC).$(SOEXT) $(srcdir)/gc/$(SHARED_GC).c; \
+		else \
+			echo generating $(shared_gc_dir)librubygc.$(SHARED_GC).$(SOEXT); \
+			$(LDSHARED) -I$(srcdir)/include -I$(srcdir) -I$(arch_hdrdir) $(XDLDFLAGS) $(MMTK_LIBS) $(cflags) -DBUILDING_SHARED_GC -fPIC -o $(shared_gc_dir)librubygc.$(SHARED_GC).$(SOEXT) $(srcdir)/gc/$(SHARED_GC).c; \
+		fi; \
 	fi
 
 help: PHONY
