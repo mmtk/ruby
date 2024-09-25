@@ -52,6 +52,9 @@ struct st_table *rb_gc_get_overloaded_cme_table(void);
 struct st_table *rb_gc_get_ci_table(void);
 RUBY_SYMBOL_EXPORT_END
 
+typedef int (*vm_tbl_iter_callback_func)(VALUE value, void *data);
+typedef int (*vm_tbl_update_callback_func)(VALUE *value, void *data);
+
 void rb_ractor_finish_marking(void);
 
 // -------------------Private section begin------------------------

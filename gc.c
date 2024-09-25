@@ -3187,6 +3187,59 @@ update_superclasses(void *objspace, VALUE obj)
 extern rb_symbols_t ruby_global_symbols;
 #define global_symbols ruby_global_symbols
 
+struct global_vm_tbl_iter_data {
+    vm_tbl_iter_callback_func callback;
+    vm_tbl_update_callback_func update_callback;
+    void *data;
+};
+
+static int
+vm_table_iter_wrapper(st_data_t key, st_data_t value, st_data_t data, int error)
+{
+    struct global_vm_tbl_iter_data *iter_data = (struct global_vm_tbl_iter_data *)data;
+    vm_tbl_iter_callback_func callback = iter_data->callback;
+
+    return (*callback)((VALUE)key, iter_data->data);
+}
+
+static int
+vm_table_update_wrapper(st_data_t *key, st_data_t *value, st_data_t data, int existing)
+{
+    struct global_vm_tbl_iter_data *iter_data = (struct global_vm_tbl_iter_data *)data;
+    vm_tbl_update_callback_func callback = iter_data->update_callback;
+
+    return (*callback)((VALUE *)key, iter_data->data);
+}
+
+void
+rb_gc_vm_weak_tbl_iter(vm_tbl_iter_callback_func cb, vm_tbl_update_callback_func ucb, void *data)
+{
+    rb_vm_t *vm = GET_VM();
+
+    struct global_vm_tbl_iter_data iter_data = {
+        .callback = cb,
+        .update_callback = ucb,
+        .data = data
+    };
+
+    #define ITER_TABLE_WITH_CB(tbl) do { \
+        if (tbl->num_entries > 0) {      \
+            st_foreach_with_replace(     \
+                tbl,                     \
+                vm_table_iter_wrapper,   \
+                vm_table_update_wrapper, \
+                (st_data_t)&iter_data    \
+            );                           \
+        }                                \
+    } while (0)
+
+    ITER_TABLE_WITH_CB(vm->ci_table);
+    ITER_TABLE_WITH_CB(vm->overloaded_cme_table);
+
+    st_table *generic_iv_tbl = rb_generic_ivtbl_get();
+    ITER_TABLE_WITH_CB(generic_iv_tbl);
+}
+
 void
 rb_gc_update_vm_references(void *objspace)
 {
