@@ -343,7 +343,6 @@ rb_mmtk_update_obj_id_tables_i(st_data_t key, st_data_t val, st_data_t data)
 {
     RUBY_ASSERT(RB_FL_TEST(key, FL_SEEN_OBJ_ID));
 
-    // TODO: is it safe to delete if key has finalizer?
     if (!mmtk_is_reachable((MMTk_ObjectReference)key)) {
         RB_FL_UNSET(key, FL_SEEN_OBJ_ID);
         return ST_DELETE;
