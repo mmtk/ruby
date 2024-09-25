@@ -266,54 +266,10 @@ rb_mmtk_call_obj_free(MMTk_ObjectReference object)
     rb_gc_obj_free(objspace, obj);
 }
 
-static int
-rb_mmtk_cleanup_generic_iv_tbl_i(st_data_t key, st_data_t val, st_data_t data)
-{
-    // TODO: make this more performant. We should just free val and return ST_DELETE.
-    MMTk_ObjectReference key_objref = (MMTk_ObjectReference)key;
-    if (!mmtk_is_live_object(key_objref)) {
-        rb_free_generic_ivar((VALUE)key);
-
-        RB_FL_UNSET((VALUE)key, FL_EXIVAR);
-    }
-
-    return ST_CONTINUE;
-}
-
-static void
-rb_mmtk_cleanup_generic_iv_tbl(void)
-{
-    struct st_table *table = rb_gc_get_generic_ivar_table();
-
-    st_foreach(table, rb_mmtk_cleanup_generic_iv_tbl_i, (st_data_t)0);
-}
-
 static size_t
 rb_mmtk_vm_live_bytes(void)
 {
     return 0;
-}
-
-static int
-rb_mmtk_update_frozen_strings_table_i(st_data_t key, st_data_t val, st_data_t data)
-{
-    RUBY_ASSERT(key == val);
-    RUBY_ASSERT(RB_BUILTIN_TYPE(key) == T_STRING);
-    RUBY_ASSERT(RB_FL_TEST(key, RSTRING_FSTR));
-
-    if (!mmtk_is_reachable((MMTk_ObjectReference)key)) {
-        RB_FL_UNSET(key, RSTRING_FSTR);
-        return ST_DELETE;
-    }
-
-    return ST_CONTINUE;
-}
-
-static void
-rb_mmtk_update_frozen_strings_table(void)
-{
-    // TODO: replace with st_foreach_with_replace when GC is moving
-    st_foreach(rb_gc_get_frozen_strings_table(), rb_mmtk_update_frozen_strings_table_i, 0);
 }
 
 static int
@@ -355,6 +311,16 @@ rb_mmtk_update_finalizer_table(void)
 }
 
 static int
+rb_mmtk_update_table_i(VALUE val, void *data)
+{
+    if (!mmtk_is_reachable((MMTk_ObjectReference)val)) {
+        return ST_DELETE;
+    }
+
+    return ST_CONTINUE;
+}
+
+static int
 rb_mmtk_update_obj_id_tables_i(st_data_t key, st_data_t val, st_data_t data)
 {
     RUBY_ASSERT(RB_FL_TEST(key, FL_SEEN_OBJ_ID));
@@ -375,62 +341,12 @@ rb_mmtk_update_obj_id_tables(void)
     st_foreach(objspace->obj_to_id_tbl, rb_mmtk_update_obj_id_tables_i, 0);
 }
 
-static int
-rb_mmtk_update_global_symbols_table_i(st_data_t key, st_data_t val, st_data_t data)
-{
-    RUBY_ASSERT(RB_BUILTIN_TYPE(key) == T_SYMBOL);
-
-    if (!mmtk_is_reachable((MMTk_ObjectReference)key)) {
-        return ST_DELETE;
-    }
-
-    return ST_CONTINUE;
-}
-
 static void
-rb_mmtk_update_global_symbols_table(void)
+rb_mmtk_update_global_tables(void)
 {
-    struct objspace *objspace = rb_gc_get_objspace();
-
-    // st_foreach(rb_gc_get_global_symbols_table(), rb_mmtk_update_global_symbols_table_i, 0);
-}
-
-static int
-rb_mmtk_update_overloaded_cme_table_i(st_data_t key, st_data_t val, st_data_t data)
-{
-    RUBY_ASSERT(RB_BUILTIN_TYPE(key) == T_SYMBOL);
-
-    if (!mmtk_is_reachable((MMTk_ObjectReference)key)) {
-        return ST_DELETE;
-    }
-
-    return ST_CONTINUE;
-}
-
-static void
-rb_mmtk_update_overloaded_cme_table(void)
-{
-    struct objspace *objspace = rb_gc_get_objspace();
-
-    st_foreach(rb_gc_get_overloaded_cme_table(), rb_mmtk_update_overloaded_cme_table_i, 0);
-}
-
-static int
-rb_mmtk_update_ci_table_i(st_data_t key, st_data_t val, st_data_t data)
-{
-    if (!mmtk_is_reachable((MMTk_ObjectReference)key)) {
-        return ST_DELETE;
-    }
-
-    return ST_CONTINUE;
-}
-
-static void
-rb_mmtk_update_ci_table(void)
-{
-    struct objspace *objspace = rb_gc_get_objspace();
-
-    st_foreach(rb_gc_get_ci_table(), rb_mmtk_update_ci_table_i, 0);
+    rb_mmtk_update_finalizer_table();
+    rb_mmtk_update_obj_id_tables();
+    rb_gc_vm_weak_tbl_iter(rb_mmtk_update_table_i, NULL, NULL);
 }
 
 // Bootup
@@ -449,16 +365,11 @@ MMTk_RubyUpcalls ruby_upcalls = {
     rb_mmtk_scan_object_ruby_style,
     rb_mmtk_call_gc_mark_children,
     rb_mmtk_call_obj_free,
-    rb_mmtk_cleanup_generic_iv_tbl,
+    NULL,
     NULL,
     NULL,
     rb_mmtk_vm_live_bytes,
-    rb_mmtk_update_frozen_strings_table,
-    rb_mmtk_update_finalizer_table,
-    rb_mmtk_update_obj_id_tables,
-    rb_mmtk_update_global_symbols_table,
-    rb_mmtk_update_overloaded_cme_table,
-    rb_mmtk_update_ci_table,
+    rb_mmtk_update_global_tables,
     NULL,
     NULL,
     NULL,

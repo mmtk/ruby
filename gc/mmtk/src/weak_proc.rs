@@ -7,8 +7,7 @@ use mmtk::{
 };
 
 use crate::{
-    abi::{GCThreadTLS, RubyObjectAccess},
-    binding::MovedGIVTblEntry,
+    abi::{GCThreadTLS},
     upcalls,
     Ruby,
 };
@@ -82,42 +81,9 @@ impl WeakProcessor {
         worker.add_work(WorkBucketStage::VMRefClosure, ProcessWeakReferences);
 
         worker.scheduler().work_buckets[WorkBucketStage::VMRefClosure].bulk_add(vec![
-            Box::new(UpdateGenericIvTbl) as _,
-            Box::new(UpdateFrozenStringsTable) as _,
-            Box::new(UpdateFinalizerAndObjIdTable) as _,
-            Box::new(UpdateGlobalSymbolsTable) as _,
-            Box::new(UpdateOverloadedCmeTable) as _,
-            Box::new(UpdateCiTable) as _,
+            Box::new(UpdateGlobalTables) as _,
             Box::new(UpdateWbUnprotectedObjectsList) as _,
         ]);
-    }
-
-    /// Update generic instance variable tables.
-    ///
-    /// Objects moved during GC should have their entries in the global `generic_iv_tbl_` hash
-    /// table updated, and dead objects should have their entries removed.
-    fn update_generic_iv_tbl() {
-        // Update `generic_iv_tbl_` entries for moved objects.  We could update the entries in
-        // `ObjectModel::move`.  However, because `st_table` is not thread-safe, we postpone the
-        // update until now in the VMRefClosure stage.
-        log::debug!("Updating global ivtbl entries...");
-        {
-            let mut moved_givtbl = crate::binding()
-                .moved_givtbl
-                .try_lock()
-                .expect("Should have no race in weak_proc");
-            for (new_objref, MovedGIVTblEntry { old_objref, .. }) in moved_givtbl.drain() {
-                trace!("  givtbl {} -> {}", old_objref, new_objref);
-                RubyObjectAccess::from_objref(new_objref).clear_has_moved_givtbl();
-                (upcalls().move_givtbl)(old_objref, new_objref);
-            }
-        }
-        log::debug!("Updated global ivtbl entries.");
-
-        // Clean up entries for dead objects.
-        log::debug!("Cleaning up global ivtbl entries...");
-        (crate::upcalls().cleanup_generic_iv_tbl)();
-        log::debug!("Cleaning up global ivtbl entries.");
     }
 }
 
@@ -221,30 +187,8 @@ macro_rules! define_global_table_processor {
     };
 }
 
-define_global_table_processor!(UpdateGenericIvTbl, {
-    WeakProcessor::update_generic_iv_tbl();
-});
-
-define_global_table_processor!(UpdateFrozenStringsTable, {
-    (crate::upcalls().update_frozen_strings_table)()
-});
-
-define_global_table_processor!(UpdateFinalizerAndObjIdTable, {
-    // Finalizers depend on object ID, so it must be processed first
-    (crate::upcalls().update_finalizer_table)();
-    (crate::upcalls().update_obj_id_tables)()
-});
-
-define_global_table_processor!(UpdateGlobalSymbolsTable, {
-    (crate::upcalls().update_global_symbols_table)()
-});
-
-define_global_table_processor!(UpdateOverloadedCmeTable, {
-    (crate::upcalls().update_overloaded_cme_table)()
-});
-
-define_global_table_processor!(UpdateCiTable, {
-    (crate::upcalls().update_ci_table)()
+define_global_table_processor!(UpdateGlobalTables, {
+    (crate::upcalls().update_global_tables)()
 });
 
 struct UpdateWbUnprotectedObjectsList;

@@ -80,7 +80,6 @@ impl ObjectModel<Ruby> for VMObjectModel {
                 moved_givtbl.insert(
                     to_obj,
                     crate::binding::MovedGIVTblEntry {
-                        old_objref: from,
                         gen_ivtbl: givtbl,
                     },
                 );
