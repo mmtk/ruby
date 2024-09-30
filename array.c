@@ -629,16 +629,19 @@ ary_ensure_room_for_push(VALUE ary, long add_len)
 
 /*
  *  call-seq:
- *    array.freeze -> self
+ *    freeze -> self
  *
- *  Freezes +self+; returns +self+:
+ *  Freezes +self+ (if not already frozen); returns +self+:
  *
  *    a = []
  *    a.frozen? # => false
  *    a.freeze
  *    a.frozen? # => true
  *
- *  An attempt to modify a frozen +Array+ raises FrozenError.
+ *  No further changes may be made to +self+;
+ *  raises FrozenError if a change is attempted.
+ *
+ *  Related: Kernel#frozen?.
  */
 
 VALUE
@@ -2063,13 +2066,16 @@ rb_ary_fetch(int argc, VALUE *argv, VALUE ary)
 
 /*
  *  call-seq:
- *    array.index(object) -> integer or nil
- *    array.index {|element| ... } -> integer or nil
- *    array.index -> new_enumerator
+ *    find_index(object) -> integer or nil
+ *    find_index {|element| ... } -> integer or nil
+ *    find_index -> new_enumerator
+ *    index(object) -> integer or nil
+ *    index {|element| ... } -> integer or nil
+ *    index -> new_enumerator
  *
- *  Returns the index of a specified element.
+ *  Returns the zero-based integer index of a specified element, or +nil+.
  *
- *  When argument +object+ is given but no block,
+ *  With only argument +object+ given,
  *  returns the index of the first element +element+
  *  for which <tt>object == element</tt>:
  *
@@ -2078,7 +2084,7 @@ rb_ary_fetch(int argc, VALUE *argv, VALUE ary)
  *
  *  Returns +nil+ if no such element found.
  *
- *  When both argument +object+ and a block are given,
+ *  With only a block given,
  *  calls the block with each successive element;
  *  returns the index of the first element for which the block returns a truthy value:
  *
@@ -2087,14 +2093,9 @@ rb_ary_fetch(int argc, VALUE *argv, VALUE ary)
  *
  *  Returns +nil+ if the block never returns a truthy value.
  *
- *  When neither an argument nor a block is given, returns a new Enumerator:
+ *  With neither an argument nor a block given, returns a new Enumerator.
  *
- *    a = [:foo, 'bar', 2]
- *    e = a.index
- *    e # => #<Enumerator: [:foo, "bar", 2]:index>
- *    e.each {|element| element == 'bar' } # => 1
- *
- *  Related: #rindex.
+ *  Related: see {Methods for Querying}[rdoc-ref:Array@Methods+for+Querying].
  */
 
 static VALUE
@@ -2521,38 +2522,38 @@ rb_ary_aset(int argc, VALUE *argv, VALUE ary)
 
 /*
  *  call-seq:
- *    array.insert(index, *objects) -> self
+ *    insert(index, *objects) -> self
  *
- *  Inserts given +objects+ before or after the element at Integer index +offset+;
+ *  Inserts the given +objects+ as elements of +self+;
  *  returns +self+.
  *
- *  When +index+ is non-negative, inserts all given +objects+
- *  before the element at offset +index+:
+ *  When +index+ is non-negative, inserts +objects+
+ *  _before_ the element at offset +index+:
  *
- *    a = [:foo, 'bar', 2]
- *    a.insert(1, :bat, :bam) # => [:foo, :bat, :bam, "bar", 2]
+ *    a = ['a', 'b', 'c']     # => ["a", "b", "c"]
+ *    a.insert(1, :x, :y, :z) # => ["a", :x, :y, :z, "b", "c"]
  *
  *  Extends the array if +index+ is beyond the array (<tt>index >= self.size</tt>):
  *
- *    a = [:foo, 'bar', 2]
- *    a.insert(5, :bat, :bam)
- *    a # => [:foo, "bar", 2, nil, nil, :bat, :bam]
+ *    a = ['a', 'b', 'c']     # => ["a", "b", "c"]
+ *    a.insert(5, :x, :y, :z) # => ["a", "b", "c", nil, nil, :x, :y, :z]
  *
- *  Does nothing if no objects given:
+ *  When +index+ is negative, inserts +objects+
+ *  _after_ the element at offset <tt>index + self.size</tt>:
  *
- *    a = [:foo, 'bar', 2]
- *    a.insert(1)
- *    a.insert(50)
- *    a.insert(-50)
- *    a # => [:foo, "bar", 2]
+ *    a = ['a', 'b', 'c']      # => ["a", "b", "c"]
+ *    a.insert(-2, :x, :y, :z) # => ["a", "b", :x, :y, :z, "c"]
  *
- *  When +index+ is negative, inserts all given +objects+
- *  _after_ the element at offset <tt>index+self.size</tt>:
+ *  With no +objects+ given, does nothing:
  *
- *    a = [:foo, 'bar', 2]
- *    a.insert(-2, :bat, :bam)
- *    a # => [:foo, "bar", :bat, :bam, 2]
+ *    a = ['a', 'b', 'c'] # => ["a", "b", "c"]
+ *    a.insert(1)         # => ["a", "b", "c"]
+ *    a.insert(50)        # => ["a", "b", "c"]
+ *    a.insert(-50)       # => ["a", "b", "c"]
  *
+ *  Raises IndexError if +objects+ are given and +index+ is negative and out of range.
+ *
+ *  Related: see {Methods for Assigning}[rdoc-ref:Array@Methods+for+Assigning].
  */
 
 static VALUE
@@ -4603,13 +4604,17 @@ rb_ary_transpose(VALUE ary)
 
 /*
  *  call-seq:
- *    array.replace(other_array) -> self
+ *    initialize_copy(other_array) -> self
+ *    replace(other_array) -> self
  *
- *  Replaces the content of +self+ with the content of +other_array+; returns +self+:
+ *  Replaces the elements of +self+ with the elements of +other_array+, which must be an
+ *  {array-convertible object}[rdoc-ref:implicit_conversion.rdoc@Array-Convertible+Objects];
+ *  returns +self+:
  *
- *    a = [:foo, 'bar', 2]
- *    a.replace(['foo', :bar, 3]) # => ["foo", :bar, 3]
+ *    a = ['a', 'b', 'c']   # => ["a", "b", "c"]
+ *    a.replace(['d', 'e']) # => ["d", "e"]
  *
+ *  Related: see {Methods for Assigning}[rdoc-ref:Array@Methods+for+Assigning].
  */
 
 VALUE
@@ -5270,14 +5275,16 @@ rb_ary_hash_values(long len, const VALUE *elements)
 
 /*
  *  call-seq:
- *    array.hash -> integer
+ *    hash -> integer
  *
  *  Returns the integer hash value for +self+.
  *
- *  Two arrays with the same content will have the same hash code (and will compare using #eql?):
+ *  Two arrays with the same content will have the same hash value
+ *  (and will compare using eql?):
  *
- *    [0, 1, 2].hash == [0, 1, 2].hash # => true
- *    [0, 1, 2].hash == [0, 1, 3].hash # => false
+ *    ['a', 'b'].hash == ['a', 'b'].hash # => true
+ *    ['a', 'b'].hash == ['a', 'c'].hash # => false
+ *    ['a', 'b'].hash == ['a'].hash      # => false
  *
  */
 
@@ -5289,13 +5296,16 @@ rb_ary_hash(VALUE ary)
 
 /*
  *  call-seq:
- *    array.include?(obj) -> true or false
+ *    include?(object) -> true or false
  *
- *  Returns +true+ if for some index +i+ in +self+, <tt>obj == self[i]</tt>;
- *  otherwise +false+:
+ *  Returns whether for some element +element+ in +self+,
+ *  <tt>object == element</tt>:
  *
- *    [0, 1, 2].include?(2) # => true
- *    [0, 1, 2].include?(3) # => false
+ *    [0, 1, 2].include?(2)   # => true
+ *    [0, 1, 2].include?(2.0) # => true
+ *    [0, 1, 2].include?(2.1) # => false
+ *
+ *  Related: see {Methods for Querying}[rdoc-ref:Array@Methods+for+Querying].
  */
 
 VALUE
@@ -6495,33 +6505,37 @@ flatten(VALUE ary, int level)
 
 /*
  *  call-seq:
- *    array.flatten! -> self or nil
- *    array.flatten!(level) -> self or nil
+ *    flatten!(depth = nil) -> self or nil
  *
- *  Replaces each nested +Array+ in +self+ with the elements from that +Array+;
- *  returns +self+ if any changes, +nil+ otherwise.
+ *  Returns +self+ as a recursively flattening of +self+ to +depth+ levels of recursion;
+ *  +depth+ must be an
+ *  {integer-convertible object}[rdoc-ref:implicit_conversion.rdoc@Integer-Convertible+Objects],
+ *  or +nil+.
+ *  At each level of recursion:
  *
- *  With non-negative Integer argument +level+, flattens recursively through +level+ levels:
+ *  - Each element that is an array is "flattened"
+ *    (that is, replaced by its individual array elements).
+ *  - Each element that is not an array is unchanged
+ *    (even if the element is an object that has instance method +flatten+).
  *
- *    a = [ 0, [ 1, [2, 3], 4 ], 5 ]
- *    a.flatten!(1) # => [0, 1, [2, 3], 4, 5]
- *    a = [ 0, [ 1, [2, 3], 4 ], 5 ]
- *    a.flatten!(2) # => [0, 1, 2, 3, 4, 5]
- *    a = [ 0, [ 1, [2, 3], 4 ], 5 ]
- *    a.flatten!(3) # => [0, 1, 2, 3, 4, 5]
- *    [0, 1, 2].flatten!(1) # => nil
+ *  Returns +nil+ if no elements were flattened.
  *
- *  With no argument, a +nil+ argument, or with negative argument +level+, flattens all levels:
+ *  With non-negative integer argument +depth+, flattens recursively through +depth+ levels:
  *
- *    a = [ 0, [ 1, [2, 3], 4 ], 5 ]
- *    a.flatten! # => [0, 1, 2, 3, 4, 5]
- *    [0, 1, 2].flatten! # => nil
- *    a = [ 0, [ 1, [2, 3], 4 ], 5 ]
- *    a.flatten!(-1) # => [0, 1, 2, 3, 4, 5]
- *    a = [ 0, [ 1, [2, 3], 4 ], 5 ]
- *    a.flatten!(-2) # => [0, 1, 2, 3, 4, 5]
- *    [0, 1, 2].flatten!(-1) # => nil
+ *    a = [ 0, [ 1, [2, 3], 4 ], 5, {foo: 0}, Set.new([6, 7]) ]
+ *    a                   # => [0, [1, [2, 3], 4], 5, {:foo=>0}, #<Set: {6, 7}>]
+ *    a.dup.flatten!(1)   # => [0, 1, [2, 3], 4, 5, {:foo=>0}, #<Set: {6, 7}>]
+ *    a.dup.flatten!(1.1) # => [0, 1, [2, 3], 4, 5, {:foo=>0}, #<Set: {6, 7}>]
+ *    a.dup.flatten!(2)   # => [0, 1, 2, 3, 4, 5, {:foo=>0}, #<Set: {6, 7}>]
+ *    a.dup.flatten!(3)   # => [0, 1, 2, 3, 4, 5, {:foo=>0}, #<Set: {6, 7}>]
  *
+ *  With +nil+ or negative argument +depth+, flattens all levels:
+ *
+ *    a.dup.flatten!     # => [0, 1, 2, 3, 4, 5, {:foo=>0}, #<Set: {6, 7}>]
+ *    a.dup.flatten!(-1) # => [0, 1, 2, 3, 4, 5, {:foo=>0}, #<Set: {6, 7}>]
+ *
+ *  Related: Array#flatten;
+ *  see also {Methods for Assigning}[rdoc-ref:Array@Methods+for+Assigning].
  */
 
 static VALUE
@@ -6548,35 +6562,37 @@ rb_ary_flatten_bang(int argc, VALUE *argv, VALUE ary)
 
 /*
  *  call-seq:
- *    array.flatten -> new_array
- *    array.flatten(level) -> new_array
+ *    flatten(depth = nil) -> new_array
  *
- *  Returns a new +Array+ that is a recursive flattening of +self+:
- *  - Each non-Array element is unchanged.
- *  - Each +Array+ is replaced by its individual elements.
+ *  Returns a new array that is a recursive flattening of +self+
+ *  to +depth+ levels of recursion;
+ *  +depth+ must be an
+ *  {integer-convertible object}[rdoc-ref:implicit_conversion.rdoc@Integer-Convertible+Objects]
+ *  or +nil+.
+ *  At each level of recursion:
  *
- *  With non-negative Integer argument +level+, flattens recursively through +level+ levels:
+ *  - Each element that is an array is "flattened"
+ *    (that is, replaced by its individual array elements).
+ *  - Each element that is not an array is unchanged
+ *    (even if the element is an object that has instance method +flatten+).
  *
- *    a = [ 0, [ 1, [2, 3], 4 ], 5 ]
- *    a.flatten(0) # => [0, [1, [2, 3], 4], 5]
- *    a = [ 0, [ 1, [2, 3], 4 ], 5 ]
- *    a.flatten(1) # => [0, 1, [2, 3], 4, 5]
- *    a = [ 0, [ 1, [2, 3], 4 ], 5 ]
- *    a.flatten(2) # => [0, 1, 2, 3, 4, 5]
- *    a = [ 0, [ 1, [2, 3], 4 ], 5 ]
- *    a.flatten(3) # => [0, 1, 2, 3, 4, 5]
+ *  With non-negative integer argument +depth+, flattens recursively through +depth+ levels:
  *
- *  With no argument, a +nil+ argument, or with negative argument +level+, flattens all levels:
+ *    a = [ 0, [ 1, [2, 3], 4 ], 5, {foo: 0}, Set.new([6, 7]) ]
+ *    a              # => [0, [1, [2, 3], 4], 5, {:foo=>0}, #<Set: {6, 7}>]
+ *    a.flatten(0)   # => [0, [1, [2, 3], 4], 5, {:foo=>0}, #<Set: {6, 7}>]
+ *    a.flatten(1  ) # => [0, 1, [2, 3], 4, 5, {:foo=>0}, #<Set: {6, 7}>]
+ *    a.flatten(1.1) # => [0, 1, [2, 3], 4, 5, {:foo=>0}, #<Set: {6, 7}>]
+ *    a.flatten(2)   # => [0, 1, 2, 3, 4, 5, {:foo=>0}, #<Set: {6, 7}>]
+ *    a.flatten(3)   # => [0, 1, 2, 3, 4, 5, {:foo=>0}, #<Set: {6, 7}>]
  *
- *    a = [ 0, [ 1, [2, 3], 4 ], 5 ]
- *    a.flatten # => [0, 1, 2, 3, 4, 5]
- *    [0, 1, 2].flatten # => [0, 1, 2]
- *    a = [ 0, [ 1, [2, 3], 4 ], 5 ]
- *    a.flatten(-1) # => [0, 1, 2, 3, 4, 5]
- *    a = [ 0, [ 1, [2, 3], 4 ], 5 ]
- *    a.flatten(-2) # => [0, 1, 2, 3, 4, 5]
- *    [0, 1, 2].flatten(-1) # => [0, 1, 2]
+ *  With +nil+ or negative +depth+, flattens all levels.
  *
+ *    a.flatten     # => [0, 1, 2, 3, 4, 5, {:foo=>0}, #<Set: {6, 7}>]
+ *    a.flatten(-1) # => [0, 1, 2, 3, 4, 5, {:foo=>0}, #<Set: {6, 7}>]
+ *
+ *  Related: Array#flatten!;
+ *  see also {Methods for Converting}[rdoc-ref:Array@Methods+for+Converting].
  */
 
 static VALUE
@@ -8629,6 +8645,7 @@ rb_ary_deconstruct(VALUE ary)
  *  - #insert: Inserts given objects at a given offset; does not replace elements.
  *  - #concat: Appends all elements from given arrays.
  *  - #fill: Replaces specified elements with specified objects.
+ *  - #flatten!: Replaces each nested array in +self+ with the elements from that array.
  *  - #initialize_copy (aliased as #replace): Replaces the content of +self+ with the content of a given array.
  *  - #reverse!: Replaces +self+ with its elements reversed.
  *  - #rotate!: Replaces +self+ with its elements rotated.
@@ -8690,7 +8707,6 @@ rb_ary_deconstruct(VALUE ary)
  *  - #collect (aliased as #map): Returns an array containing the block return-value for each element.
  *  - #collect! (aliased as #map!): Replaces each element with a block return-value.
  *  - #flatten: Returns an array that is a recursive flattening of +self+.
- *  - #flatten!: Replaces each nested array in +self+ with the elements from that array.
  *  - #inspect (aliased as #to_s): Returns a new String containing the elements.
  *  - #join: Returns a newsString containing the elements joined by the field separator.
  *  - #to_a: Returns +self+ or a new array containing all elements.
