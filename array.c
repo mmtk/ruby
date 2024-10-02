@@ -5624,23 +5624,23 @@ rb_ary_and(VALUE ary1, VALUE ary2)
 
 /*
  *  call-seq:
- *    array.intersection(*other_arrays) -> new_array
+ *    intersection(*other_arrays) -> new_array
  *
- *  Returns a new +Array+ containing each element found both in +self+
- *  and in all of the given Arrays +other_arrays+;
- *  duplicates are omitted; items are compared using <tt>eql?</tt>
- *  (items must also implement +hash+ correctly):
+ *  Returns a new array containing each element in +self+ that is +#eql?+
+ *  to at least one element in each of the given +other_arrays+;
+ *  duplicates are omitted:
  *
- *    [0, 1, 2, 3].intersection([0, 1, 2], [0, 1, 3]) # => [0, 1]
  *    [0, 0, 1, 1, 2, 3].intersection([0, 1, 2], [0, 1, 3]) # => [0, 1]
  *
- *  Preserves order from +self+:
+ *  Each element must correctly implement method <tt>#hash</tt>.
+ *
+ *  Order from +self+ is preserved:
  *
  *    [0, 1, 2].intersection([2, 1, 0]) # => [0, 1, 2]
  *
- *  Returns a copy of +self+ if no arguments given.
+ *  Returns a copy of +self+ if no arguments are given.
  *
- *  Related: Array#&.
+ *  Related: see {Methods for Combining}[rdoc-ref:Array@Methods+for+Combining].
  */
 
 static VALUE
@@ -5767,19 +5767,16 @@ rb_ary_union_multi(int argc, VALUE *argv, VALUE ary)
 
 /*
  *  call-seq:
- *     ary.intersect?(other_ary)   -> true or false
+ *    intersect?(other_array) -> true or false
  *
- *  Returns +true+ if the array and +other_ary+ have at least one element in
- *  common, otherwise returns +false+:
+ *  Returns whether +other_array+ has at least one element that is +#eql?+ to some element of +self+:
  *
- *     a = [ 1, 2, 3 ]
- *     b = [ 3, 4, 5 ]
- *     c = [ 5, 6, 7 ]
- *     a.intersect?(b)   #=> true
- *     a.intersect?(c)   #=> false
+ *    [1, 2, 3].intersect?([3, 4, 5]) # => true
+ *    [1, 2, 3].intersect?([4, 5, 6]) # => false
  *
- *  +Array+ elements are compared using <tt>eql?</tt>
- *  (items must also implement +hash+ correctly).
+ *  Each element must correctly implement method <tt>#hash</tt>.
+ *
+ *  Related: see {Methods for Querying}[rdoc-ref:Array@Methods+for+Querying].
  */
 
 static VALUE
