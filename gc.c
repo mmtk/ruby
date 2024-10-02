@@ -174,9 +174,42 @@ rb_gc_vm_barrier(void)
 }
 
 void
+rb_gc_initialize_vm_context(struct rb_gc_vm_context *context)
+{
+    rb_native_mutex_initialize(&context->lock);
+    context->ec = GET_EC();
+}
+
+void
+rb_gc_worker_thread_set_vm_context(struct rb_gc_vm_context *context)
+{
+    rb_native_mutex_lock(&context->lock);
+
+    GC_ASSERT(rb_current_execution_context(false) == NULL);
+
+    rb_current_ec_set(context->ec);
+}
+
+void
+rb_gc_worker_thread_unset_vm_context(struct rb_gc_vm_context *context)
+{
+    rb_native_mutex_unlock(&context->lock);
+
+    GC_ASSERT(rb_current_execution_context(true) == context->ec);
+
+    rb_current_ec_set(NULL);
+}
+
+bool
+rb_gc_event_hook_required_p(rb_event_flag_t event)
+{
+    return ruby_vm_event_flags & event;
+}
+
+void
 rb_gc_event_hook(VALUE obj, rb_event_flag_t event)
 {
-    if (LIKELY(!(ruby_vm_event_flags & event))) return;
+    if (LIKELY(!rb_gc_event_hook_required_p(event))) return;
 
     rb_execution_context_t *ec = GET_EC();
     if (!ec->cfp) return;
@@ -194,12 +227,6 @@ void *
 rb_gc_get_ractor_newobj_cache(void)
 {
     return GET_RACTOR()->newobj_cache;
-}
-
-void *
-rb_gc_get_current_execution_context(void)
-{
-    return GET_EC();
 }
 
 void
@@ -945,7 +972,7 @@ newobj_of(rb_ractor_t *cr, VALUE klass, VALUE flags, VALUE v1, VALUE v2, VALUE v
 {
     VALUE obj = rb_gc_impl_new_obj(rb_gc_get_objspace(), cr->newobj_cache, klass, flags, v1, v2, v3, wb_protected, size);
 
-    if (UNLIKELY(ruby_vm_event_flags & RUBY_INTERNAL_EVENT_NEWOBJ)) {
+    if (UNLIKELY(rb_gc_event_hook_required_p(RUBY_INTERNAL_EVENT_NEWOBJ))) {
         unsigned int lev;
         RB_VM_LOCK_ENTER_CR_LEV(cr, &lev);
         {
@@ -2487,9 +2514,10 @@ mark_const_table_i(VALUE value, void *objspace)
 }
 
 void
-rb_gc_mark_roots(void *objspace, const void *ec, const char **categoryp)
+rb_gc_mark_roots(void *objspace, const char **categoryp)
 {
-    rb_vm_t *vm = GET_VM();
+    rb_execution_context_t *ec = GET_EC();
+    rb_vm_t *vm = rb_ec_vm_ptr(ec);
 
 #define MARK_CHECKPOINT(category) do { \
     if (categoryp) *categoryp = category; \
@@ -3622,7 +3650,7 @@ rb_objspace_reachable_objects_from_root(void (func)(const char *category, VALUE,
 
     vm->gc.mark_func_data = &mfd;
     rb_gc_save_machine_context();
-    rb_gc_mark_roots(vm->gc.objspace, GET_EC(), &data.category);
+    rb_gc_mark_roots(vm->gc.objspace, &data.category);
     vm->gc.mark_func_data = prev_mfd;
 }
 

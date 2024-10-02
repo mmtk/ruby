@@ -34,13 +34,15 @@ struct objspace {
     pthread_cond_t cond_world_stopped;
     pthread_cond_t cond_world_started;
     size_t start_the_world_count;
+
+    struct rb_gc_vm_context vm_context;
 };
 
 struct MMTk_ractor_cache {
     struct MMTk_ractor_cache *next_ractor_cache;
 
     MMTk_Mutator *mutator;
-    void *execution_context;
+    bool gc_mutator_p;
 };
 
 struct MMTk_final_job {
@@ -129,12 +131,18 @@ rb_mmtk_block_for_gc(MMTk_VMMutatorThread mutator)
     }
 
     if (RB_UNLIKELY(objspace->world_stopped)) {
+        mutator->gc_mutator_p = false;
+
         // Wait for GC end
         while (objspace->world_stopped) {
             pthread_cond_wait(&objspace->cond_world_started, &objspace->mutex);
         }
     }
     else {
+        rb_gc_initialize_vm_context(&objspace->vm_context);
+
+        mutator->gc_mutator_p = true;
+
         objspace->gc_count++;
 
         struct timespec gc_start_time;
@@ -146,7 +154,6 @@ rb_mmtk_block_for_gc(MMTk_VMMutatorThread mutator)
         rb_gc_vm_barrier();
 
         rb_gc_save_machine_context();
-        mutator->execution_context = rb_gc_get_current_execution_context();
 
         objspace->world_stopped = true;
         pthread_cond_broadcast(&objspace->cond_world_stopped);
@@ -155,8 +162,6 @@ rb_mmtk_block_for_gc(MMTk_VMMutatorThread mutator)
         while (objspace->world_stopped) {
             pthread_cond_wait(&objspace->cond_world_started, &objspace->mutex);
         }
-
-        mutator->execution_context = NULL;
 
         rb_gc_vm_unlock(lock_lev);
 
@@ -225,8 +230,12 @@ rb_mmtk_scan_objspace(void)
 static void
 rb_mmtk_scan_roots_in_mutator_thread(MMTk_VMMutatorThread mutator, MMTk_VMWorkerThread worker)
 {
-    if (mutator->execution_context != NULL) {
-        rb_gc_mark_roots(rb_gc_get_objspace(), mutator->execution_context, NULL);
+    if (mutator->gc_mutator_p) {
+        struct objspace *objspace = rb_gc_get_objspace();
+
+        rb_gc_worker_thread_set_vm_context(&objspace->vm_context);
+        rb_gc_mark_roots(objspace, NULL);
+        rb_gc_worker_thread_unset_vm_context(&objspace->vm_context);
     }
 }
 
@@ -246,8 +255,15 @@ static void
 rb_mmtk_call_obj_free(MMTk_ObjectReference object)
 {
     VALUE obj = (VALUE)object;
+    struct objspace *objspace = rb_gc_get_objspace();
 
-    rb_gc_obj_free(rb_gc_get_objspace(), obj);
+    if (RB_UNLIKELY(rb_gc_event_hook_required_p(RUBY_INTERNAL_EVENT_FREEOBJ))) {
+        rb_gc_worker_thread_set_vm_context(&objspace->vm_context);
+        rb_gc_event_hook(obj, RUBY_INTERNAL_EVENT_FREEOBJ);
+        rb_gc_worker_thread_unset_vm_context(&objspace->vm_context);
+    }
+
+    rb_gc_obj_free(objspace, obj);
 }
 
 static int

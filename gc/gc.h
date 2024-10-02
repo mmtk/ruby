@@ -10,6 +10,13 @@
  *             first introduced for [Feature #20470].
  */
 #include "ruby/ruby.h"
+#include "ruby/thread_native.h"
+
+struct rb_gc_vm_context {
+    rb_nativethread_lock_t lock;
+
+    struct rb_execution_context_struct *ec;
+};
 
 RUBY_SYMBOL_EXPORT_BEGIN
 unsigned int rb_gc_vm_lock(void);
@@ -19,21 +26,24 @@ void rb_gc_cr_unlock(unsigned int lev);
 unsigned int rb_gc_vm_lock_no_barrier(void);
 void rb_gc_vm_unlock_no_barrier(unsigned int lev);
 void rb_gc_vm_barrier(void);
+void rb_gc_initialize_vm_context(struct rb_gc_vm_context *context);
+void rb_gc_worker_thread_set_vm_context(struct rb_gc_vm_context *context);
+void rb_gc_worker_thread_unset_vm_context(struct rb_gc_vm_context *context);
 size_t rb_gc_obj_optimal_size(VALUE obj);
 void rb_gc_mark_children(void *objspace, VALUE obj);
 void rb_gc_update_object_references(void *objspace, VALUE obj);
 void rb_gc_update_vm_references(void *objspace);
+bool rb_gc_event_hook_required_p(rb_event_flag_t event);
 void rb_gc_event_hook(VALUE obj, rb_event_flag_t event);
 void *rb_gc_get_objspace(void);
 void *rb_gc_get_ractor_newobj_cache(void);
-void *rb_gc_get_current_execution_context(void);
 size_t rb_size_mul_or_raise(size_t x, size_t y, VALUE exc);
 void rb_gc_run_obj_finalizer(VALUE objid, long count, VALUE (*callback)(long i, void *data), void *data);
 void rb_gc_set_pending_interrupt(void);
 void rb_gc_unset_pending_interrupt(void);
 bool rb_gc_obj_free(void *objspace, VALUE obj);
 void rb_gc_save_machine_context(void);
-void rb_gc_mark_roots(void *objspace, const void *ec, const char **categoryp);
+void rb_gc_mark_roots(void *objspace, const char **categoryp);
 void rb_gc_ractor_newobj_cache_foreach(void (*func)(void *cache, void *data), void *data);
 bool rb_gc_multi_ractor_p(void);
 void rb_objspace_reachable_objects_from_root(void (func)(const char *category, VALUE, void *), void *passing_data);
