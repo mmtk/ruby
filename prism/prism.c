@@ -11452,10 +11452,7 @@ parser_lex(pm_parser_t *parser) {
                     if (match(parser, '.')) {
                         if (match(parser, '.')) {
                             // If we're _not_ inside a range within default parameters
-                            if (
-                                !context_p(parser, PM_CONTEXT_DEFAULT_PARAMS) &&
-                                context_p(parser, PM_CONTEXT_DEF_PARAMS)
-                            ) {
+                            if (!context_p(parser, PM_CONTEXT_DEFAULT_PARAMS) && context_p(parser, PM_CONTEXT_DEF_PARAMS)) {
                                 if (lex_state_p(parser, PM_LEX_STATE_END)) {
                                     lex_state_set(parser, PM_LEX_STATE_BEG);
                                 } else {
@@ -14571,9 +14568,10 @@ parse_parameters(
                 bool repeated = pm_parser_parameter_name_check(parser, &name);
                 pm_parser_local_add_token(parser, &name, 1);
 
-                if (accept1(parser, PM_TOKEN_EQUAL)) {
-                    pm_token_t operator = parser->previous;
+                if (match1(parser, PM_TOKEN_EQUAL)) {
+                    pm_token_t operator = parser->current;
                     context_push(parser, PM_CONTEXT_DEFAULT_PARAMS);
+                    parser_lex(parser);
 
                     pm_constant_id_t name_id = pm_parser_constant_id_token(parser, &name);
                     uint32_t reads = parser->version == PM_OPTIONS_VERSION_CRUBY_3_3 ? pm_locals_reads(&parser->current_scope->locals, name_id) : 0;
@@ -14624,6 +14622,8 @@ parse_parameters(
             case PM_TOKEN_LABEL: {
                 if (!uses_parentheses) parser->in_keyword_arg = true;
                 update_parameter_state(parser, &parser->current, &order);
+
+                context_push(parser, PM_CONTEXT_DEFAULT_PARAMS);
                 parser_lex(parser);
 
                 pm_token_t name = parser->previous;
@@ -14643,15 +14643,20 @@ parse_parameters(
                     case PM_TOKEN_COMMA:
                     case PM_TOKEN_PARENTHESIS_RIGHT:
                     case PM_TOKEN_PIPE: {
+                        context_pop(parser);
+
                         pm_node_t *param = (pm_node_t *) pm_required_keyword_parameter_node_create(parser, &name);
                         if (repeated) {
                             pm_node_flag_set_repeated_parameter(param);
                         }
+
                         pm_parameters_node_keywords_append(params, param);
                         break;
                     }
                     case PM_TOKEN_SEMICOLON:
                     case PM_TOKEN_NEWLINE: {
+                        context_pop(parser);
+
                         if (uses_parentheses) {
                             looping = false;
                             break;
@@ -14661,6 +14666,7 @@ parse_parameters(
                         if (repeated) {
                             pm_node_flag_set_repeated_parameter(param);
                         }
+
                         pm_parameters_node_keywords_append(params, param);
                         break;
                     }
@@ -14668,8 +14674,6 @@ parse_parameters(
                         pm_node_t *param;
 
                         if (token_begins_expression_p(parser->current.type)) {
-                            context_push(parser, PM_CONTEXT_DEFAULT_PARAMS);
-
                             pm_constant_id_t name_id = pm_parser_constant_id_token(parser, &local);
                             uint32_t reads = parser->version == PM_OPTIONS_VERSION_CRUBY_3_3 ? pm_locals_reads(&parser->current_scope->locals, name_id) : 0;
 
@@ -14681,7 +14685,6 @@ parse_parameters(
                                 PM_PARSER_ERR_TOKEN_FORMAT_CONTENT(parser, local, PM_ERR_PARAMETER_CIRCULAR);
                             }
 
-                            context_pop(parser);
                             param = (pm_node_t *) pm_optional_keyword_parameter_node_create(parser, &name, value);
                         }
                         else {
@@ -14691,6 +14694,8 @@ parse_parameters(
                         if (repeated) {
                             pm_node_flag_set_repeated_parameter(param);
                         }
+
+                        context_pop(parser);
                         pm_parameters_node_keywords_append(params, param);
 
                         // If parsing the value of the parameter resulted in error recovery,
@@ -17274,6 +17279,9 @@ parse_pattern_primitive(pm_parser_t *parser, pm_constant_id_list_t *captures, pm
         case PM_CASE_PRIMITIVE: {
             pm_node_t *node = parse_expression(parser, PM_BINDING_POWER_MAX, false, true, diag_id, (uint16_t) (depth + 1));
 
+            // If we found a label, we need to immediately return to the caller.
+            if (pm_symbol_node_label_p(node)) return node;
+
             // Now that we have a primitive, we need to check if it's part of a range.
             if (accept2(parser, PM_TOKEN_DOT_DOT, PM_TOKEN_DOT_DOT_DOT)) {
                 pm_token_t operator = parser->previous;
@@ -17391,10 +17399,10 @@ parse_pattern_primitive(pm_parser_t *parser, pm_constant_id_list_t *captures, pm
  * assignment.
  */
 static pm_node_t *
-parse_pattern_primitives(pm_parser_t *parser, pm_constant_id_list_t *captures, pm_diagnostic_id_t diag_id, uint16_t depth) {
-    pm_node_t *node = NULL;
+parse_pattern_primitives(pm_parser_t *parser, pm_constant_id_list_t *captures, pm_node_t *first_node, pm_diagnostic_id_t diag_id, uint16_t depth) {
+    pm_node_t *node = first_node;
 
-    do {
+    while ((node == NULL) || accept1(parser, PM_TOKEN_PIPE)) {
         pm_token_t operator = parser->previous;
 
         switch (parser->current.type) {
@@ -17447,7 +17455,7 @@ parse_pattern_primitives(pm_parser_t *parser, pm_constant_id_list_t *captures, p
                 break;
             }
         }
-    } while (accept1(parser, PM_TOKEN_PIPE));
+    }
 
     // If we have an =>, then we are assigning this pattern to a variable.
     // In this case we should create an assignment node.
@@ -17508,6 +17516,24 @@ parse_pattern(pm_parser_t *parser, pm_constant_id_list_t *captures, uint8_t flag
 
             return node;
         }
+        case PM_TOKEN_STRING_BEGIN: {
+            // We need special handling for string beginnings because they could
+            // be dynamic symbols leading to hash patterns.
+            node = parse_pattern_primitive(parser, captures, diag_id, (uint16_t) (depth + 1));
+
+            if (pm_symbol_node_label_p(node)) {
+                node = (pm_node_t *) parse_pattern_hash(parser, captures, node, (uint16_t) (depth + 1));
+
+                if (!(flags & PM_PARSE_PATTERN_TOP)) {
+                    pm_parser_err_node(parser, node, PM_ERR_PATTERN_HASH_IMPLICIT);
+                }
+
+                return node;
+            }
+
+            node = parse_pattern_primitives(parser, captures, node, diag_id, (uint16_t) (depth + 1));
+            break;
+        }
         case PM_TOKEN_USTAR: {
             if (flags & (PM_PARSE_PATTERN_TOP | PM_PARSE_PATTERN_MULTI)) {
                 parser_lex(parser);
@@ -17518,7 +17544,7 @@ parse_pattern(pm_parser_t *parser, pm_constant_id_list_t *captures, uint8_t flag
         }
         /* fallthrough */
         default:
-            node = parse_pattern_primitives(parser, captures, diag_id, (uint16_t) (depth + 1));
+            node = parse_pattern_primitives(parser, captures, NULL, diag_id, (uint16_t) (depth + 1));
             break;
     }
 
@@ -17556,7 +17582,7 @@ parse_pattern(pm_parser_t *parser, pm_constant_id_list_t *captures, uint8_t flag
 
                 trailing_rest = true;
             } else {
-                node = parse_pattern_primitives(parser, captures, PM_ERR_PATTERN_EXPRESSION_AFTER_COMMA, (uint16_t) (depth + 1));
+                node = parse_pattern_primitives(parser, captures, NULL, PM_ERR_PATTERN_EXPRESSION_AFTER_COMMA, (uint16_t) (depth + 1));
             }
 
             pm_node_list_append(&nodes, node);
@@ -19225,6 +19251,7 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
                     lex_state_set(parser, PM_LEX_STATE_BEG);
                     parser->command_start = true;
 
+                    context_pop(parser);
                     if (!accept1(parser, PM_TOKEN_PARENTHESIS_RIGHT)) {
                         PM_PARSER_ERR_TOKEN_FORMAT(parser, parser->current, PM_ERR_DEF_PARAMS_TERM_PAREN, pm_token_type_human(parser->current.type));
                         parser->previous.start = parser->previous.end;
@@ -19244,17 +19271,20 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
                     lparen = not_provided(parser);
                     rparen = not_provided(parser);
                     params = parse_parameters(parser, PM_BINDING_POWER_DEFINED, false, false, true, true, (uint16_t) (depth + 1));
+
+                    context_pop(parser);
                     break;
                 }
                 default: {
                     lparen = not_provided(parser);
                     rparen = not_provided(parser);
                     params = NULL;
+
+                    context_pop(parser);
                     break;
                 }
             }
 
-            context_pop(parser);
             pm_node_t *statements = NULL;
             pm_token_t equal;
             pm_token_t end_keyword;
