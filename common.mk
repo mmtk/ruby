@@ -1906,8 +1906,8 @@ rewindable:
 HELP_EXTRA_TASKS = ""
 
 MMTK_BUILD=debug
-MMTK_LIB_PATH=-L$(srcdir)/gc/mmtk/target/$(MMTK_BUILD)
-MMTK_LIB=-lmmtk_ruby
+MMTK_LIB_PATH=$(srcdir)/gc/mmtk/target/$(MMTK_BUILD)
+MMTK_LIB=mmtk_ruby
 
 shared-gc: probes.h
 	$(Q) if test -z $(shared_gc_dir); then \
@@ -1920,7 +1920,7 @@ shared-gc: probes.h
 		$(MAKEDIRS) $(shared_gc_dir); \
 		echo generating $(shared_gc_dir)librubygc.$(SHARED_GC).$(SOEXT); \
 		if [ "$(SHARED_GC)" = "mmtk" ]; then \
-			$(LDSHARED) -I$(srcdir)/include -I$(srcdir) -I$(arch_hdrdir) $(XDLDFLAGS) $(MMTK_LIB_PATH) $(cflags) -DBUILDING_SHARED_GC -fPIC -o $(shared_gc_dir)librubygc.$(SHARED_GC).$(SOEXT) $(srcdir)/gc/$(SHARED_GC).c $(MMTK_LIB); \
+			$(LDSHARED) -I$(srcdir)/include -I$(srcdir) -I$(arch_hdrdir) $(XDLDFLAGS) -L$(MMTK_LIB_PATH) -Wl,--rpath=$(MMTK_LIB_PATH) $(cflags) -DBUILDING_SHARED_GC -fPIC -o $(shared_gc_dir)librubygc.$(SHARED_GC).$(SOEXT) $(srcdir)/gc/$(SHARED_GC).c -l$(MMTK_LIB); \
 		else \
 			$(LDSHARED) -I$(srcdir)/include -I$(srcdir) -I$(arch_hdrdir) $(XDLDFLAGS) $(cflags) -DBUILDING_SHARED_GC -fPIC -o $(shared_gc_dir)librubygc.$(SHARED_GC).$(SOEXT) $(srcdir)/gc/$(SHARED_GC).c; \
 		fi; \
