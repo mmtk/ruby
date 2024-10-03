@@ -140,6 +140,8 @@ rb_mmtk_block_for_gc(MMTk_VMMutatorThread mutator)
         }
     }
     else {
+        rb_gc_event_hook(0, RUBY_INTERNAL_EVENT_GC_START);
+
         rb_gc_initialize_vm_context(&objspace->vm_context);
 
         mutator->gc_mutator_p = true;
@@ -471,8 +473,6 @@ rb_gc_impl_init(void)
     rb_define_singleton_method(rb_mGC, "latest_compact_info", gc_compact_stats, 0);
     rb_define_singleton_method(rb_mGC, "verify_compaction_references", gc_verify_compaction_references, -1);
 }
-
-void rb_gc_impl_initial_stress_set(VALUE flag) { }
 
 static size_t size_pool_sizes[6] = {
     40, 80, 160, 320, 640, 0
