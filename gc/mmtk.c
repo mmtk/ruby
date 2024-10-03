@@ -13,6 +13,7 @@
 
 struct objspace {
     bool measure_gc_time;
+    bool gc_stress;
 
     size_t gc_count;
     size_t total_gc_time;
@@ -527,14 +528,17 @@ rb_gc_impl_gc_enabled_p(void *objspace_ptr)
 void
 rb_gc_impl_stress_set(void *objspace_ptr, VALUE flag)
 {
-    // TODO
+    struct objspace *objspace = objspace_ptr;
+
+    objspace->gc_stress = RTEST(flag);
 }
 
 VALUE
 rb_gc_impl_stress_get(void *objspace_ptr)
 {
-    // TODO
-    return Qfalse;
+    struct objspace *objspace = objspace_ptr;
+
+    return objspace->gc_stress ? Qtrue : Qfalse;
 }
 
 VALUE
@@ -557,6 +561,7 @@ rb_gc_impl_new_obj(void *objspace_ptr, void *cache_ptr, VALUE klass, VALUE flags
 {
 #define MMTK_ALLOCATION_SEMANTICS_DEFAULT 0
     struct objspace *objspace = objspace_ptr;
+    struct MMTk_ractor_cache *ractor_cache = cache_ptr;
 
     if (alloc_size > 640) rb_bug("too big");
     for (int i = 0; i < 5; i++) {
@@ -567,7 +572,9 @@ rb_gc_impl_new_obj(void *objspace_ptr, void *cache_ptr, VALUE klass, VALUE flags
         }
     }
 
-    struct MMTk_ractor_cache *ractor_cache = cache_ptr;
+    if (objspace->gc_stress) {
+        mmtk_handle_user_collection_request(ractor_cache);
+    }
 
     VALUE *alloc_obj = mmtk_alloc(ractor_cache->mutator, alloc_size + 8, MMTk_MIN_OBJ_ALIGN, 0, MMTK_ALLOCATION_SEMANTICS_DEFAULT);
     alloc_obj++;
