@@ -1906,7 +1906,9 @@ rewindable:
 HELP_EXTRA_TASKS = ""
 
 MMTK_BUILD=debug
+MMTK_SRC_PATH=$(srcdir)/gc/mmtk
 MMTK_LIB_PATH=$(srcdir)/gc/mmtk/target/$(MMTK_BUILD)/libmmtk_ruby.$(LIBEXT)
+
 
 shared-gc: probes.h
 	$(Q) if test -z $(shared_gc_dir); then \
@@ -1916,6 +1918,10 @@ shared-gc: probes.h
 		echo "You must specify SHARED_GC with the GC to build"; \
 		exit 1; \
 	else \
+	    if test ! -f $(MMTK_LIB_PATH); then \
+			echo "libmmtk_ruby.$(LIBEXT) not found. Please run 'cargo build' inside $(MMTK_SRC_PATH)"; \
+			exit 1; \
+		fi; \
 		$(MAKEDIRS) $(shared_gc_dir); \
 		echo generating $(shared_gc_dir)librubygc.$(SHARED_GC).$(SOEXT); \
 		if [ "$(SHARED_GC)" = "mmtk" ]; then \
