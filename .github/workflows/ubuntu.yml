@@ -107,7 +107,7 @@ jobs:
         run: |
           cd ../src/gc/mmtk
           cargo build
-        if: $${{ matrix.shared_gc && matrix.gc_name == 'mmtk' }}
+        if: ${{ matrix.shared_gc && matrix.gc_name == 'mmtk' }}
 
       - name: Build shared GC
         run: |
