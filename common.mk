@@ -1918,9 +1918,9 @@ shared-gc: probes.h
 		echo "You must specify SHARED_GC with the GC to build"; \
 		exit 1; \
 	fi
-	$(MAKEDIRS) $(shared_gc_dir); \
-	echo generating $(shared_gc_dir)librubygc.$(SHARED_GC).$(SOEXT); \
-	if [ "$(SHARED_GC)" = "mmtk" ]; then \
+	$(Q) $(MAKEDIRS) $(shared_gc_dir)
+	$(ECHO) generating $(shared_gc_dir)librubygc.$(SHARED_GC).$(SOEXT)
+	$(Q) if [ "$(SHARED_GC)" = "mmtk" ]; then \
 		if test ! -f $(MMTK_LIB_PATH); then \
 			echo "libmmtk_ruby.$(LIBEXT) not found. Please run 'cargo build' inside $(MMTK_SRC_PATH)"; \
 			exit 1; \
