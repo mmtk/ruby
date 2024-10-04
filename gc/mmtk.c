@@ -474,14 +474,14 @@ rb_gc_impl_init(void)
     rb_define_singleton_method(rb_mGC, "verify_compaction_references", gc_verify_compaction_references, -1);
 }
 
-static size_t size_pool_sizes[6] = {
+static size_t heap_sizes[6] = {
     40, 80, 160, 320, 640, 0
 };
 
 size_t *
-rb_gc_impl_size_pool_sizes(void *objspace_ptr)
+rb_gc_impl_heap_sizes(void *objspace_ptr)
 {
-    return size_pool_sizes;
+    return heap_sizes;
 }
 
 // Shutdown
@@ -565,9 +565,9 @@ rb_gc_impl_new_obj(void *objspace_ptr, void *cache_ptr, VALUE klass, VALUE flags
 
     if (alloc_size > 640) rb_bug("too big");
     for (int i = 0; i < 5; i++) {
-        if (alloc_size == size_pool_sizes[i]) break;
-        if (alloc_size < size_pool_sizes[i]) {
-            alloc_size = size_pool_sizes[i];
+        if (alloc_size == heap_sizes[i]) break;
+        if (alloc_size < heap_sizes[i]) {
+            alloc_size = heap_sizes[i];
             break;
         }
     }
@@ -602,11 +602,11 @@ rb_gc_impl_obj_slot_size(VALUE obj)
 }
 
 size_t
-rb_gc_impl_size_pool_id_for_size(void *objspace_ptr, size_t size)
+rb_gc_impl_heap_id_for_size(void *objspace_ptr, size_t size)
 {
     for (int i = 0; i < 5; i++) {
-        if (size == size_pool_sizes[i]) return i;
-        if (size < size_pool_sizes[i])  return i;
+        if (size == heap_sizes[i]) return i;
+        if (size < heap_sizes[i])  return i;
     }
 
     rb_bug("size too big");
