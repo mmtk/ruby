@@ -2725,9 +2725,15 @@ rb_ary_reverse_each(VALUE ary)
 
 /*
  *  call-seq:
- *    array.length -> an_integer
+ *    length -> integer
+ *    size -> integer
  *
- *  Returns the count of elements in +self+.
+ *  Returns the count of elements in +self+:
+ *
+ *    [0, 1, 2].length # => 3
+ *    [].length        # => 0
+ *
+ *  Related: see {Methods for Querying}[rdoc-ref:Array@Methods+for+Querying].
  */
 
 static VALUE
@@ -3398,7 +3404,7 @@ sort_2(const void *ap, const void *bp, void *dummy)
  *
  *  Returns +self+ with its elements sorted in place.
  *
- *  With no block, compares elements using operator <tt><=></tt>
+ *  With no block, compares elements using operator <tt>#<=></tt>
  *  (see Comparable):
  *
  *    a = 'abcde'.split('').shuffle
@@ -3501,7 +3507,7 @@ rb_ary_sort_bang(VALUE ary)
  *
  *  Returns a new +Array+ whose elements are those from +self+, sorted.
  *
- *  With no block, compares elements using operator <tt><=></tt>
+ *  With no block, compares elements using operator <tt>#<=></tt>
  *  (see Comparable):
  *
  *    a = 'abcde'.split('').shuffle
@@ -4483,10 +4489,10 @@ take_items(VALUE obj, long n)
  *
  *  If an argument is not an array, it extracts the values by calling #each:
  *
- *  a = [:a0, :a1, :a2, :a2]
- *  b = 1..4
- *  c = a.zip(b)
- *  c # => [[:a0, 1], [:a1, 2], [:a2, 3], [:a2, 4]]
+ *    a = [:a0, :a1, :a2, :a2]
+ *    b = 1..4
+ *    c = a.zip(b)
+ *    c # => [[:a0, 1], [:a1, 2], [:a2, 3], [:a2, 4]]
  *
  *  When a block is given, calls the block with each of the sub-arrays (formed as above); returns +nil+:
  *
@@ -5910,42 +5916,51 @@ ary_max_opt_string(VALUE ary, long i, VALUE vmax)
 
 /*
  *  call-seq:
- *    array.max -> element
- *    array.max {|a, b| ... } -> element
- *    array.max(n) -> new_array
- *    array.max(n) {|a, b| ... } -> new_array
+ *    max -> element
+ *    max(n) -> new_array
+ *    max {|a, b| ... } -> element
+ *    max(n) {|a, b| ... } -> new_array
  *
  *  Returns one of the following:
  *
  *  - The maximum-valued element from +self+.
- *  - A new +Array+ of maximum-valued elements selected from +self+.
+ *  - A new array of maximum-valued elements from +self+.
  *
- *  When no block is given, each element in +self+ must respond to method <tt><=></tt>
- *  with an Integer.
+ *  Does not modify +self+.
+ *
+ *  With no block given, each element in +self+ must respond to method <tt>#<=></tt>
+ *  with a numeric.
  *
  *  With no argument and no block, returns the element in +self+
- *  having the maximum value per method <tt><=></tt>:
+ *  having the maximum value per method <tt>#<=></tt>:
  *
- *    [0, 1, 2].max # => 2
+ *    [1, 0, 3, 2].max # => 3
  *
- *  With an argument Integer +n+ and no block, returns a new +Array+ with at most +n+ elements,
- *  in descending order per method <tt><=></tt>:
+ *  With non-negative numeric argument +n+ and no block,
+ *  returns a new array with at most +n+ elements,
+ *  in descending order, per method <tt>#<=></tt>:
  *
- *    [0, 1, 2, 3].max(3) # => [3, 2, 1]
- *    [0, 1, 2, 3].max(6) # => [3, 2, 1, 0]
+ *    [1, 0, 3, 2].max(3)   # => [3, 2, 1]
+ *    [1, 0, 3, 2].max(3.0) # => [3, 2, 1]
+ *    [1, 0, 3, 2].max(9)   # => [3, 2, 1, 0]
+ *    [1, 0, 3, 2].max(0)   # => []
  *
- *  When a block is given, the block must return an Integer.
+ *  With a block given, the block must return a numeric.
  *
- *  With a block and no argument, calls the block <tt>self.size-1</tt> times to compare elements;
- *  returns the element having the maximum value per the block:
+ *  With a block and no argument, calls the block <tt>self.size - 1</tt> times to compare elements;
+ *  returns the element having the maximum return value per the block:
  *
- *    ['0', '00', '000'].max {|a, b| a.size <=> b.size } # => "000"
+ *    ['0', '', '000', '00'].max {|a, b| a.size <=> b.size }
+ *    # => "000"
  *
- *  With an argument +n+ and a block, returns a new +Array+ with at most +n+ elements,
- *  in descending order per the block:
+ *  With non-negative numeric argument +n+ and a block,
+ *  returns a new array with at most +n+ elements,
+ *  in descending order, per the block:
  *
- *    ['0', '00', '000'].max(2) {|a, b| a.size <=> b.size } # => ["000", "00"]
+ *    ['0', '', '000', '00'].max(2) {|a, b| a.size <=> b.size }
+ *    # => ["000", "00"]
  *
+ *  Related: see {Methods for Fetching}[rdoc-ref:Array@Methods+for+Fetching].
  */
 static VALUE
 rb_ary_max(int argc, VALUE *argv, VALUE ary)
@@ -6078,42 +6093,51 @@ ary_min_opt_string(VALUE ary, long i, VALUE vmin)
 
 /*
  *  call-seq:
- *    array.min -> element
- *    array.min { |a, b| ... } -> element
- *    array.min(n) -> new_array
- *    array.min(n) { |a, b| ... } -> new_array
+ *    min -> element
+ *    min(n) -> new_array
+ *    min {|a, b| ... } -> element
+ *    min(n) {|a, b| ... } -> new_array
  *
  *  Returns one of the following:
  *
  *  - The minimum-valued element from +self+.
- *  - A new +Array+ of minimum-valued elements selected from +self+.
+ *  - A new array of minimum-valued elements from +self+.
  *
- *  When no block is given, each element in +self+ must respond to method <tt><=></tt>
- *  with an Integer.
+ *  Does not modify +self+.
+ *
+ *  With no block given, each element in +self+ must respond to method <tt>#<=></tt>
+ *  with a numeric.
  *
  *  With no argument and no block, returns the element in +self+
- *  having the minimum value per method <tt><=></tt>:
+ *  having the minimum value per method <tt>#<=></tt>:
  *
- *    [0, 1, 2].min # => 0
+ *    [1, 0, 3, 2].min # => 0
  *
- *  With Integer argument +n+ and no block, returns a new +Array+ with at most +n+ elements,
- *  in ascending order per method <tt><=></tt>:
+ *  With non-negative numeric argument +n+ and no block,
+ *  returns a new array with at most +n+ elements,
+ *  in ascending order, per method <tt>#<=></tt>:
  *
- *    [0, 1, 2, 3].min(3) # => [0, 1, 2]
- *    [0, 1, 2, 3].min(6) # => [0, 1, 2, 3]
+ *    [1, 0, 3, 2].min(3)   # => [0, 1, 2]
+ *    [1, 0, 3, 2].min(3.0) # => [0, 1, 2]
+ *    [1, 0, 3, 2].min(9)   # => [0, 1, 2, 3]
+ *    [1, 0, 3, 2].min(0)   # => []
  *
- *  When a block is given, the block must return an Integer.
+ *  With a block given, the block must return a numeric.
  *
- *  With a block and no argument, calls the block <tt>self.size-1</tt> times to compare elements;
- *  returns the element having the minimum value per the block:
+ *  With a block and no argument, calls the block <tt>self.size - 1</tt> times to compare elements;
+ *  returns the element having the minimum return value per the block:
  *
- *    ['0', '00', '000'].min { |a, b| a.size <=> b.size } # => "0"
+ *    ['0', '', '000', '00'].min {|a, b| a.size <=> b.size }
+ *    # => ""
  *
- *  With an argument +n+ and a block, returns a new +Array+ with at most +n+ elements,
- *  in ascending order per the block:
+ *  With non-negative numeric argument +n+ and a block,
+ *  returns a new array with at most +n+ elements,
+ *  in ascending order, per the block:
  *
- *    ['0', '00', '000'].min(2) {|a, b| a.size <=> b.size } # => ["0", "00"]
+ *    ['0', '', '000', '00'].min(2) {|a, b| a.size <=> b.size }
+ *    # => ["", "0"]
  *
+ *  Related: see {Methods for Fetching}[rdoc-ref:Array@Methods+for+Fetching].
  */
 static VALUE
 rb_ary_min(int argc, VALUE *argv, VALUE ary)
@@ -6161,12 +6185,12 @@ rb_ary_min(int argc, VALUE *argv, VALUE ary)
  *    array.minmax {|a, b| ... } -> [min_val, max_val]
  *
  *  Returns a new 2-element +Array+ containing the minimum and maximum values
- *  from +self+, either per method <tt><=></tt> or per a given block:.
+ *  from +self+, either per method <tt>#<=></tt> or per a given block:.
  *
- *  When no block is given, each element in +self+ must respond to method <tt><=></tt>
+ *  When no block is given, each element in +self+ must respond to method <tt>#<=></tt>
  *  with an Integer;
  *  returns a new 2-element +Array+ containing the minimum and maximum values
- *  from +self+, per method <tt><=></tt>:
+ *  from +self+, per method <tt>#<=></tt>:
  *
  *    [0, 1, 2].minmax # => [0, 2]
  *
@@ -8601,11 +8625,11 @@ rb_ary_deconstruct(VALUE ary)
  *  - #first: Returns one or more leading elements.
  *  - #last: Returns one or more trailing elements.
  *  - #max: Returns one or more maximum-valued elements,
- *    as determined by <tt><=></tt> or a given block.
+ *    as determined by <tt>#<=></tt> or a given block.
  *  - #min: Returns one or more minimum-valued elements,
- *    as determined by <tt><=></tt> or a given block.
+ *    as determined by <tt>#<=></tt> or a given block.
  *  - #minmax: Returns the minimum-valued and maximum-valued elements,
- *    as determined by <tt><=></tt> or a given block.
+ *    as determined by <tt>#<=></tt> or a given block.
  *  - #assoc: Returns the first element that is an array
  *    whose first element <tt>==</tt> a given object.
  *  - #rassoc: Returns the first element that is an array
@@ -8618,7 +8642,7 @@ rb_ary_deconstruct(VALUE ary)
  *  - #take: Returns leading elements as determined by a given index.
  *  - #drop_while: Returns trailing elements as determined by a given block.
  *  - #take_while: Returns leading elements as determined by a given block.
- *  - #sort: Returns all elements in an order determined by <tt><=></tt> or a given block.
+ *  - #sort: Returns all elements in an order determined by <tt>#<=></tt> or a given block.
  *  - #reverse: Returns all elements in reverse order.
  *  - #compact: Returns an array containing all non-+nil+ elements.
  *  - #select (aliased as #filter): Returns an array containing elements selected by a given block.
@@ -8648,7 +8672,7 @@ rb_ary_deconstruct(VALUE ary)
  *  - #rotate!: Replaces +self+ with its elements rotated.
  *  - #shuffle!: Replaces +self+ with its elements in random order.
  *  - #sort!: Replaces +self+ with its elements sorted,
- *    as determined by <tt><=></tt> or a given block.
+ *    as determined by <tt>#<=></tt> or a given block.
  *  - #sort_by!: Replaces +self+ with its elements sorted, as determined by a given block.
  *
  *  === Methods for Deleting

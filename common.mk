@@ -1917,18 +1917,17 @@ shared-gc: probes.h
 	elif test -z $(SHARED_GC); then \
 		echo "You must specify SHARED_GC with the GC to build"; \
 		exit 1; \
-	else \
-		$(MAKEDIRS) $(shared_gc_dir); \
-		echo generating $(shared_gc_dir)librubygc.$(SHARED_GC).$(SOEXT); \
-		if [ "$(SHARED_GC)" = "mmtk" ]; then \
-			if test ! -f $(MMTK_LIB_PATH); then \
-				echo "libmmtk_ruby.$(LIBEXT) not found. Please run 'cargo build' inside $(MMTK_SRC_PATH)"; \
-				exit 1; \
-			fi; \
-			$(LDSHARED) -I$(srcdir)/include -I$(srcdir) -I$(arch_hdrdir) $(XDLDFLAGS) $(cflags) -DBUILDING_SHARED_GC -fPIC -o $(shared_gc_dir)librubygc.$(SHARED_GC).$(SOEXT) $(srcdir)/gc/$(SHARED_GC).c $(MMTK_LIB_PATH); \
-		else \
-			$(LDSHARED) -I$(srcdir)/include -I$(srcdir) -I$(arch_hdrdir) $(XDLDFLAGS) $(cflags) -DBUILDING_SHARED_GC -fPIC -o $(shared_gc_dir)librubygc.$(SHARED_GC).$(SOEXT) $(srcdir)/gc/$(SHARED_GC).c; \
+	fi
+	$(MAKEDIRS) $(shared_gc_dir); \
+	echo generating $(shared_gc_dir)librubygc.$(SHARED_GC).$(SOEXT); \
+	if [ "$(SHARED_GC)" = "mmtk" ]; then \
+		if test ! -f $(MMTK_LIB_PATH); then \
+			echo "libmmtk_ruby.$(LIBEXT) not found. Please run 'cargo build' inside $(MMTK_SRC_PATH)"; \
+			exit 1; \
 		fi; \
+		$(LDSHARED) -I$(srcdir)/include -I$(srcdir) -I$(arch_hdrdir) $(XDLDFLAGS) $(cflags) -DBUILDING_SHARED_GC -fPIC -o $(shared_gc_dir)librubygc.$(SHARED_GC).$(SOEXT) $(srcdir)/gc/$(SHARED_GC).c $(MMTK_LIB_PATH); \
+	else \
+		$(LDSHARED) -I$(srcdir)/include -I$(srcdir) -I$(arch_hdrdir) $(XDLDFLAGS) $(cflags) -DBUILDING_SHARED_GC -fPIC -o $(shared_gc_dir)librubygc.$(SHARED_GC).$(SOEXT) $(srcdir)/gc/$(SHARED_GC).c; \
 	fi
 
 help: PHONY
