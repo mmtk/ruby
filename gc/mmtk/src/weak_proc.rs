@@ -7,7 +7,7 @@ use mmtk::{
 };
 
 use crate::{
-    abi::{GCThreadTLS},
+    abi::GCThreadTLS,
     upcalls,
     Ruby,
 };
@@ -80,8 +80,16 @@ impl WeakProcessor {
         worker.add_work(WorkBucketStage::VMRefClosure, ProcessObjFreeCandidates);
         worker.add_work(WorkBucketStage::VMRefClosure, ProcessWeakReferences);
 
+        let global_tables_count = (crate::upcalls().global_tables_count)();
+        let work_packets = (1..global_tables_count)
+                .map(|i| {
+                    Box::new(UpdateGlobalTables { idx: i }) as _
+                })
+                .collect();
+
+            worker.scheduler().work_buckets[WorkBucketStage::Prepare].bulk_add(work_packets);
+
         worker.scheduler().work_buckets[WorkBucketStage::VMRefClosure].bulk_add(vec![
-            Box::new(UpdateGlobalTables) as _,
             Box::new(UpdateWbUnprotectedObjectsList) as _,
         ]);
     }
@@ -171,25 +179,19 @@ trait GlobalTableProcessingWork {
     }
 }
 
-macro_rules! define_global_table_processor {
-    ($name: ident, $code: expr) => {
-        struct $name;
-        impl GlobalTableProcessingWork for $name {
-            fn process_table(&mut self) {
-                $code
-            }
-        }
-        impl GCWork<Ruby> for $name {
-            fn do_work(&mut self, worker: &mut GCWorker<Ruby>, mmtk: &'static mmtk::MMTK<Ruby>) {
-                GlobalTableProcessingWork::do_work(self, worker, mmtk);
-            }
-        }
-    };
+struct UpdateGlobalTables {
+    idx: i32
 }
-
-define_global_table_processor!(UpdateGlobalTables, {
-    (crate::upcalls().update_global_tables)()
-});
+impl GlobalTableProcessingWork for UpdateGlobalTables {
+    fn process_table(&mut self) {
+        (crate::upcalls().update_global_tables)(self.idx)
+    }
+}
+impl GCWork<Ruby> for UpdateGlobalTables {
+    fn do_work(&mut self, worker: &mut GCWorker<Ruby>, mmtk: &'static mmtk::MMTK<Ruby>) {
+        GlobalTableProcessingWork::do_work(self, worker, mmtk);
+    }
+}
 
 struct UpdateWbUnprotectedObjectsList;
 

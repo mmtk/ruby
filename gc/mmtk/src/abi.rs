@@ -1,5 +1,6 @@
 use crate::api::RubyMutator;
 use crate::{upcalls, Ruby};
+use libc::c_int;
 use mmtk::scheduler::GCWorker;
 use mmtk::util::{Address, ObjectReference, VMMutatorThread, VMWorkerThread};
 
@@ -366,7 +367,8 @@ pub struct RubyUpcalls {
     pub get_original_givtbl: extern "C" fn(object: ObjectReference) -> *mut libc::c_void,
     pub move_givtbl: extern "C" fn(old_objref: ObjectReference, new_objref: ObjectReference),
     pub vm_live_bytes: extern "C" fn() -> usize,
-    pub update_global_tables: extern "C" fn(),
+    pub update_global_tables: extern "C" fn(tbl_idx: c_int),
+    pub global_tables_count: extern "C" fn() -> c_int,
     pub update_frozen_strings_table: extern "C" fn(),
     pub update_finalizer_table: extern "C" fn(),
     pub update_obj_id_tables: extern "C" fn(),

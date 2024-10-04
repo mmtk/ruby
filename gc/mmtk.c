@@ -336,12 +336,18 @@ rb_mmtk_update_obj_id_tables(void)
     st_foreach(objspace->obj_to_id_tbl, rb_mmtk_update_obj_id_tables_i, 0);
 }
 
+static int
+rb_mmtk_global_tables_count(void)
+{
+    return rb_gc_vm_weak_tbl_count();
+}
+
 static void
-rb_mmtk_update_global_tables(void)
+rb_mmtk_update_global_tables(int tbl_idx)
 {
     rb_mmtk_update_finalizer_table();
     rb_mmtk_update_obj_id_tables();
-    rb_gc_vm_weak_tbl_iter(rb_mmtk_update_table_i, NULL, NULL);
+    rb_gc_vm_weak_tbl_iter(rb_mmtk_update_table_i, NULL, NULL, tbl_idx);
 }
 
 // Bootup
@@ -365,6 +371,7 @@ MMTk_RubyUpcalls ruby_upcalls = {
     NULL,
     rb_mmtk_vm_live_bytes,
     rb_mmtk_update_global_tables,
+    rb_mmtk_global_tables_count,
     NULL,
     NULL,
     NULL,

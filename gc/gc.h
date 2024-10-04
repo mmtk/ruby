@@ -21,6 +21,17 @@ struct rb_gc_vm_context {
 typedef int (*vm_tbl_iter_callback_func)(VALUE value, void *data);
 typedef int (*vm_tbl_update_callback_func)(VALUE *value, void *data);
 
+
+enum vm_weak_tbl_idx {
+    CI_TABLE = 0,
+    OVERLOADED_CME_TABLE = 1,
+    GLOBAL_SYMBOLS = 2,
+    GENERIC_IV_TABLE = 3,
+    FROZEN_STRINGS_TABLE = 4,
+
+    ALL_VM_WEAK_TABLES = 5
+};
+
 RUBY_SYMBOL_EXPORT_BEGIN
 unsigned int rb_gc_vm_lock(void);
 void rb_gc_vm_unlock(unsigned int lev);
@@ -58,7 +69,8 @@ uint32_t rb_gc_get_shape(VALUE obj);
 void rb_gc_set_shape(VALUE obj, uint32_t shape_id);
 uint32_t rb_gc_rebuild_shape(VALUE obj, size_t heap_id);
 size_t rb_obj_memsize_of(VALUE obj);
-void rb_gc_vm_weak_tbl_iter(vm_tbl_iter_callback_func cb, vm_tbl_update_callback_func ucb, void *data);
+short rb_gc_vm_weak_tbl_count(void);
+void rb_gc_vm_weak_tbl_iter(vm_tbl_iter_callback_func cb, vm_tbl_update_callback_func ucb, void *data, enum vm_weak_tbl_idx tbl_idx);
 RUBY_SYMBOL_EXPORT_END
 
 

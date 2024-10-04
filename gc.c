@@ -3275,9 +3275,14 @@ vm_gen_ivar_iter_wrapper(st_data_t key, st_data_t value, st_data_t data, int err
     return retval;
 }
 
+short
+rb_gc_vm_weak_tbl_count(void)
+{
+    return ALL_VM_WEAK_TABLES;
+}
 
 void
-rb_gc_vm_weak_tbl_iter(vm_tbl_iter_callback_func cb, vm_tbl_update_callback_func ucb, void *data)
+rb_gc_vm_weak_tbl_iter(vm_tbl_iter_callback_func cb, vm_tbl_update_callback_func ucb, void *data, enum vm_weak_tbl_idx tbl_idx)
 {
     rb_vm_t *vm = GET_VM();
 
@@ -3298,18 +3303,40 @@ rb_gc_vm_weak_tbl_iter(vm_tbl_iter_callback_func cb, vm_tbl_update_callback_func
         }                                \
     } while (0)
 
-    ITER_TABLE_WITH_CB(vm->ci_table);
-    ITER_TABLE_WITH_CB(vm->overloaded_cme_table);
-    ITER_TABLE_WITH_CB(global_symbols.str_sym);
-
-    st_table *generic_iv_tbl = rb_generic_ivtbl_get();
-    if (generic_iv_tbl->num_entries > 0) {
-        st_foreach_with_replace(generic_iv_tbl, vm_gen_ivar_iter_wrapper, vm_table_update_wrapper, (st_data_t)&iter_data);
-    }
-
-    st_table *frozen_strings = GET_VM()->frozen_strings;
-    if (frozen_strings->num_entries > 0) {
-        st_foreach_with_replace(frozen_strings, vm_frozen_strings_iter_wrapper, vm_table_update_wrapper, (st_data_t)&iter_data);
+    switch (tbl_idx) {
+      case CI_TABLE: {
+          ITER_TABLE_WITH_CB(vm->ci_table);
+          break;
+      }
+      case OVERLOADED_CME_TABLE: {
+          ITER_TABLE_WITH_CB(vm->overloaded_cme_table);
+          break;
+      }
+      case GLOBAL_SYMBOLS: {
+          ITER_TABLE_WITH_CB(global_symbols.str_sym);
+          break;
+      }
+      case GENERIC_IV_TABLE: {
+          st_table *generic_iv_tbl = rb_generic_ivtbl_get();
+          if (generic_iv_tbl->num_entries > 0) {
+              st_foreach_with_replace(generic_iv_tbl, vm_gen_ivar_iter_wrapper, vm_table_update_wrapper, (st_data_t)&iter_data);
+          }
+          break;
+      }
+      case FROZEN_STRINGS_TABLE: {
+          st_table *frozen_strings = GET_VM()->frozen_strings;
+          if (frozen_strings->num_entries > 0) {
+              st_foreach_with_replace(frozen_strings, vm_frozen_strings_iter_wrapper, vm_table_update_wrapper, (st_data_t)&iter_data);
+          }
+          break;
+      }
+      case ALL_VM_WEAK_TABLES: {
+        rb_gc_vm_weak_tbl_iter(cb, ucb, data, CI_TABLE);
+        rb_gc_vm_weak_tbl_iter(cb, ucb, data, OVERLOADED_CME_TABLE);
+        rb_gc_vm_weak_tbl_iter(cb, ucb, data, GLOBAL_SYMBOLS);
+        rb_gc_vm_weak_tbl_iter(cb, ucb, data, GENERIC_IV_TABLE);
+        rb_gc_vm_weak_tbl_iter(cb, ucb, data, FROZEN_STRINGS_TABLE);
+      }
     }
 }
 
