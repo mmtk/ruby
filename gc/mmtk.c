@@ -114,6 +114,7 @@ rb_mmtk_resume_mutators(void)
     }
 
     objspace->world_stopped = false;
+    objspace->gc_count++;
     pthread_cond_broadcast(&objspace->cond_world_started);
 
     if ((err = pthread_mutex_unlock(&objspace->mutex)) != 0) {
@@ -126,47 +127,37 @@ rb_mmtk_block_for_gc(MMTk_VMMutatorThread mutator)
 {
     struct objspace *objspace = rb_gc_get_objspace();
 
+    size_t starting_gc_count = objspace->gc_count;
+    int lock_lev = rb_gc_vm_lock();
     int err;
     if ((err = pthread_mutex_lock(&objspace->mutex)) != 0) {
         rb_bug("ERROR: cannot lock objspace->mutex: %s", strerror(err));
     }
 
-    if (RB_UNLIKELY(objspace->world_stopped)) {
-        mutator->gc_mutator_p = false;
-
-        // Wait for GC end
-        while (objspace->world_stopped) {
-            pthread_cond_wait(&objspace->cond_world_started, &objspace->mutex);
-        }
-    }
-    else {
+    if (objspace->gc_count == starting_gc_count) {
         rb_gc_event_hook(0, RUBY_INTERNAL_EVENT_GC_START);
 
         rb_gc_initialize_vm_context(&objspace->vm_context);
 
         mutator->gc_mutator_p = true;
 
-        objspace->gc_count++;
-
         struct timespec gc_start_time;
         if (objspace->measure_gc_time) {
             clock_gettime(CLOCK_MONOTONIC, &gc_start_time);
         }
 
-        int lock_lev = rb_gc_vm_lock();
-        rb_gc_vm_barrier();
-
         rb_gc_save_machine_context();
 
+        rb_gc_vm_barrier();
+
         objspace->world_stopped = true;
+
         pthread_cond_broadcast(&objspace->cond_world_stopped);
 
         // Wait for GC end
         while (objspace->world_stopped) {
             pthread_cond_wait(&objspace->cond_world_started, &objspace->mutex);
         }
-
-        rb_gc_vm_unlock(lock_lev);
 
         if (objspace->measure_gc_time) {
             struct timespec gc_end_time;
@@ -181,6 +172,7 @@ rb_mmtk_block_for_gc(MMTk_VMMutatorThread mutator)
     if ((err = pthread_mutex_unlock(&objspace->mutex)) != 0) {
         rb_bug("ERROR: cannot release objspace->mutex: %s", strerror(err));
     }
+    rb_gc_vm_unlock(lock_lev);
 }
 
 static size_t
