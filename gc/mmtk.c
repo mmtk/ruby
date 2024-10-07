@@ -818,6 +818,8 @@ gc_run_finalizers(void *data)
                 );
                 break;
             }
+
+            xfree(job);
         }
     }
 
