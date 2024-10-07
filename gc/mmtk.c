@@ -828,6 +828,8 @@ gc_run_finalizers(void *data)
 void
 rb_gc_impl_make_zombie(void *objspace_ptr, VALUE obj, void (*dfree)(void *), void *data)
 {
+    if (dfree == NULL) return;
+
     struct objspace *objspace = objspace_ptr;
 
     struct MMTk_final_job *job = xmalloc(sizeof(struct MMTk_final_job));
