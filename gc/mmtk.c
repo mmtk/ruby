@@ -362,7 +362,6 @@ rb_mmtk_global_tables_count(void)
 static void
 rb_mmtk_update_global_tables(int tbl_idx)
 {
-
     rb_gc_vm_weak_tbl_iter(rb_mmtk_update_table_i, NULL, NULL, tbl_idx);
 }
 
@@ -389,8 +388,8 @@ MMTk_RubyUpcalls ruby_upcalls = {
     rb_mmtk_update_global_tables,
     rb_mmtk_global_tables_count,
     NULL,
-    NULL,
-    NULL,
+    rb_mmtk_update_finalizer_table,
+    rb_mmtk_update_obj_id_tables,
     NULL,
     NULL,
     NULL,

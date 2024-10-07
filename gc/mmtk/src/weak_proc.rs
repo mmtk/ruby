@@ -79,7 +79,8 @@ impl WeakProcessor {
     ) {
         worker.add_work(WorkBucketStage::VMRefClosure, ProcessObjFreeCandidates);
         worker.add_work(WorkBucketStage::VMRefClosure, ProcessWeakReferences);
-        worker.add_work(WorkBucketStage::VMRefClosure, UpdateFinalizerObjIdTables);
+
+        worker.add_work(WorkBucketStage::Prepare, UpdateFinalizerObjIdTables);
 
         let global_tables_count = (crate::upcalls().global_tables_count)();
         let work_packets = (0..(global_tables_count - 1))
