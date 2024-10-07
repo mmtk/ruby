@@ -107,6 +107,7 @@ jobs:
         run: |
           cd ../src/gc/mmtk
           cargo build
+          echo "RUST_LOG=" >> $GITHUB_ENV
         if: ${{ matrix.shared_gc && matrix.gc_name == 'mmtk' }}
 
       - name: Build shared GC
