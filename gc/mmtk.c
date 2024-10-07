@@ -54,7 +54,6 @@ struct MMTk_final_job {
     } kind;
     union {
         struct {
-            void (*dfree)(void *);
             void *data;
         } dfree;
         struct {
@@ -808,6 +807,7 @@ gc_run_finalizers(void *data)
             switch (job->kind) {
               case MMTK_FINAL_JOB_DFREE:
                 // TODO
+                job->as.dfree.func(job->as.dfree.data);
                 break;
               case MMTK_FINAL_JOB_FINALIZE:
                 rb_gc_run_obj_finalizer(
@@ -829,8 +829,20 @@ gc_run_finalizers(void *data)
 void
 rb_gc_impl_make_zombie(void *objspace_ptr, VALUE obj, void (*dfree)(void *), void *data)
 {
-    // TODO: real implementation of making zombie
-    dfree(data);
+    struct objspace *objspace = objspace_ptr;
+
+    struct MMTk_final_job *job = xmalloc(sizeof(struct MMTk_final_job));
+    job->kind = MMTK_FINAL_JOB_DFREE;
+    job->as.dfree.func = dfree;
+    job->as.dfree.data = data;
+
+    struct MMTk_final_job *prev;
+    do {
+        job->next = objspace->finalizer_jobs;
+        prev = RUBY_ATOMIC_PTR_CAS(objspace->finalizer_jobs, job->next, job);
+    } while (prev != job->next);
+
+    rb_postponed_job_trigger(objspace->finalizer_postponed_job);
 }
 
 VALUE
@@ -955,6 +967,8 @@ rb_gc_impl_shutdown_call_finalizer(void *objspace_ptr)
         }
     }
     mmtk_free_raw_vec_of_obj_ref(registered_candidates);
+
+    gc_run_finalizers(objspace);
 }
 
 // Object ID
