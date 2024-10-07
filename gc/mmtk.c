@@ -11,6 +11,8 @@
 #include "gc/gc_impl.h"
 #include "gc/mmtk.h"
 
+#include "darray.h"
+
 struct objspace {
     bool measure_gc_time;
     bool gc_stress;
@@ -54,6 +56,7 @@ struct MMTk_final_job {
     } kind;
     union {
         struct {
+            void (*func)(void *);
             void *data;
         } dfree;
         struct {
@@ -746,36 +749,33 @@ rb_gc_impl_writebarrier_remember(void *objspace_ptr, VALUE obj)
 }
 
 // Heap walking
-struct each_objects_data {
-    bool stop;
-    int (*callback)(void *, void *, size_t, void *);
-    void *data;
-};
-
 static void
 each_objects_i(MMTk_ObjectReference obj, void *d)
 {
-    struct each_objects_data *data = d;
+    rb_darray(VALUE) *objs = d;
 
-    if (data->stop) return;
-
-    size_t slot_size = rb_gc_impl_obj_slot_size((VALUE)obj);
-
-    if (data->callback(obj, (void *)((char *)obj + slot_size), slot_size, data->data) != 0) {
-        data->stop = true;
-    }
+    rb_darray_append(objs, (VALUE)obj);
 }
 
 void
 rb_gc_impl_each_objects(void *objspace_ptr, int (*callback)(void *, void *, size_t, void *), void *data)
 {
-    struct each_objects_data each_objects_data = {
-        .stop = false,
-        .callback = callback,
-        .data = data,
-    };
+    rb_darray(VALUE) objs;
+    rb_darray_make(&objs, 0);
 
-    mmtk_enumerate_objects(each_objects_i, &each_objects_data);
+    mmtk_enumerate_objects(each_objects_i, &objs);
+
+    VALUE *obj_ptr;
+    rb_darray_foreach(objs, i, obj_ptr) {
+        VALUE obj = *obj_ptr;
+        size_t slot_size = rb_gc_impl_obj_slot_size((VALUE)obj);
+
+        if (callback((void *)obj, (void *)((char *)obj + slot_size), slot_size, data) != 0) {
+            break;
+        }
+    }
+
+    rb_darray_free(objs);
 }
 
 void rb_gc_impl_each_object(void *objspace_ptr, void (*func)(VALUE obj, void *data), void *data) { }
@@ -806,7 +806,6 @@ gc_run_finalizers(void *data)
 
             switch (job->kind) {
               case MMTK_FINAL_JOB_DFREE:
-                // TODO
                 job->as.dfree.func(job->as.dfree.data);
                 break;
               case MMTK_FINAL_JOB_FINALIZE:
