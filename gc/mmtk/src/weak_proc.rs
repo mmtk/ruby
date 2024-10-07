@@ -81,7 +81,7 @@ impl WeakProcessor {
         worker.add_work(WorkBucketStage::VMRefClosure, ProcessWeakReferences);
 
         let global_tables_count = (crate::upcalls().global_tables_count)();
-        let work_packets = (1..global_tables_count)
+        let work_packets = (0..(global_tables_count - 1))
                 .map(|i| {
                     Box::new(UpdateGlobalTables { idx: i }) as _
                 })
