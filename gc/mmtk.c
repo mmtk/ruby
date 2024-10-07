@@ -232,6 +232,8 @@ rb_mmtk_scan_objspace(void)
           default:
             rb_bug("rb_mmtk_scan_objspace: unknown final job type %d", job->kind);
         }
+
+        job = job->next;
     }
 }
 
