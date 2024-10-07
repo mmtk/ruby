@@ -220,6 +220,19 @@ rb_mmtk_scan_objspace(void)
     }
 
     st_foreach(objspace->obj_to_id_tbl, gc_mark_tbl_no_pin_i, (st_data_t)objspace);
+
+    struct MMTk_final_job *job = objspace->finalizer_jobs;
+    while (job != NULL) {
+        switch (job->kind) {
+          case MMTK_FINAL_JOB_DFREE:
+            break;
+          case MMTK_FINAL_JOB_FINALIZE:
+            rb_gc_impl_mark(objspace, job->as.finalize.object_id);
+            rb_gc_impl_mark(objspace, job->as.finalize.finalizer_array);
+          default:
+            rb_bug("rb_mmtk_scan_objspace: unknown final job type %d", job->kind);
+        }
+    }
 }
 
 static void
