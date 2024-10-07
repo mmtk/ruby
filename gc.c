@@ -3276,12 +3276,6 @@ vm_gen_ivar_iter_wrapper(st_data_t key, st_data_t value, st_data_t data, int err
     return retval;
 }
 
-short
-rb_gc_vm_weak_tbl_count(void)
-{
-    return ALL_VM_WEAK_TABLES;
-}
-
 void
 rb_gc_vm_weak_tbl_iter(vm_tbl_iter_callback_func cb, vm_tbl_update_callback_func ucb, void *data, enum vm_weak_tbl_idx tbl_idx)
 {

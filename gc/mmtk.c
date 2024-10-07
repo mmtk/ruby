@@ -352,7 +352,7 @@ rb_mmtk_update_obj_id_tables(void)
 static int
 rb_mmtk_global_tables_count(void)
 {
-    return rb_gc_vm_weak_tbl_count();
+    return ALL_VM_WEAK_TABLES;
 }
 
 static void
