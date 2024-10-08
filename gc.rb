@@ -368,6 +368,14 @@ module GC
       ULL2NUM(rb_gc_impl_get_total_time(rb_gc_get_objspace()))
     }
   end
+
+  # call-seq:
+  #    GC.active_gc_name -> string
+  #
+  # Return the configured name for the active GC module
+  def self.active_gc_name
+    Primitive.active_gc_name
+  end
 end
 
 module ObjectSpace

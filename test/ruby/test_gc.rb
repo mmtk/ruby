@@ -872,4 +872,12 @@ class TestGc < Test::Unit::TestCase
       assert_include ObjectSpace.dump(young_obj), '"old":true'
     end
   end
+
+  def test_active_gc_name
+    if /mmtk/.match ENV['RUBY_GC_LIBRARY']
+      assert_equal "mmtk", GC.active_gc_name
+    else
+      assert_equal "default", GC.active_gc_name
+    end
+  end
 end

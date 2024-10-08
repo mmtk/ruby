@@ -1205,3 +1205,11 @@ rb_gc_impl_garbage_object_p(void *objspace_ptr, VALUE obj)
 
 void rb_gc_impl_set_event_hook(void *objspace_ptr, const rb_event_flag_t event) { }
 void rb_gc_impl_copy_attributes(void *objspace_ptr, VALUE dest, VALUE obj) { }
+
+// GC Identification
+
+const char *
+rb_gc_impl_active_gc_name(void)
+{
+    return "mmtk";
+}
