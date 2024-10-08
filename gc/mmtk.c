@@ -285,6 +285,24 @@ rb_mmtk_vm_live_bytes(void)
     return 0;
 }
 
+static void
+make_final_job(struct objspace *objspace, VALUE obj, VALUE table)
+{
+    RUBY_ASSERT(RB_FL_TEST(obj, RUBY_FL_FINALIZE));
+    RUBY_ASSERT(mmtk_is_reachable((MMTk_ObjectReference)table));
+    RUBY_ASSERT(RB_BUILTIN_TYPE(table) == T_ARRAY);
+
+    RB_FL_UNSET(obj, RUBY_FL_FINALIZE);
+
+    struct MMTk_final_job *job = xmalloc(sizeof(struct MMTk_final_job));
+    job->next = objspace->finalizer_jobs;
+    job->kind = MMTK_FINAL_JOB_FINALIZE;
+    job->as.finalize.object_id = rb_obj_id((VALUE)obj);
+    job->as.finalize.finalizer_array = table;
+
+    objspace->finalizer_jobs = job;
+}
+
 static int
 rb_mmtk_update_finalizer_table_i(st_data_t key, st_data_t value, st_data_t data)
 {
@@ -295,17 +313,8 @@ rb_mmtk_update_finalizer_table_i(st_data_t key, st_data_t value, st_data_t data)
     struct objspace *objspace = (struct objspace *)data;
 
     if (!mmtk_is_reachable((MMTk_ObjectReference)key)) {
-        RB_FL_UNSET(key, RUBY_FL_FINALIZE);
+        make_final_job(objspace, (VALUE)key, (VALUE)value);
 
-        struct MMTk_final_job *job = xmalloc(sizeof(struct MMTk_final_job));
-        job->next = objspace->finalizer_jobs;
-        job->kind = MMTK_FINAL_JOB_FINALIZE;
-        job->as.finalize.object_id = rb_obj_id((VALUE)key);
-        job->as.finalize.finalizer_array = (VALUE)value;
-
-        objspace->finalizer_jobs = job;
-
-        // TODO: maybe only call this once
         rb_postponed_job_trigger(objspace->finalizer_postponed_job);
 
         return ST_DELETE;
@@ -960,30 +969,14 @@ rb_gc_impl_copy_finalizer(void *objspace_ptr, VALUE dest, VALUE obj)
     }
 }
 
-struct force_finalize_list {
-    VALUE obj;
-    VALUE table;
-    struct force_finalize_list *next;
-};
-
 static int
-force_chain_object(st_data_t key, st_data_t val, st_data_t arg)
+move_finalizer_from_table_i(st_data_t key, st_data_t val, st_data_t arg)
 {
-    struct force_finalize_list **prev = (struct force_finalize_list **)arg;
-    struct force_finalize_list *curr = ALLOC(struct force_finalize_list);
-    curr->obj = key;
-    curr->table = val;
-    curr->next = *prev;
-    *prev = curr;
-    return ST_CONTINUE;
-}
+    struct objspace *objspace = (struct objspace *)arg;
 
-static VALUE
-get_final(long i, void *data)
-{
-    VALUE table = (VALUE)data;
+    make_final_job(objspace, (VALUE)key, (VALUE)val);
 
-    return RARRAY_AREF(table, i);
+    return ST_DELETE;
 }
 
 void
@@ -992,20 +985,9 @@ rb_gc_impl_shutdown_call_finalizer(void *objspace_ptr)
     struct objspace *objspace = objspace_ptr;
 
     while (objspace->finalizer_table->num_entries) {
-        struct force_finalize_list *list = NULL;
-        st_foreach(objspace->finalizer_table, force_chain_object, (st_data_t)&list);
-        while (list) {
-            struct force_finalize_list *curr = list;
+        st_foreach(objspace->finalizer_table, move_finalizer_from_table_i, (st_data_t)objspace);
 
-            st_data_t obj = (st_data_t)curr->obj;
-            st_delete(objspace->finalizer_table, &obj, 0);
-            FL_UNSET(curr->obj, FL_FINALIZE);
-
-            rb_gc_run_obj_finalizer(rb_gc_impl_object_id(objspace, curr->obj), RARRAY_LEN(curr->table), get_final, (void *)curr->table);
-
-            list = curr->next;
-            xfree(curr);
-        }
+        gc_run_finalizers(objspace);
     }
 
     struct MMTk_RawVecOfObjRef registered_candidates = mmtk_get_all_obj_free_candidates();
