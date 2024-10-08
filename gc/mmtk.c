@@ -231,6 +231,7 @@ rb_mmtk_scan_objspace(void)
           case MMTK_FINAL_JOB_FINALIZE:
             rb_gc_impl_mark(objspace, job->as.finalize.object_id);
             rb_gc_impl_mark(objspace, job->as.finalize.finalizer_array);
+            break;
           default:
             rb_bug("rb_mmtk_scan_objspace: unknown final job type %d", job->kind);
         }
