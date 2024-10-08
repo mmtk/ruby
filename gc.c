@@ -3293,6 +3293,8 @@ rb_gc_vm_weak_tbl_iter(vm_tbl_iter_callback_func cb, vm_tbl_update_callback_func
 {
     rb_vm_t *vm = GET_VM();
 
+    GC_ASSERT(tbl_idx <= ALL_VM_WEAK_TABLES);
+
     struct global_vm_tbl_iter_data iter_data = {
         .callback = cb,
         .update_callback = ucb,
