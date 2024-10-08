@@ -38,6 +38,24 @@ jobs:
             os: macos-12
           - test_task: check
             os: macos-13
+
+          - test_task: check
+            gc_name: 'default'
+            shared_gc: true
+            configure: '--with-shared-gc=/Users/runner/ruby_gc'
+            os: macos-14
+          - test_task: check
+            gc_name: 'mmtk'
+            build: 'debug'
+            shared_gc: true
+            configure: '--with-shared-gc=/Users/runner/ruby_gc'
+            os: macos-14
+          - test_task: check
+            gc_name: 'mmtk'
+            build: 'release'
+            shared_gc: true
+            configure: '--with-shared-gc=/Users/runner/ruby_gc'
+            os: macos-14
       fail-fast: false
 
     env:
@@ -91,6 +109,20 @@ jobs:
       - name: Run configure
         run: ../src/configure -C --disable-install-doc ${ruby_configure_args}
 
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Build MMTK Ruby lib
+        run: |
+          cd ../src/gc/mmtk
+          cargo build ${{ matrix.build != 'debug' && format('--{0}', matrix.build) || format('') }}
+          echo "RUST_LOG=" >> $GITHUB_ENV
+        if: ${{ matrix.shared_gc && matrix.gc_name == 'mmtk' }}
+
+      - name: Build shared GC
+        run: |
+          echo "RUBY_GC_LIBRARY=librubygc.${{ matrix.gc_name }}.so" >> $GITHUB_ENV
+          make shared-gc SHARED_GC=${{ matrix.gc_name }} MMTK_BUILD=${{ matrix.build }}
+        if: ${{ matrix.shared_gc }}
+
       - run: make prepare-gems
         if: ${{ matrix.test_task == 'test-bundled-gems' }}
 
@@ -136,6 +168,19 @@ jobs:
           ulimit -c unlimited
           make -s ${{ matrix.test_task }} ${TESTS:+TESTS="$TESTS"}
         timeout-minutes: 60
+        if: ${{ !matrix.shared_gc }}
+        env:
+          RUBY_TESTOPTS: '-q --tty=no'
+          TEST_BUNDLED_GEMS_ALLOW_FAILURES: 'typeprof'
+          PRECHECK_BUNDLED_GEMS: 'no'
+
+      - name: make ${{ matrix.test_task }}
+        run: >-
+          $SETARCH make -s ${{ matrix.test_task }}
+          ${TESTS:+TESTS="$TESTS"}
+          ${{ !contains(matrix.test_task, 'bundle') && 'RUBYOPT=-w' || '' }}
+        timeout-minutes: ${{ matrix.timeout || 40 }}
+        if: ${{ matrix.shared_gc}}
         env:
           RUBY_TESTOPTS: '-q --tty=no'
           TEST_BUNDLED_GEMS_ALLOW_FAILURES: 'typeprof'
