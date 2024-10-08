@@ -843,30 +843,32 @@ gc_run_finalizers(void *data)
 
     rb_gc_set_pending_interrupt();
 
-    while (true) {
-        struct MMTk_final_job *jobs = RUBY_ATOMIC_PTR_EXCHANGE(objspace->finalizer_jobs, NULL);
-        if (jobs == NULL) break;
+    while (objspace->finalizer_jobs != NULL) {
+        struct MMTk_final_job *job = objspace->finalizer_jobs;
+        objspace->finalizer_jobs = job->next;
 
-        while (jobs != NULL) {
-            struct MMTk_final_job *job = jobs;
-            jobs = job->next;
+        switch (job->kind) {
+          case MMTK_FINAL_JOB_DFREE:
+            job->as.dfree.func(job->as.dfree.data);
+            break;
+          case MMTK_FINAL_JOB_FINALIZE: {
+            VALUE object_id = job->as.finalize.object_id;
+            VALUE finalizer_array = job->as.finalize.finalizer_array;
 
-            switch (job->kind) {
-              case MMTK_FINAL_JOB_DFREE:
-                job->as.dfree.func(job->as.dfree.data);
-                break;
-              case MMTK_FINAL_JOB_FINALIZE:
-                rb_gc_run_obj_finalizer(
-                    job->as.finalize.object_id,
-                    RARRAY_LEN(job->as.finalize.finalizer_array),
-                    gc_run_finalizers_get_final,
-                    (void *)job->as.finalize.finalizer_array
-                );
-                break;
-            }
+            rb_gc_run_obj_finalizer(
+                job->as.finalize.object_id,
+                RARRAY_LEN(finalizer_array),
+                gc_run_finalizers_get_final,
+                (void *)finalizer_array
+            );
 
-            xfree(job);
+            RB_GC_GUARD(object_id);
+            RB_GC_GUARD(finalizer_array);
+            break;
+          }
         }
+
+        xfree(job);
     }
 
     rb_gc_unset_pending_interrupt();
