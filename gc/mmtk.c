@@ -757,8 +757,8 @@ each_objects_i(MMTk_ObjectReference obj, void *d)
     rb_darray_append(objs, (VALUE)obj);
 }
 
-void
-rb_gc_impl_each_objects(void *objspace_ptr, int (*callback)(void *, void *, size_t, void *), void *data)
+static void
+each_object(struct objspace *objspace, int (*func)(VALUE, void *), void *data)
 {
     rb_darray(VALUE) objs;
     rb_darray_make(&objs, 0);
@@ -767,10 +767,7 @@ rb_gc_impl_each_objects(void *objspace_ptr, int (*callback)(void *, void *, size
 
     VALUE *obj_ptr;
     rb_darray_foreach(objs, i, obj_ptr) {
-        VALUE obj = *obj_ptr;
-        size_t slot_size = rb_gc_impl_obj_slot_size((VALUE)obj);
-
-        if (callback((void *)obj, (void *)((char *)obj + slot_size), slot_size, data) != 0) {
+        if (func(*obj_ptr, data) != 0) {
             break;
         }
     }
@@ -778,7 +775,57 @@ rb_gc_impl_each_objects(void *objspace_ptr, int (*callback)(void *, void *, size
     rb_darray_free(objs);
 }
 
-void rb_gc_impl_each_object(void *objspace_ptr, void (*func)(VALUE obj, void *data), void *data) { }
+struct rb_gc_impl_each_objects_data {
+    int (*func)(void *, void *, size_t, void *);
+    void *data;
+};
+
+static int
+rb_gc_impl_each_objects_i(VALUE obj, void *d)
+{
+    struct rb_gc_impl_each_objects_data *data = d;
+
+    size_t slot_size = rb_gc_impl_obj_slot_size(obj);
+
+    return data->func((void *)obj, (void *)(obj + slot_size), slot_size, data->data);
+}
+
+void
+rb_gc_impl_each_objects(void *objspace_ptr, int (*func)(void *, void *, size_t, void *), void *data)
+{
+    struct rb_gc_impl_each_objects_data each_objects_data = {
+        .func = func,
+        .data = data
+    };
+
+    each_object(objspace_ptr, rb_gc_impl_each_objects_i, &each_objects_data);
+}
+
+struct rb_gc_impl_each_object_data {
+    void (*func)(VALUE, void *);
+    void *data;
+};
+
+static int
+rb_gc_impl_each_object_i(VALUE obj, void *d)
+{
+    struct rb_gc_impl_each_object_data *data = d;
+
+    data->func(obj, data->data);
+
+    return 0;
+}
+
+void
+rb_gc_impl_each_object(void *objspace_ptr, void (*func)(VALUE, void *), void *data)
+{
+    struct rb_gc_impl_each_object_data each_object_data = {
+        .func = func,
+        .data = data
+    };
+
+    each_object(objspace_ptr, rb_gc_impl_each_object_i, &each_object_data);
+}
 
 // Finalizers
 static VALUE
