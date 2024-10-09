@@ -134,7 +134,7 @@ impl RubyBinding {
         objects.insert(object);
     }
 
-    pub fn is_object_wb_unprotected(&self, object: ObjectReference) -> bool {
+    pub fn object_wb_unprotected_p(&self, object: ObjectReference) -> bool {
         let objects = self.wb_unprotected_objects.lock().unwrap();
         objects.contains(&object)
     }

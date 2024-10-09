@@ -129,6 +129,8 @@ void mmtk_object_reference_write_post(MMTk_Mutator *mutator, MMTk_ObjectReferenc
 
 void mmtk_register_wb_unprotected_object(MMTk_ObjectReference object);
 
+bool mmtk_object_wb_unprotected_p(MMTk_ObjectReference object);
+
 void mmtk_enumerate_objects(void (*callback)(MMTk_ObjectReference, void*), void *data);
 
 struct MMTk_RawVecOfObjRef mmtk_get_all_obj_free_candidates(void);

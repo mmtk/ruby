@@ -1,5 +1,3 @@
-// clang -I.. -L mmtk/target/debug -lmmtk_ruby -undefined dynamic_lookup -g -O3 -dynamiclib -o ../build/libgc.mmtk.dylib mmtk.c
-
 #include <pthread.h>
 #include <stdbool.h>
 
@@ -1247,7 +1245,16 @@ rb_gc_impl_garbage_object_p(void *objspace_ptr, VALUE obj)
 }
 
 void rb_gc_impl_set_event_hook(void *objspace_ptr, const rb_event_flag_t event) { }
-void rb_gc_impl_copy_attributes(void *objspace_ptr, VALUE dest, VALUE obj) { }
+
+void
+rb_gc_impl_copy_attributes(void *objspace_ptr, VALUE dest, VALUE obj)
+{
+    if (mmtk_object_wb_unprotected_p((MMTk_ObjectReference)obj)) {
+        rb_gc_impl_writebarrier_unprotect(objspace_ptr, dest);
+    }
+
+    rb_gc_impl_copy_finalizer(objspace_ptr, dest, obj);
+}
 
 // GC Identification
 

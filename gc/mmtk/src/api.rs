@@ -168,6 +168,11 @@ pub extern "C" fn mmtk_register_wb_unprotected_object(object: ObjectReference) {
     crate::binding().register_wb_unprotected_object(object)
 }
 
+#[no_mangle]
+pub extern "C" fn mmtk_object_wb_unprotected_p(object: ObjectReference) -> bool {
+    crate::binding().object_wb_unprotected_p(object)
+}
+
 // =============== Heap walking ===============
 
 #[no_mangle]
