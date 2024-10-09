@@ -515,7 +515,16 @@ void rb_gc_impl_shutdown_free_objects(void *objspace_ptr) { }
 void
 rb_gc_impl_start(void *objspace_ptr, bool full_mark, bool immediate_mark, bool immediate_sweep, bool compact)
 {
+    bool enabled = mmtk_gc_enabled_p();
+    if (!enabled) {
+        mmtk_set_gc_enabled(true);
+    }
+
     mmtk_handle_user_collection_request(rb_gc_get_ractor_newobj_cache());
+
+    if (!enabled) {
+        mmtk_set_gc_enabled(false);
+    }
 }
 
 bool
