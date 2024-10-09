@@ -523,6 +523,10 @@ rb_str_make_independent(VALUE str)
 void
 rb_str_make_embedded(VALUE str)
 {
+    WHEN_USING_MMTK({
+        rb_bug("rb_str_make_embedded should not be called when using MMTk.");
+    })
+
     RUBY_ASSERT(rb_str_reembeddable_p(str));
     RUBY_ASSERT(!STR_EMBED_P(str));
 

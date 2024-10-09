@@ -505,6 +505,10 @@ ary_heap_realloc(VALUE ary, size_t new_capa)
 void
 rb_ary_make_embedded(VALUE ary)
 {
+    WHEN_USING_MMTK({
+        rb_bug("rb_ary_make_embedded should not be called when using MMTk.");
+    })
+
     RUBY_ASSERT(rb_ary_embeddable_p(ary));
     if (!ARY_EMBED_P(ary)) {
         const VALUE *buf = ARY_HEAP_PTR(ary);

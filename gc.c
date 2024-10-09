@@ -3026,11 +3026,14 @@ gc_ref_update_array(void *objspace, VALUE v)
 #endif
         }
 
+        // MMTK: We don't do array re-embedding when using MMTK.
+        WHEN_NOT_USING_MMTK({
         if (rb_gc_obj_slot_size(v) >= rb_ary_size_as_embedded(v)) {
             if (rb_ary_embeddable_p(v)) {
                 rb_ary_make_embedded(v);
             }
         }
+        })
     }
 
 #if USE_MMTK
@@ -3432,12 +3435,10 @@ rb_gc_update_object_references(void *objspace, VALUE obj)
 
       case T_STRING:
         {
-#if USE_MMTK
-            if (rb_mmtk_enabled_p()) {
+            WHEN_USING_MMTK({
                 rb_mmtk_gc_ref_update_string(objspace, obj);
                 break;
-            }
-#endif
+            })
 
             if (STR_SHARED_P(obj)) {
                 UPDATE_IF_MOVED(objspace, RSTRING(obj)->as.heap.aux.shared);
@@ -3447,6 +3448,8 @@ rb_gc_update_object_references(void *objspace, VALUE obj)
              * slot it's been placed in, then re-embed it. */
             if (rb_gc_obj_slot_size(obj) >= rb_str_size_as_embedded(obj)) {
                 if (!STR_EMBED_P(obj) && rb_str_reembeddable_p(obj)) {
+                    // MMTk note: We don't re-embed strings when using MMTk.
+                    // This statement is not reachable due to the `break;` in `WHEN_USING_MMTK` above.
                     rb_str_make_embedded(obj);
                 }
             }
