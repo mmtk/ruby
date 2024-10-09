@@ -23,13 +23,13 @@ typedef int (*vm_tbl_update_callback_func)(VALUE *value, void *data);
 
 
 enum vm_weak_tbl_idx {
-    CI_TABLE = 0,
-    OVERLOADED_CME_TABLE = 1,
-    GLOBAL_SYMBOLS = 2,
-    GENERIC_IV_TABLE = 3,
-    FROZEN_STRINGS_TABLE = 4,
+    CI_TABLE,
+    OVERLOADED_CME_TABLE,
+    GLOBAL_SYMBOLS,
+    GENERIC_IV_TABLE,
+    FROZEN_STRINGS_TABLE,
 
-    ALL_VM_WEAK_TABLES = 5
+    ALL_VM_WEAK_TABLES
 };
 
 RUBY_SYMBOL_EXPORT_BEGIN
