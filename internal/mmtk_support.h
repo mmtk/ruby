@@ -49,7 +49,8 @@ void rb_mmtk_destroy_mutator(MMTk_VMMutatorThread cur_thread, bool at_fork);
 // Object layout
 size_t rb_mmtk_prefix_size(void);
 size_t rb_mmtk_suffix_size(void);
-size_t rb_mmtk_get_object_size(VALUE object);
+void rb_mmtk_init_hidden_header(VALUE object, size_t payload_size);
+size_t rb_mmtk_get_payload_size(VALUE object);
 
 // Allocation
 VALUE rb_mmtk_alloc_obj(size_t mmtk_alloc_size, size_t size_pool_size, size_t prefix_size);

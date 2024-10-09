@@ -29,6 +29,10 @@ typedef uint32_t MMTk_AllocationSemantics;
 
 #define MMTK_GC_THREAD_KIND_WORKER 1
 
+#define MMTK_HAS_MOVED_GIVTBL 9223372036854775808ull
+
+#define MMTK_HIDDEN_SIZE_MASK 281474976710655
+
 typedef struct st_table st_table;
 
 typedef struct RubyBindingOptions {
@@ -111,6 +115,10 @@ typedef struct MMTk_RawVecOfObjRef {
     size_t len;
     size_t capa;
 } MMTk_RawVecOfObjRef;
+
+typedef struct MMTk_HiddenHeader {
+    size_t prefix;
+} MMTk_HiddenHeader;
 
 /**
  * Create an MMTKBuilder instance with default options.

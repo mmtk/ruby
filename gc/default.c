@@ -2533,7 +2533,7 @@ rb_gc_impl_obj_slot_size(VALUE obj)
 #if USE_MMTK
     if (rb_mmtk_enabled_p()) {
         // Load from our hidden field before the object.
-        return *(size_t*)(obj - MMTK_OBJREF_OFFSET);
+        return rb_mmtk_get_payload_size(obj);
     }
 #endif
 
@@ -3290,7 +3290,8 @@ rb_mmtk_each_objects_safe(each_obj_callback *callback, void *data)
     // If GC is triggered in `callback`, `tmpbuf` will keep elements of `array` alive.
     for (size_t i = 0; i < build_array_data.len; i++) {
         volatile VALUE object = array[i];
-        size_t object_size = rb_mmtk_get_object_size(object);
+        // This is the "object size" seen by the callback.  It's only the payload size.
+        size_t object_size = rb_mmtk_get_payload_size(object);
         uintptr_t object_end = object + object_size;
 
         RUBY_DEBUG_LOG("Enumerating object: %p\n", (void*)object);
