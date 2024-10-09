@@ -366,13 +366,15 @@ rb_mmtk_update_obj_id_tables(void)
 static int
 rb_mmtk_global_tables_count(void)
 {
-    return ALL_VM_WEAK_TABLES;
+    return RB_GC_VM_WEAK_TABLE_COUNT;
 }
 
 static void
 rb_mmtk_update_global_tables(int tbl_idx)
 {
-    rb_gc_vm_weak_tbl_iter(rb_mmtk_update_table_i, NULL, NULL, tbl_idx);
+    RUBY_ASSERT(tbl_idx < RB_GC_VM_WEAK_TABLE_COUNT);
+
+    rb_gc_vm_weak_tbl_iter(rb_mmtk_update_table_i, NULL, NULL, (enum rb_gc_vm_weak_tbl_idx)tbl_idx);
 }
 
 // Bootup

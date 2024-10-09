@@ -22,14 +22,13 @@ typedef int (*vm_tbl_iter_callback_func)(VALUE value, void *data);
 typedef int (*vm_tbl_update_callback_func)(VALUE *value, void *data);
 
 
-enum vm_weak_tbl_idx {
-    CI_TABLE,
-    OVERLOADED_CME_TABLE,
-    GLOBAL_SYMBOLS,
-    GENERIC_IV_TABLE,
-    FROZEN_STRINGS_TABLE,
-
-    ALL_VM_WEAK_TABLES
+enum rb_gc_vm_weak_tbl_idx {
+    RB_GC_VM_CI_TABLE,
+    RB_GC_VM_OVERLOADED_CME_TABLE,
+    RB_GC_VM_GLOBAL_SYMBOLS_TABLE,
+    RB_GC_VM_GENERIC_IV_TABLE,
+    RB_GC_VM_FROZEN_STRINGS_TABLE,
+    RB_GC_VM_WEAK_TABLE_COUNT
 };
 
 RUBY_SYMBOL_EXPORT_BEGIN
@@ -70,7 +69,7 @@ void rb_gc_set_shape(VALUE obj, uint32_t shape_id);
 uint32_t rb_gc_rebuild_shape(VALUE obj, size_t heap_id);
 size_t rb_obj_memsize_of(VALUE obj);
 short rb_gc_vm_weak_tbl_count(void);
-void rb_gc_vm_weak_tbl_iter(vm_tbl_iter_callback_func cb, vm_tbl_update_callback_func ucb, void *data, enum vm_weak_tbl_idx tbl_idx);
+void rb_gc_vm_weak_tbl_iter(vm_tbl_iter_callback_func cb, vm_tbl_update_callback_func ucb, void *data, enum rb_gc_vm_weak_tbl_idx tbl_idx);
 RUBY_SYMBOL_EXPORT_END
 
 
