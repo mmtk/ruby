@@ -18,11 +18,11 @@ struct rb_gc_vm_context {
     struct rb_execution_context_struct *ec;
 };
 
-typedef int (*vm_tbl_iter_callback_func)(VALUE value, void *data);
-typedef int (*vm_tbl_update_callback_func)(VALUE *value, void *data);
+typedef int (*vm_table_foreach_callback_func)(VALUE value, void *data);
+typedef int (*vm_table_update_callback_func)(VALUE *value, void *data);
 
 
-enum rb_gc_vm_weak_tbl_idx {
+enum rb_gc_vm_weak_tables {
     RB_GC_VM_CI_TABLE,
     RB_GC_VM_OVERLOADED_CME_TABLE,
     RB_GC_VM_GLOBAL_SYMBOLS_TABLE,
@@ -68,8 +68,8 @@ uint32_t rb_gc_get_shape(VALUE obj);
 void rb_gc_set_shape(VALUE obj, uint32_t shape_id);
 uint32_t rb_gc_rebuild_shape(VALUE obj, size_t heap_id);
 size_t rb_obj_memsize_of(VALUE obj);
-short rb_gc_vm_weak_tbl_count(void);
-void rb_gc_vm_weak_tbl_iter(vm_tbl_iter_callback_func cb, vm_tbl_update_callback_func ucb, void *data, enum rb_gc_vm_weak_tbl_idx tbl_idx);
+short rb_gc_vm_weak_table_count(void);
+void rb_gc_vm_weak_table_foreach(vm_table_foreach_callback_func callback, vm_table_update_callback_func update_callback, void *data, enum rb_gc_vm_weak_tables table);
 RUBY_SYMBOL_EXPORT_END
 
 

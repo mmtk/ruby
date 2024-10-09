@@ -3242,62 +3242,61 @@ update_superclasses(void *objspace, VALUE obj)
 extern rb_symbols_t ruby_global_symbols;
 #define global_symbols ruby_global_symbols
 
-struct global_vm_tbl_iter_data {
-    vm_tbl_iter_callback_func callback;
-    vm_tbl_update_callback_func update_callback;
+struct global_vm_table_foreach_data {
+    vm_table_foreach_callback_func callback;
+    vm_table_update_callback_func update_callback;
     void *data;
 };
 
 static int
-vm_table_iter_wrapper(st_data_t key, st_data_t value, st_data_t data, int error)
+vm_table_foreach(st_data_t key, st_data_t value, st_data_t data, int error)
 {
-    struct global_vm_tbl_iter_data *iter_data = (struct global_vm_tbl_iter_data *)data;
-    vm_tbl_iter_callback_func callback = iter_data->callback;
+    struct global_vm_table_foreach_data *iter_data = (struct global_vm_table_foreach_data *)data;
 
-    return (*callback)((VALUE)key, iter_data->data);
+    return iter_data->callback((VALUE)key, iter_data->data);
 }
 
 static int
-vm_table_update_wrapper(st_data_t *key, st_data_t *value, st_data_t data, int existing)
+vm_table_update(st_data_t *key, st_data_t *value, st_data_t data, int existing)
 {
-    struct global_vm_tbl_iter_data *iter_data = (struct global_vm_tbl_iter_data *)data;
-    vm_tbl_update_callback_func callback = iter_data->update_callback;
+    struct global_vm_table_foreach_data *iter_data = (struct global_vm_table_foreach_data *)data;
 
-    return (*callback)((VALUE *)key, iter_data->data);
+    return iter_data->update_callback((VALUE *)key, iter_data->data);
 }
 
 static int
-vm_frozen_strings_iter_wrapper(st_data_t key, st_data_t value, st_data_t data, int error)
+vm_gen_ivar_foreach(st_data_t key, st_data_t value, st_data_t data, int error)
 {
-    GC_ASSERT(RB_TYPE_P((VALUE)key, T_STRING));
-
-    int retval = vm_table_iter_wrapper(key, value, data, error);
-    if( retval == ST_DELETE) {
-        FL_UNSET((VALUE)key, RSTRING_FSTR);
-    }
-    return retval;
-}
-
-static int
-vm_gen_ivar_iter_wrapper(st_data_t key, st_data_t value, st_data_t data, int error)
-{
-    int retval = vm_table_iter_wrapper(key, value, data, error);
-    if( retval == ST_DELETE) {
+    int retval = vm_table_foreach(key, value, data, error);
+    if (retval == ST_DELETE) {
         FL_UNSET((VALUE)key, FL_EXIVAR);
     }
     return retval;
 }
 
+static int
+vm_frozen_strings_foreach(st_data_t key, st_data_t value, st_data_t data, int error)
+{
+    GC_ASSERT(RB_TYPE_P((VALUE)key, T_STRING));
+
+    int retval = vm_table_foreach(key, value, data, error);
+    if (retval == ST_DELETE) {
+        FL_UNSET((VALUE)key, RSTRING_FSTR);
+    }
+    return retval;
+}
+
 void
-rb_gc_vm_weak_tbl_iter(vm_tbl_iter_callback_func cb, vm_tbl_update_callback_func ucb, void *data, enum rb_gc_vm_weak_tbl_idx tbl_idx)
+rb_gc_vm_weak_table_foreach(vm_table_foreach_callback_func callback,
+                            vm_table_update_callback_func update_callback,
+                            void *data,
+                            enum rb_gc_vm_weak_tables table)
 {
     rb_vm_t *vm = GET_VM();
 
-    GC_ASSERT(tbl_idx <= ALL_VM_WEAK_TABLES);
-
-    struct global_vm_tbl_iter_data iter_data = {
-        .callback = cb,
-        .update_callback = ucb,
+    struct global_vm_table_foreach_data foreach_data = {
+        .callback = callback,
+        .update_callback = update_callback,
         .data = data
     };
 
@@ -3305,42 +3304,42 @@ rb_gc_vm_weak_tbl_iter(vm_tbl_iter_callback_func cb, vm_tbl_update_callback_func
         if (tbl->num_entries > 0) {      \
             st_foreach_with_replace(     \
                 tbl,                     \
-                vm_table_iter_wrapper,   \
-                vm_table_update_wrapper, \
-                (st_data_t)&iter_data    \
+                vm_table_foreach,   \
+                vm_table_update, \
+                (st_data_t)&foreach_data    \
             );                           \
         }                                \
     } while (0)
 
-    switch (tbl_idx) {
+    switch (table) {
       case RB_GC_VM_CI_TABLE: {
-          ITER_TABLE_WITH_CB(vm->ci_table);
-          break;
+        ITER_TABLE_WITH_CB(vm->ci_table);
+        break;
       }
       case RB_GC_VM_OVERLOADED_CME_TABLE: {
-          ITER_TABLE_WITH_CB(vm->overloaded_cme_table);
-          break;
+        ITER_TABLE_WITH_CB(vm->overloaded_cme_table);
+        break;
       }
       case RB_GC_VM_GLOBAL_SYMBOLS_TABLE: {
-          ITER_TABLE_WITH_CB(global_symbols.str_sym);
-          break;
+        ITER_TABLE_WITH_CB(global_symbols.str_sym);
+        break;
       }
       case RB_GC_VM_GENERIC_IV_TABLE: {
-          st_table *generic_iv_tbl = rb_generic_ivtbl_get();
-          if (generic_iv_tbl->num_entries > 0) {
-              st_foreach_with_replace(generic_iv_tbl, vm_gen_ivar_iter_wrapper, vm_table_update_wrapper, (st_data_t)&iter_data);
-          }
-          break;
+        st_table *generic_iv_tbl = rb_generic_ivtbl_get();
+        if (generic_iv_tbl->num_entries > 0) {
+            st_foreach_with_replace(generic_iv_tbl, vm_gen_ivar_foreach, vm_table_update, (st_data_t)&foreach_data);
+        }
+        break;
       }
       case RB_GC_VM_FROZEN_STRINGS_TABLE: {
-          st_table *frozen_strings = GET_VM()->frozen_strings;
-          if (frozen_strings->num_entries > 0) {
-              st_foreach_with_replace(frozen_strings, vm_frozen_strings_iter_wrapper, vm_table_update_wrapper, (st_data_t)&iter_data);
-          }
-          break;
+        st_table *frozen_strings = GET_VM()->frozen_strings;
+        if (frozen_strings->num_entries > 0) {
+            st_foreach_with_replace(frozen_strings, vm_frozen_strings_foreach, vm_table_update, (st_data_t)&foreach_data);
+        }
+        break;
       }
       default:
-        rb_bug("rb_gc_vm_weak_tbl_iter: unknown table %d", tbl_idx);
+        rb_bug("rb_gc_vm_weak_table_foreach: unknown table %d", table);
     }
 }
 
