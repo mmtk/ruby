@@ -580,11 +580,11 @@ rb_gc_impl_config_get(void *objspace_ptr)
     // TODO
     return rb_hash_new();
 }
-VALUE
+
+void
 rb_gc_impl_config_set(void *objspace_ptr, VALUE hash)
 {
     // TODO
-    return hash;
 }
 
 // Object allocation
