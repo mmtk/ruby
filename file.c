@@ -310,8 +310,16 @@ rb_CFString_class_initialize_before_fork(void)
     const char small_str[] = "/";
     long len = sizeof(small_str) - 1;
     CFStringRef s;
-    CFMutableStringRef m = mutable_CFString_new(&s, small_str, len);
-    mutable_CFString_release(m, s);
+    /*
+     * Touch `CFStringCreateWithBytesNoCopy` *twice* because the implementation
+     * shipped with macOS 15.0 24A5331b does not return `NSTaggedPointerString`
+     * instance for the first call (totally not sure why). CoreFoundation
+     * shipped with macOS 15.1 does not have this issue.
+     */
+    for (int i = 0; i < 2; i++) {
+        CFMutableStringRef m = mutable_CFString_new(&s, small_str, len);
+        mutable_CFString_release(m, s);
+    }
 }
 # endif /* HAVE_WORKING_FORK */
 
@@ -5457,14 +5465,14 @@ test_check(int n, int argc, VALUE *argv)
  *      | <tt>'o'</tt> | Whether the entity is owned by the caller's effective uid.                |
  *      | <tt>'O'</tt> | Like <tt>'o'</tt>, but uses the real uid (not the effective uid).         |
  *      | <tt>'p'</tt> | Whether the entity is a FIFO device (named pipe).                         |
- *      | <tt>'r'</tt> | Whether the entity is readable by the caller's effecive uid/gid.          |
+ *      | <tt>'r'</tt> | Whether the entity is readable by the caller's effective uid/gid.         |
  *      | <tt>'R'</tt> | Like <tt>'r'</tt>, but uses the real uid/gid (not the effective uid/gid). |
  *      | <tt>'S'</tt> | Whether the entity is a socket.                                           |
  *      | <tt>'u'</tt> | Whether the entity's setuid bit is set.                                   |
  *      | <tt>'w'</tt> | Whether the entity is writable by the caller's effective uid/gid.         |
  *      | <tt>'W'</tt> | Like <tt>'w'</tt>, but uses the real uid/gid (not the effective uid/gid). |
  *      | <tt>'x'</tt> | Whether the entity is executable by the caller's effective uid/gid.       |
- *      | <tt>'X'</tt> | Like <tt>'x'</tt>, but uses the real uid/gid (not the effecive uid/git).  |
+ *      | <tt>'X'</tt> | Like <tt>'x'</tt>, but uses the real uid/gid (not the effective uid/git). |
  *      | <tt>'z'</tt> | Whether the entity exists and is of length zero.                          |
  *
  *  - This test operates only on the entity at `path0`,
