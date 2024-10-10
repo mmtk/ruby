@@ -92,7 +92,6 @@ h6:target {
   color: var(--link-color);
   text-decoration: none;
   transition: color 0.3s ease;
-  font-weight: 600;  /* Make links bolder */
 }
 
 :link:hover,
@@ -223,6 +222,7 @@ nav a:hover {
   position: fixed;
   top: 10px;
   left: 20px;
+  cursor: pointer;
 }
 
 #navigation-toggle[aria-expanded="true"] {
@@ -307,7 +307,7 @@ main h6 {
 
 #search-field {
   width: 100%;
-  padding: 0.5em 1em 0.5em 2em;
+  padding: 0.5em 1em 0.5em 2.5em;
   border: 1px solid var(--border-color);
   border-radius: 20px;
   font-size: 14px;
@@ -584,6 +584,9 @@ main header h3 {
 /* @group Method Details */
 
 main .method-source-code {
+  /* While this is already invisible through the rule below, this will inform the browser to
+  not consider source code during text searching until it is actually expanded. */
+  visibility: hidden;
   max-height: 0;
   overflow: auto;
   transition-duration: 200ms;
@@ -593,6 +596,7 @@ main .method-source-code {
 }
 
 main .method-source-code.active-menu {
+  visibility: visible;
   max-height: 100vh;
 }
 

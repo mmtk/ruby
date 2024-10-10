@@ -309,6 +309,43 @@ range_each_func(VALUE range, int (*func)(VALUE, VALUE), VALUE arg)
     }
 }
 
+// NB: Two functions below (step_i_iter, sym_step_i and step_i) are used only to maintain the
+// backward-compatible behavior for string and symbol ranges with integer steps. If that branch
+// will be removed from range_step, these two can go, too.
+static bool
+step_i_iter(VALUE arg)
+{
+    VALUE *iter = (VALUE *)arg;
+
+    if (FIXNUM_P(iter[0])) {
+        iter[0] -= INT2FIX(1) & ~FIXNUM_FLAG;
+    }
+    else {
+        iter[0] = rb_funcall(iter[0], '-', 1, INT2FIX(1));
+    }
+    if (iter[0] != INT2FIX(0)) return false;
+    iter[0] = iter[1];
+    return true;
+}
+
+static int
+sym_step_i(VALUE i, VALUE arg)
+{
+    if (step_i_iter(arg)) {
+        rb_yield(rb_str_intern(i));
+    }
+    return 0;
+}
+
+static int
+step_i(VALUE i, VALUE arg)
+{
+    if (step_i_iter(arg)) {
+        rb_yield(i);
+    }
+    return 0;
+}
+
 static int
 discrete_object_p(VALUE obj)
 {
@@ -430,8 +467,17 @@ range_step_size(VALUE range, VALUE args, VALUE eobj)
  *
  *  For non-Numeric ranges, step absence is an error:
  *
- *    ('a'..'z').step { p _1 }
+ *    (Time.utc(2022, 3, 1)..Time.utc(2022, 2, 24)).step { p _1 }
  *    # raises: step is required for non-numeric ranges (ArgumentError)
+ *
+ *  For backward compatibility reasons, String ranges support the iteration both with
+ *  string step and with integer step. In the latter case, the iteration is performed
+ *  by calculating the next values with String#succ:
+ *
+ *    ('a'..'e').step(2) { p _1 }
+ *    # Prints: a, c, e
+ *    ('a'..'e').step { p _1 }
+ *    # Default step 1; prints: a, b, c, d, e
  *
  */
 static VALUE
@@ -445,11 +491,16 @@ range_step(int argc, VALUE *argv, VALUE range)
 
     const VALUE b_num_p = rb_obj_is_kind_of(b, rb_cNumeric);
     const VALUE e_num_p = rb_obj_is_kind_of(e, rb_cNumeric);
+    // For backward compatibility reasons (conforming to behavior before 3.4), String/Symbol
+    // supports both old behavior ('a'..).step(1) and new behavior ('a'..).step('a')
+    // Hence the additional conversion/additional checks.
+    const VALUE str_b = rb_check_string_type(b);
+    const VALUE sym_b = SYMBOL_P(b) ? rb_sym2str(b) : Qnil;
 
     if (rb_check_arity(argc, 0, 1))
         step = argv[0];
     else {
-        if (b_num_p || (NIL_P(b) && e_num_p))
+        if (b_num_p || !NIL_P(str_b) || !NIL_P(sym_b) || (NIL_P(b) && e_num_p))
             step = INT2FIX(1);
         else
             rb_raise(rb_eArgError, "step is required for non-numeric ranges");
@@ -520,8 +571,30 @@ range_step(int argc, VALUE *argv, VALUE range)
     }
     else if (b_num_p && step_num_p && ruby_float_step(b, e, step, EXCL(range), TRUE)) {
         /* done */
-    }
-    else {
+    } else if (!NIL_P(str_b) && FIXNUM_P(step)) {
+        // backwards compatibility behavior for String only, when no step/Integer step is passed
+        // See discussion in https://bugs.ruby-lang.org/issues/18368
+
+        VALUE iter[2] = {INT2FIX(1), step};
+
+        if (NIL_P(e)) {
+            rb_str_upto_endless_each(str_b, step_i, (VALUE)iter);
+        }
+        else {
+            rb_str_upto_each(str_b, e, EXCL(range), step_i, (VALUE)iter);
+        }
+    } else if (!NIL_P(sym_b) && FIXNUM_P(step)) {
+        // same as above: backward compatibility for symbols
+
+        VALUE iter[2] = {INT2FIX(1), step};
+
+        if (NIL_P(e)) {
+            rb_str_upto_endless_each(sym_b, sym_step_i, (VALUE)iter);
+        }
+        else {
+            rb_str_upto_each(sym_b, rb_sym2str(e), EXCL(range), sym_step_i, (VALUE)iter);
+        }
+    } else {
         v = b;
         if (!NIL_P(e)) {
             if (b_num_p && step_num_p && r_less(step, INT2FIX(0)) < 0) {
@@ -1398,7 +1471,7 @@ range_last(int argc, VALUE *argv, VALUE range)
  *    min(n) {|a, b| ... } -> array
  *
  *  Returns the minimum value in +self+,
- *  using method <tt><=></tt> or a given block for comparison.
+ *  using method <tt>#<=></tt> or a given block for comparison.
  *
  *  With no argument and no block given,
  *  returns the minimum-valued element of +self+.
@@ -1506,7 +1579,7 @@ range_min(int argc, VALUE *argv, VALUE range)
  *    max(n) {|a, b| ... } -> array
  *
  *  Returns the maximum value in +self+,
- *  using method <tt><=></tt> or a given block for comparison.
+ *  using method <tt>#<=></tt> or a given block for comparison.
  *
  *  With no argument and no block given,
  *  returns the maximum-valued element of +self+.
@@ -1625,10 +1698,10 @@ range_max(int argc, VALUE *argv, VALUE range)
  *    minmax {|a, b| ... } -> [object, object]
  *
  *  Returns a 2-element array containing the minimum and maximum value in +self+,
- *  either according to comparison method <tt><=></tt> or a given block.
+ *  either according to comparison method <tt>#<=></tt> or a given block.
  *
  *  With no block given, returns the minimum and maximum values,
- *  using <tt><=></tt> for comparison:
+ *  using <tt>#<=></tt> for comparison:
  *
  *    (1..4).minmax     # => [1, 4]
  *    (1...4).minmax    # => [1, 3]
@@ -2078,7 +2151,7 @@ static int r_cover_range_p(VALUE range, VALUE beg, VALUE end, VALUE val);
  *  Returns +false+ if either:
  *
  *  - The begin value of +self+ is larger than its end value.
- *  - An internal call to <tt><=></tt> returns +nil+;
+ *  - An internal call to <tt>#<=></tt> returns +nil+;
  *    that is, the operands are not comparable.
  *
  *  Beginless ranges cover all values of the same type before the end,
@@ -2326,7 +2399,7 @@ empty_region_p(VALUE beg, VALUE end, int excl)
  *
  *    (1..3).overlap?(1)         # TypeError
  *
- *  Returns +false+ if an internal call to <tt><=></tt> returns +nil+;
+ *  Returns +false+ if an internal call to <tt>#<=></tt> returns +nil+;
  *  that is, the operands are not comparable.
  *
  *    (1..3).overlap?('a'..'d')  # => false
@@ -2404,7 +2477,7 @@ range_overlap(VALUE range, VALUE other)
         /* if both begin values are equal, no more comparisons needed */
         if (rb_cmpint(cmp, self_beg, other_beg) == 0) return Qtrue;
     }
-    else if (NIL_P(self_beg) && NIL_P(other_beg)) {
+    else if (NIL_P(self_beg) && !NIL_P(self_end) && NIL_P(other_beg)) {
         VALUE cmp = rb_funcall(self_end, id_cmp, 1, other_end);
         return RBOOL(!NIL_P(cmp));
     }
@@ -2429,7 +2502,7 @@ range_overlap(VALUE range, VALUE other)
  *     (1...4).to_a     # => [1, 2, 3]
  *     ('a'...'d').to_a # => ["a", "b", "c"]
  *
- * A range may be created using method Range.new:
+ * - Method Range.new:
  *
  *   # Ranges that by default include the given end value.
  *   Range.new(1, 4).to_a     # => [1, 2, 3, 4]
@@ -2516,7 +2589,7 @@ range_overlap(VALUE range, VALUE other)
  * == Ranges and Other Classes
  *
  * An object may be put into a range if its class implements
- * instance method <tt><=></tt>.
+ * instance method <tt>#<=></tt>.
  * Ruby core classes that do so include Array, Complex, File::Stat,
  * Float, Integer, Kernel, Module, Numeric, Rational, String, Symbol, and Time.
  *
@@ -2548,15 +2621,15 @@ range_overlap(VALUE range, VALUE other)
  * == Ranges and User-Defined Classes
  *
  * A user-defined class that is to be used in a range
- * must implement instance <tt><=></tt>;
+ * must implement instance method <tt>#<=></tt>;
  * see Integer#<=>.
  * To make iteration available, it must also implement
  * instance method +succ+; see Integer#succ.
  *
- * The class below implements both <tt><=></tt> and +succ+,
+ * The class below implements both <tt>#<=></tt> and +succ+,
  * and so can be used both to construct ranges and to iterate over them.
  * Note that the Comparable module is included
- * so the <tt>==</tt> method is defined in terms of <tt><=></tt>.
+ * so the <tt>==</tt> method is defined in terms of <tt>#<=></tt>.
  *
  *   # Represent a string of 'X' characters.
  *   class Xs

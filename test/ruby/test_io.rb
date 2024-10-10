@@ -2002,6 +2002,14 @@ class TestIO < Test::Unit::TestCase
     end
   end
 
+  def test_readline_incompatible_rs
+    first_line = File.open(__FILE__, &:gets).encode("utf-32le")
+    File.open(__FILE__, encoding: "utf-8:utf-32le") {|f|
+      assert_equal first_line, f.readline
+      assert_raise(ArgumentError) {f.readline("\0")}
+    }
+  end
+
   def test_set_lineno_readline
     pipe(proc do |w|
       w.puts "foo"
@@ -3876,8 +3884,10 @@ __END__
   end
 
   def test_open_fifo_does_not_block_other_threads
-    mkcdtmpdir {
+    mkcdtmpdir do
       File.mkfifo("fifo")
+    rescue NotImplementedError
+    else
       assert_separately([], <<-'EOS')
         t1 = Thread.new {
           open("fifo", "r") {|r|
@@ -3892,8 +3902,32 @@ __END__
         t1_value, _ = assert_join_threads([t1, t2])
         assert_equal("foo", t1_value)
       EOS
-    }
-  end if /mswin|mingw|bccwin|cygwin/ !~ RUBY_PLATFORM
+    end
+  end
+
+  def test_open_fifo_restart_at_signal_intterupt
+    mkcdtmpdir do
+      File.mkfifo("fifo")
+    rescue NotImplementedError
+    else
+      wait = EnvUtil.apply_timeout_scale(0.1)
+      data = "writing to fifo"
+
+      # Do not use assert_separately, because reading from stdin
+      # prevents to reproduce [Bug #20708]
+      assert_in_out_err(["-e", "#{<<~"begin;"}\n#{<<~'end;'}"], [], [data])
+      wait, data = #{wait}, #{data.dump}
+      ;
+      begin;
+        trap(:USR1) {}
+        Thread.new do
+          sleep wait; Process.kill(:USR1, $$)
+          sleep wait; File.write("fifo", data)
+        end
+        puts File.read("fifo")
+      end;
+    end
+  end if Signal.list[:USR1] # Pointless on platforms without signal
 
   def test_open_flag
     make_tempfile do |t|

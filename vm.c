@@ -2240,7 +2240,7 @@ vm_init_redefined_flag(void)
     OP(EmptyP, EMPTY_P), (C(Array), C(String), C(Hash));
     OP(Succ, SUCC), (C(Integer), C(String));
     OP(EqTilde, MATCH), (C(Regexp), C(String));
-    OP(Freeze, FREEZE), (C(String));
+    OP(Freeze, FREEZE), (C(String), C(Array), C(Hash));
     OP(UMinus, UMINUS), (C(String));
     OP(Max, MAX), (C(Array));
     OP(Min, MIN), (C(Array));
@@ -3107,7 +3107,7 @@ ruby_vm_destruct(rb_vm_t *vm)
             }
         }
 
-        struct rb_objspace *objspace = vm->objspace;
+        struct rb_objspace *objspace = vm->gc.objspace;
 
         rb_vm_living_threads_init(vm);
         ruby_vm_run_at_exit_hooks(vm);
@@ -4236,7 +4236,7 @@ Init_VM(void)
 #endif
 
 #ifdef _WIN32
-        rb_objspace_gc_enable(vm->objspace);
+        rb_objspace_gc_enable(vm->gc.objspace);
 #endif
     }
     vm_init_redefined_flag();
@@ -4492,14 +4492,6 @@ rb_ruby_verbose_ptr(void)
 {
     rb_ractor_t *cr = GET_RACTOR();
     return &cr->verbose;
-}
-
-static bool prism = (RB_DEFAULT_PARSER == 1);
-
-bool *
-rb_ruby_prism_ptr(void)
-{
-    return &prism;
 }
 
 VALUE *

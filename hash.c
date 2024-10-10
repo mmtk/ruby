@@ -71,7 +71,7 @@
  *            The bounds of the AR table.
  * 13-19: RHASH_LEV_MASK
  *            The iterational level of the hash. Used to prevent modifications
- *            to the hash during interation.
+ *            to the hash during iteration.
  */
 
 #ifndef HASH_DEBUG
@@ -110,6 +110,7 @@ static VALUE rb_hash_s_try_convert(VALUE, VALUE);
  *  2. Insert WBs
  */
 
+/* :nodoc: */
 VALUE
 rb_hash_freeze(VALUE hash)
 {
@@ -117,6 +118,7 @@ rb_hash_freeze(VALUE hash)
 }
 
 VALUE rb_cHash;
+VALUE rb_cHash_empty_frozen;
 
 static VALUE envtbl;
 static ID id_hash, id_flatten_bang;
@@ -3410,20 +3412,65 @@ rb_hash_to_a(VALUE hash)
     return ary;
 }
 
+static bool
+symbol_key_needs_quote(VALUE str)
+{
+    long len = RSTRING_LEN(str);
+    if (len == 0 || !rb_str_symname_p(str)) return true;
+    const char *s = RSTRING_PTR(str);
+    char first = s[0];
+    if (first == '@' || first == '$' || first == '!') return true;
+    if (!at_char_boundary(s, s + len - 1, RSTRING_END(str), rb_enc_get(str))) return false;
+    switch (s[len - 1]) {
+        case '+':
+        case '-':
+        case '*':
+        case '/':
+        case '`':
+        case '%':
+        case '^':
+        case '&':
+        case '|':
+        case ']':
+        case '<':
+        case '=':
+        case '>':
+        case '~':
+        case '@':
+            return true;
+        default:
+            return false;
+    }
+}
+
 static int
 inspect_i(VALUE key, VALUE value, VALUE str)
 {
     VALUE str2;
 
-    str2 = rb_inspect(key);
+    bool is_symbol = SYMBOL_P(key);
+    bool quote = false;
+    if (is_symbol) {
+        str2 = rb_sym2str(key);
+        quote = symbol_key_needs_quote(str2);
+    }
+    else {
+        str2 = rb_inspect(key);
+    }
     if (RSTRING_LEN(str) > 1) {
         rb_str_buf_cat_ascii(str, ", ");
     }
     else {
         rb_enc_copy(str, str2);
     }
-    rb_str_buf_append(str, str2);
-    rb_str_buf_cat_ascii(str, "=>");
+    if (quote) {
+        rb_str_buf_append(str, rb_str_inspect(str2));
+    }
+    else {
+        rb_str_buf_append(str, str2);
+    }
+
+    rb_str_buf_cat_ascii(str, is_symbol ? ": " : " => ");
     str2 = rb_inspect(value);
     rb_str_buf_append(str, str2);
 
@@ -5090,44 +5137,6 @@ envix(const char *nam)
 }
 #endif
 
-#if defined(_WIN32)
-static size_t
-getenvsize(const WCHAR* p)
-{
-    const WCHAR* porg = p;
-    while (*p++) p += lstrlenW(p) + 1;
-    return p - porg + 1;
-}
-
-static size_t
-getenvblocksize(void)
-{
-#ifdef _MAX_ENV
-    return _MAX_ENV;
-#else
-    return 32767;
-#endif
-}
-
-static int
-check_envsize(size_t n)
-{
-    if (_WIN32_WINNT < 0x0600 && rb_w32_osver() < 6) {
-        /* https://msdn.microsoft.com/en-us/library/windows/desktop/ms682653(v=vs.85).aspx */
-        /* Windows Server 2003 and Windows XP: The maximum size of the
-         * environment block for the process is 32,767 characters. */
-        WCHAR* p = GetEnvironmentStringsW();
-        if (!p) return -1; /* never happen */
-        n += getenvsize(p);
-        FreeEnvironmentStringsW(p);
-        if (n >= getenvblocksize()) {
-            return -1;
-        }
-    }
-    return 0;
-}
-#endif
-
 #if defined(_WIN32) || \
   (defined(__sun) && !(defined(HAVE_SETENV) && defined(HAVE_UNSETENV)))
 
@@ -5153,9 +5162,6 @@ void
 ruby_setenv(const char *name, const char *value)
 {
 #if defined(_WIN32)
-# if defined(MINGW_HAS_SECURE_API) || RUBY_MSVCRT_VERSION >= 80
-#   define HAVE__WPUTENV_S 1
-# endif
     VALUE buf;
     WCHAR *wname;
     WCHAR *wvalue = 0;
@@ -5166,34 +5172,23 @@ ruby_setenv(const char *name, const char *value)
     if (value) {
         int len2;
         len2 = MultiByteToWideChar(CP_UTF8, 0, value, -1, NULL, 0);
-        if (check_envsize((size_t)len + len2)) { /* len and len2 include '\0' */
-            goto fail;  /* 2 for '=' & '\0' */
-        }
         wname = ALLOCV_N(WCHAR, buf, len + len2);
         wvalue = wname + len;
         MultiByteToWideChar(CP_UTF8, 0, name, -1, wname, len);
         MultiByteToWideChar(CP_UTF8, 0, value, -1, wvalue, len2);
-#ifndef HAVE__WPUTENV_S
-        wname[len-1] = L'=';
-#endif
     }
     else {
         wname = ALLOCV_N(WCHAR, buf, len + 1);
         MultiByteToWideChar(CP_UTF8, 0, name, -1, wname, len);
         wvalue = wname + len;
         *wvalue = L'\0';
-#ifndef HAVE__WPUTENV_S
-        wname[len-1] = L'=';
-#endif
     }
 
     ENV_LOCK();
     {
-#ifndef HAVE__WPUTENV_S
-        failed = _wputenv(wname);
-#else
+        /* Use _wputenv_s() instead of SetEnvironmentVariableW() to make sure
+         * special variables like "TZ" are interpret by libc. */
         failed = _wputenv_s(wname, wvalue);
-#endif
     }
     ENV_UNLOCK();
 
@@ -5202,7 +5197,7 @@ ruby_setenv(const char *name, const char *value)
      * variable from the system area. */
     if (!value || !*value) {
         /* putenv() doesn't handle empty value */
-        if (!SetEnvironmentVariable(name, value) &&
+        if (!SetEnvironmentVariableW(wname, value ? wvalue : NULL) &&
             GetLastError() != ERROR_ENVVAR_NOT_FOUND) goto fail;
     }
     if (failed) {
@@ -6881,7 +6876,7 @@ static const rb_data_type_t env_data_type = {
  *
  *  ==== User-Defined +Hash+ Keys
  *
- *  To be useable as a +Hash+ key, objects must implement the methods <code>hash</code> and <code>eql?</code>.
+ *  To be usable as a +Hash+ key, objects must implement the methods <code>hash</code> and <code>eql?</code>.
  *  Note: this requirement does not apply if the +Hash+ uses #compare_by_identity since comparison will then
  *  rely on the keys' object id instead of <code>hash</code> and <code>eql?</code>.
  *
@@ -7058,10 +7053,9 @@ static const rb_data_type_t env_data_type = {
  *  - #empty?: Returns whether there are no entries.
  *  - #eql?: Returns whether a given object is equal to +self+.
  *  - #hash: Returns the integer hash code.
- *  - #has_value?: Returns whether a given object is a value in +self+.
- *  - #include?, #has_key?, #member?, #key?: Returns whether a given object is a key in +self+.
- *  - #length, #size: Returns the count of entries.
- *  - #value?: Returns whether a given object is a value in +self+.
+ *  - #has_value? (aliased as #value?): Returns whether a given object is a value in +self+.
+ *  - #include? (aliased as #has_key?, #member?, #key?): Returns whether a given object is a key in +self+.
+ *  - #size (aliased as #length): Returns the count of entries.
  *
  *  ==== Methods for Comparing
  *
@@ -7088,10 +7082,10 @@ static const rb_data_type_t env_data_type = {
  *
  *  ==== Methods for Assigning
  *
- *  - #[]=, #store: Associates a given key with a given value.
+ *  - #[]= (aliased as #store): Associates a given key with a given value.
  *  - #merge: Returns the hash formed by merging each given hash into a copy of +self+.
- *  - #merge!, #update: Merges each given hash into +self+.
- *  - #replace: Replaces the entire contents of +self+ with the contents of a given hash.
+ *  - #update (aliased as #merge!): Merges each given hash into +self+.
+ *  - #replace (aliased as #initialize_copy): Replaces the entire contents of +self+ with the contents of a given hash.
  *
  *  ==== Methods for Deleting
  *
@@ -7101,7 +7095,7 @@ static const rb_data_type_t env_data_type = {
  *  - #compact!: Removes all +nil+-valued entries from +self+.
  *  - #delete: Removes the entry for a given key.
  *  - #delete_if: Removes entries selected by a given block.
- *  - #filter!, #select!: Keep only those entries selected by a given block.
+ *  - #select! (aliased as #filter!): Keep only those entries selected by a given block.
  *  - #keep_if: Keep only those entries selected by a given block.
  *  - #reject!: Removes entries selected by a given block.
  *  - #shift: Removes and returns the first entry.
@@ -7110,18 +7104,18 @@ static const rb_data_type_t env_data_type = {
  *
  *  - #compact: Returns a copy of +self+ with all +nil+-valued entries removed.
  *  - #except: Returns a copy of +self+ with entries removed for specified keys.
- *  - #filter, #select: Returns a copy of +self+ with only those entries selected by a given block.
+ *  - #select (aliased as #filter): Returns a copy of +self+ with only those entries selected by a given block.
  *  - #reject: Returns a copy of +self+ with entries removed as specified by a given block.
  *  - #slice: Returns a hash containing the entries for given keys.
  *
  *  ==== Methods for Iterating
- *  - #each, #each_pair: Calls a given block with each key-value pair.
+ *  - #each_pair (aliased as #each): Calls a given block with each key-value pair.
  *  - #each_key: Calls a given block with each key.
  *  - #each_value: Calls a given block with each value.
  *
  *  ==== Methods for Converting
  *
- *  - #inspect, #to_s: Returns a new String containing the hash entries.
+ *  - #inspect (aliased as #to_s): Returns a new String containing the hash entries.
  *  - #to_a: Returns a new array of 2-element arrays;
  *    each nested array contains a key-value pair from +self+.
  *  - #to_h: Returns +self+ if a +Hash+;
@@ -7158,6 +7152,7 @@ Init_Hash(void)
     rb_define_singleton_method(rb_cHash, "try_convert", rb_hash_s_try_convert, 1);
     rb_define_method(rb_cHash, "initialize_copy", rb_hash_replace, 1);
     rb_define_method(rb_cHash, "rehash", rb_hash_rehash, 0);
+    rb_define_method(rb_cHash, "freeze", rb_hash_freeze, 0);
 
     rb_define_method(rb_cHash, "to_hash", rb_hash_to_hash, 0);
     rb_define_method(rb_cHash, "to_h", rb_hash_to_h, 0);
@@ -7243,6 +7238,9 @@ Init_Hash(void)
 
     rb_define_singleton_method(rb_cHash, "ruby2_keywords_hash?", rb_hash_s_ruby2_keywords_hash_p, 1);
     rb_define_singleton_method(rb_cHash, "ruby2_keywords_hash", rb_hash_s_ruby2_keywords_hash, 1);
+
+    rb_cHash_empty_frozen = rb_hash_freeze(rb_hash_new());
+    rb_vm_register_global_object(rb_cHash_empty_frozen);
 
     /* Document-class: ENV
      *

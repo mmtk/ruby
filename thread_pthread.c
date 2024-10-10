@@ -1320,7 +1320,7 @@ void
 rb_ractor_sched_sleep(rb_execution_context_t *ec, rb_ractor_t *cr, rb_unblock_function_t *ubf)
 {
     // ractor lock of cr is acquired
-    // r is sleeping statuss
+    // r is sleeping status
     rb_thread_t * volatile th = rb_ec_thread_ptr(ec);
     struct rb_thread_sched *sched = TH_SCHED(th);
     cr->sync.wait.waiting_thread = th; // TODO: multi-thread
@@ -2360,7 +2360,8 @@ rb_threadptr_sched_free(rb_thread_t *th)
     }
 
     ruby_xfree(th->sched.context);
-    VM_ASSERT((th->sched.context = NULL) == NULL);
+    th->sched.context = NULL;
+    // VM_ASSERT(th->sched.context == NULL);
 #else
     ruby_xfree(th->sched.context_stack);
     native_thread_destroy(th->nt);
@@ -3344,6 +3345,52 @@ native_sleep(rb_thread_t *th, rb_hrtime_t *rel)
     }
 
     RUBY_DEBUG_LOG("wakeup");
+}
+
+// fork read-write lock (only for pthread)
+static pthread_rwlock_t rb_thread_fork_rw_lock = PTHREAD_RWLOCK_INITIALIZER;
+
+void
+rb_thread_release_fork_lock(void)
+{
+    int r;
+    if ((r = pthread_rwlock_unlock(&rb_thread_fork_rw_lock))) {
+        rb_bug_errno("pthread_rwlock_unlock", r);
+    }
+}
+
+void
+rb_thread_reset_fork_lock(void)
+{
+    int r;
+    if ((r = pthread_rwlock_destroy(&rb_thread_fork_rw_lock))) {
+        rb_bug_errno("pthread_rwlock_destroy", r);
+    }
+
+    if ((r = pthread_rwlock_init(&rb_thread_fork_rw_lock, NULL))) {
+        rb_bug_errno("pthread_rwlock_init", r);
+    }
+}
+
+void *
+rb_thread_prevent_fork(void *(*func)(void *), void *data)
+{
+    int r;
+    if ((r = pthread_rwlock_rdlock(&rb_thread_fork_rw_lock))) {
+        rb_bug_errno("pthread_rwlock_rdlock", r);
+    }
+    void *result = func(data);
+    rb_thread_release_fork_lock();
+    return result;
+}
+
+void
+rb_thread_acquire_fork_lock(void)
+{
+    int r;
+    if ((r = pthread_rwlock_wrlock(&rb_thread_fork_rw_lock))) {
+        rb_bug_errno("pthread_rwlock_wrlock", r);
+    }
 }
 
 // thread internal event hooks (only for pthread)

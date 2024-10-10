@@ -44,6 +44,9 @@
 #include "internal/mmtk.h"
 #endif
 
+// conditional compilation macros for MMTk
+#include "internal/mmtk_macros.h"
+
 RUBY_EXTERN rb_serial_t ruby_vm_global_cvar_state;
 #define GET_GLOBAL_CVAR_STATE() (ruby_vm_global_cvar_state)
 
@@ -101,6 +104,8 @@ rb_namespace_p(VALUE obj)
  * to not be anonymous. <code>*permanent</code> is set to 1
  * if +classpath+ has no anonymous components. There is no builtin
  * Ruby level APIs that can change a permanent +classpath+.
+ *
+ * YJIT needs this function to not allocate.
  */
 static VALUE
 classname(VALUE klass, bool *permanent)
@@ -131,6 +136,7 @@ rb_mod_name0(VALUE klass, bool *permanent)
 VALUE
 rb_mod_name(VALUE mod)
 {
+    // YJIT needs this function to not allocate.
     bool permanent;
     return classname(mod, &permanent);
 }
@@ -1111,20 +1117,21 @@ gen_ivtbl_resize(struct gen_ivtbl *old, uint32_t n)
 void
 rb_mark_generic_ivar(VALUE obj)
 {
-    struct gen_ivtbl *ivtbl;
+    st_data_t data;
 
-#if USE_MMTK
     int r = 0;
-    if (rb_mmtk_enabled_p()) {
-        ivtbl = mmtk_get_givtbl_during_gc((MMTk_ObjectReference)obj);
-        r = (ivtbl != NULL);
-    } else {
-        r = rb_gen_ivtbl_get(obj, 0, &ivtbl);
-    }
+    WHEN_USING_MMTK2({
+        // When using copying GC, if `obj` is alredy moved, we won't find it in `generic_iv_tbl_`
+        // because `generic_iv_tbl_` is not updated yet.  The Rust part of the binding maintains
+        // another table for moved objects.  We call into the Rust part.
+        data = (st_data_t)mmtk_get_givtbl_during_gc((MMTk_ObjectReference)obj);
+        r = (data != 0);
+    }, {
+        r = st_lookup(generic_ivtbl_no_ractor_check(obj), (st_data_t)obj, &data);
+    })
+
     if (r) {
-#else
-    if (rb_gen_ivtbl_get(obj, 0, &ivtbl)) {
-#endif
+        struct gen_ivtbl *ivtbl = (struct gen_ivtbl *)data;
         if (rb_shape_obj_too_complex(obj)) {
             rb_mark_tbl_no_pin(ivtbl->as.complex.table);
         }

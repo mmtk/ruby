@@ -877,7 +877,7 @@ class TestRubyOptions < Test::Unit::TestCase
   end
 
   def assert_segv(args, message=nil, list: SEGVTest::ExpectedStderrList, **opt, &block)
-    pend "macOS 15 beta is not working with this assertion" if /darwin/ =~ RUBY_PLATFORM && /15/ =~ `sw_vers -productVersion`
+    pend "macOS 15 beta is not working with this assertion" if macos?(15)
 
     # We want YJIT to be enabled in the subprocess if it's enabled for us
     # so that the Ruby description matches.
@@ -922,7 +922,7 @@ class TestRubyOptions < Test::Unit::TestCase
   end
 
   def assert_crash_report(path, cmd = nil, &block)
-    pend "macOS 15 beta is not working with this assertion" if /darwin/ =~ RUBY_PLATFORM && /15/ =~ `sw_vers -productVersion`
+    pend "macOS 15 beta is not working with this assertion" if macos?(15)
 
     Dir.mktmpdir("ruby_crash_report") do |dir|
       list = SEGVTest::ExpectedStderrList

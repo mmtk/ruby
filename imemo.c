@@ -5,6 +5,9 @@
 #include "internal/imemo.h"
 #include "vm_callinfo.h"
 
+// conditional compilation macros for MMTk
+#include "internal/mmtk_macros.h"
+
 size_t rb_iseq_memsize(const rb_iseq_t *iseq);
 void rb_iseq_mark_and_move(rb_iseq_t *iseq, bool reference_updating);
 void rb_iseq_free(const rb_iseq_t *iseq);
@@ -181,20 +184,21 @@ rb_imemo_memsize(VALUE obj)
  * ========================================================================= */
 
 static enum rb_id_table_iterator_result
-cc_table_mark_i(ID id, VALUE ccs_ptr, void *data)
+cc_table_mark_i(VALUE ccs_ptr, void *data)
 {
     struct rb_class_cc_entries *ccs = (struct rb_class_cc_entries *)ccs_ptr;
     VM_ASSERT(vm_ccs_p(ccs));
-#if USE_MMTK
-    if (!rb_mmtk_enabled_p()) {
+
+#if VM_CHECK_MODE > 0
+    VALUE klass = (VALUE)data;
+
+    WHEN_NOT_USING_MMTK({
     // ccs->cme can point to heap object, too.
     // Evacuating GC (such as Immix) may have moved it.
-#endif
-    VM_ASSERT(id == ccs->cme->called_id);
-#if USE_MMTK
-    } else {
-        VM_ASSERT(id == 0);
-    }
+    VALUE lookup_val;
+    VM_ASSERT(rb_id_table_lookup(RCLASS_CC_TBL(klass), ccs->cme->called_id, &lookup_val));
+    VM_ASSERT(lookup_val == ccs_ptr);
+    })
 #endif
 
     if (METHOD_ENTRY_INVALIDATED(ccs->cme)) {
@@ -227,7 +231,7 @@ cc_table_mark_i(ID id, VALUE ccs_ptr, void *data)
             // With evacuating GC, they may have been moved, too.
             // It is not safe to inspect reference fields during tracing.
 #endif
-            VM_ASSERT((VALUE)data == ccs->entries[i].cc->klass);
+            VM_ASSERT(klass == ccs->entries[i].cc->klass);
             VM_ASSERT(vm_cc_check_cme(ccs->entries[i].cc, ccs->cme));
 #if USE_MMTK
             }
@@ -239,31 +243,12 @@ cc_table_mark_i(ID id, VALUE ccs_ptr, void *data)
     }
 }
 
-#if USE_MMTK
-static enum rb_id_table_iterator_result
-rb_mmtk_cc_table_mark_i_no_id(VALUE ccs_ptr, void *data_ptr)
-{
-    return cc_table_mark_i(0, ccs_ptr, data_ptr);
-}
-#endif
-
 void
 rb_cc_table_mark(VALUE klass)
 {
     struct rb_id_table *cc_tbl = RCLASS_CC_TBL(klass);
     if (cc_tbl) {
-#if USE_MMTK
-        if (rb_mmtk_enabled_p()) {
-            // Note: rb_id_table_foreach will look up the ID from keys by accessing
-            // arrays in the heap during key2id, but the id is only used for
-            // assertion which fails with an evacuating GC (such as Immix) anyway.
-            rb_id_table_foreach_values(cc_tbl, rb_mmtk_cc_table_mark_i_no_id, (void *)klass);
-        } else {
-#endif
-        rb_id_table_foreach(cc_tbl, cc_table_mark_i, (void *)klass);
-#if USE_MMTK
-        }
-#endif
+        rb_id_table_foreach_values(cc_tbl, cc_table_mark_i, (void *)klass);
     }
 }
 

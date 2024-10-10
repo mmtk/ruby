@@ -1,28 +1,6 @@
 #include "../fbuffer/fbuffer.h"
 #include "parser.h"
 
-#if defined HAVE_RUBY_ENCODING_H
-# define EXC_ENCODING rb_utf8_encoding(),
-# ifndef HAVE_RB_ENC_RAISE
-static void
-enc_raise(rb_encoding *enc, VALUE exc, const char *fmt, ...)
-{
-    va_list args;
-    VALUE mesg;
-
-    va_start(args, fmt);
-    mesg = rb_enc_vsprintf(enc, fmt, args);
-    va_end(args);
-
-    rb_exc_raise(rb_exc_new3(exc, mesg));
-}
-#   define rb_enc_raise enc_raise
-# endif
-#else
-# define EXC_ENCODING /* nothing */
-# define rb_enc_raise rb_raise
-#endif
-
 /* unicode */
 
 static const signed char digit_values[256] = {
@@ -42,26 +20,28 @@ static const signed char digit_values[256] = {
     -1, -1, -1, -1, -1, -1, -1
 };
 
-static UTF32 unescape_unicode(const unsigned char *p)
+static uint32_t unescape_unicode(const unsigned char *p)
 {
+    const uint32_t replacement_char = 0xFFFD;
+
     signed char b;
-    UTF32 result = 0;
+    uint32_t result = 0;
     b = digit_values[p[0]];
-    if (b < 0) return UNI_REPLACEMENT_CHAR;
+    if (b < 0) return replacement_char;
     result = (result << 4) | (unsigned char)b;
     b = digit_values[p[1]];
-    if (b < 0) return UNI_REPLACEMENT_CHAR;
+    if (b < 0) return replacement_char;
     result = (result << 4) | (unsigned char)b;
     b = digit_values[p[2]];
-    if (b < 0) return UNI_REPLACEMENT_CHAR;
+    if (b < 0) return replacement_char;
     result = (result << 4) | (unsigned char)b;
     b = digit_values[p[3]];
-    if (b < 0) return UNI_REPLACEMENT_CHAR;
+    if (b < 0) return replacement_char;
     result = (result << 4) | (unsigned char)b;
     return result;
 }
 
-static int convert_UTF32_to_UTF8(char *buf, UTF32 ch)
+static int convert_UTF32_to_UTF8(char *buf, uint32_t ch)
 {
     int len = 1;
     if (ch <= 0x7F) {
@@ -222,14 +202,14 @@ static char *JSON_parse_object(JSON_Parser *json, char *p, char *pe, VALUE *resu
         if (json->allow_nan) {
             *result = CNaN;
         } else {
-            rb_enc_raise(EXC_ENCODING eParserError, "unexpected token at '%s'", p - 2);
+            rb_enc_raise(rb_utf8_encoding(), eParserError, "unexpected token at '%s'", p - 2);
         }
     }
     action parse_infinity {
         if (json->allow_nan) {
             *result = CInfinity;
         } else {
-            rb_enc_raise(EXC_ENCODING eParserError, "unexpected token at '%s'", p - 7);
+            rb_enc_raise(rb_utf8_encoding(), eParserError, "unexpected token at '%s'", p - 7);
         }
     }
     action parse_string {
@@ -245,7 +225,7 @@ static char *JSON_parse_object(JSON_Parser *json, char *p, char *pe, VALUE *resu
                 fexec p + 10;
                 fhold; fbreak;
             } else {
-                rb_enc_raise(EXC_ENCODING eParserError, "unexpected token at '%s'", p);
+                rb_enc_raise(rb_utf8_encoding(), eParserError, "unexpected token at '%s'", p);
             }
         }
         np = JSON_parse_float(json, fpc, pe, result);
@@ -447,7 +427,7 @@ static char *JSON_parse_array(JSON_Parser *json, char *p, char *pe, VALUE *resul
     if(cs >= JSON_array_first_final) {
         return p + 1;
     } else {
-        rb_enc_raise(EXC_ENCODING eParserError, "unexpected token at '%s'", p);
+        rb_enc_raise(rb_utf8_encoding(), eParserError, "unexpected token at '%s'", p);
         return NULL;
     }
 }
@@ -511,25 +491,35 @@ static VALUE json_string_unescape(char *string, char *stringEnd, int intern, int
                         ruby_xfree(bufferStart);
                       }
                       rb_enc_raise(
-                        EXC_ENCODING eParserError,
+                        rb_utf8_encoding(), eParserError,
                         "incomplete unicode character escape sequence at '%s'", p
                       );
                     } else {
-                        UTF32 ch = unescape_unicode((unsigned char *) ++pe);
+                        uint32_t ch = unescape_unicode((unsigned char *) ++pe);
                         pe += 3;
-                        if (UNI_SUR_HIGH_START == (ch & 0xFC00)) {
+                        /* To handle values above U+FFFF, we take a sequence of
+                         * \uXXXX escapes in the U+D800..U+DBFF then
+                         * U+DC00..U+DFFF ranges, take the low 10 bits from each
+                         * to make a 20-bit number, then add 0x10000 to get the
+                         * final codepoint.
+                         *
+                         * See Unicode 15: 3.8 "Surrogates", 5.3 "Handling
+                         * Surrogate Pairs in UTF-16", and 23.6 "Surrogates
+                         * Area".
+                         */
+                        if ((ch & 0xFC00) == 0xD800) {
                             pe++;
                             if (pe > stringEnd - 6) {
                               if (bufferSize > MAX_STACK_BUFFER_SIZE) {
                                 ruby_xfree(bufferStart);
                               }
                               rb_enc_raise(
-                                EXC_ENCODING eParserError,
+                                rb_utf8_encoding(), eParserError,
                                 "incomplete surrogate pair at '%s'", p
                                 );
                             }
                             if (pe[0] == '\\' && pe[1] == 'u') {
-                                UTF32 sur = unescape_unicode((unsigned char *) pe + 2);
+                                uint32_t sur = unescape_unicode((unsigned char *) pe + 2);
                                 ch = (((ch & 0x3F) << 10) | ((((ch >> 6) & 0xF) + 1) << 16)
                                         | (sur & 0x3FF));
                                 pe += 5;
@@ -849,7 +839,7 @@ static VALUE cParser_parse(VALUE self)
   if (cs >= JSON_first_final && p == pe) {
     return result;
   } else {
-    rb_enc_raise(EXC_ENCODING eParserError, "unexpected token at '%s'", p);
+    rb_enc_raise(rb_utf8_encoding(), eParserError, "unexpected token at '%s'", p);
     return Qnil;
   }
 }

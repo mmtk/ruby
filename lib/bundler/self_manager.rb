@@ -85,7 +85,7 @@ module Bundler
         cmd = [*Shellwords.shellsplit(bundler_spec_original_cmd), *ARGV]
       else
         cmd = [$PROGRAM_NAME, *ARGV]
-        cmd.unshift(Gem.ruby) unless File.executable?($PROGRAM_NAME)
+        cmd.unshift(Gem.ruby) unless File.executable?($PROGRAM_NAME) || $PROGRAM_NAME.end_with?(".bat")
       end
 
       Bundler.with_original_env do
@@ -98,15 +98,14 @@ module Bundler
 
     def needs_switching?
       autoswitching_applies? &&
-        released?(lockfile_version) &&
-        !running?(lockfile_version) &&
-        !updating? &&
-        Bundler.settings[:version] != "system"
+        Bundler.settings[:version] != "system" &&
+        released?(restart_version) &&
+        !running?(restart_version) &&
+        !updating?
     end
 
     def autoswitching_applies?
       ENV["BUNDLER_VERSION"].nil? &&
-        Bundler.rubygems.supports_bundler_trampolining? &&
         ruby_can_restart_with_same_arguments? &&
         SharedHelpers.in_bundle? &&
         lockfile_version
