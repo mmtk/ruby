@@ -114,6 +114,7 @@ jobs:
           cd ../src/gc/mmtk
           cargo build ${{ matrix.build != 'debug' && format('--{0}', matrix.build) || format('') }}
           echo "RUST_LOG=" >> $GITHUB_ENV
+          echo "EXCLUDES=../src/test/.excludes-mmtk" >> $GITHUB_ENV
         if: ${{ matrix.shared_gc && matrix.gc_name == 'mmtk' }}
 
       - name: Build shared GC

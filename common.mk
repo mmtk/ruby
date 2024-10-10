@@ -1908,7 +1908,6 @@ MMTK_BUILD=debug
 MMTK_SRC_PATH=$(srcdir)/gc/mmtk
 MMTK_LIB_PATH=$(srcdir)/gc/mmtk/target/$(MMTK_BUILD)/libmmtk_ruby.$(LIBEXT)
 
-
 shared-gc: probes.h
 	$(Q) if test -z $(shared_gc_dir); then \
 		echo "You must configure with --with-shared-gc to use shared GC"; \
