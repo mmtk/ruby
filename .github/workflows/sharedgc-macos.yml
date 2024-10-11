@@ -1,4 +1,4 @@
-name: macOS
+name: Shared GC (macOS)
 on:
   push:
     paths-ignore:
@@ -26,18 +26,15 @@ jobs:
       matrix:
         include:
           - test_task: check
-            os: macos-14
-          - test_task: test-all
-            test_opts: --repeat-count=2
-            os: macos-14
-          - test_task: test-bundler-parallel
-            os: macos-14
-          - test_task: test-bundled-gems
+            gc_name: 'mmtk'
+            build: 'debug'
+            configure: '--with-shared-gc=/Users/runner/ruby_gc'
             os: macos-14
           - test_task: check
-            os: macos-12
-          - test_task: check
-            os: macos-13
+            gc_name: 'mmtk'
+            build: 'release'
+            configure: '--with-shared-gc=/Users/runner/ruby_gc'
+            os: macos-14
       fail-fast: false
 
     env:
@@ -92,6 +89,20 @@ jobs:
         env:
           configure: ${{ matrix.configure }} ${ruby_configure_args}
         run: ../src/configure -C --disable-install-doc ${{ env.configure }}
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Build MMTK Ruby lib
+        run: |
+          cd ../src/gc/mmtk
+          cargo build ${{ matrix.build != 'debug' && format('--{0}', matrix.build) || format('') }}
+          echo "RUST_LOG=" >> $GITHUB_ENV
+          echo "EXCLUDES=../src/test/.excludes-mmtk" >> $GITHUB_ENV
+        if: ${{ matrix.gc_name == 'mmtk' }}
+
+      - name: Build shared GC
+        run: |
+          echo "RUBY_GC_LIBRARY=librubygc.${{ matrix.gc_name }}.dylib" >> $GITHUB_ENV
+          make shared-gc SHARED_GC=${{ matrix.gc_name }} MMTK_BUILD=${{ matrix.build }}
 
       - run: make prepare-gems
         if: ${{ matrix.test_task == 'test-bundled-gems' }}
