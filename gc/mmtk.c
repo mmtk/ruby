@@ -476,11 +476,6 @@ rb_gc_impl_ractor_cache_free(void *objspace_ptr, void *cache_ptr)
 void rb_gc_impl_set_params(void *objspace_ptr) { }
 
 static VALUE gc_verify_internal_consistency(VALUE self) { return Qnil; }
-static VALUE gc_compact(VALUE self) { return Qnil; }
-static VALUE gc_get_auto_compact(VALUE self) { return Qnil; }
-static VALUE gc_set_auto_compact(VALUE self, VALUE val) { return Qnil; }
-static VALUE gc_compact_stats(VALUE self) { return Qnil; }
-static VALUE gc_verify_compaction_references(int argc, VALUE* argv, VALUE self) { return Qnil; }
 
 void
 rb_gc_impl_init(void)
@@ -496,11 +491,11 @@ rb_gc_impl_init(void)
     // no-ops for compatibility
     rb_define_singleton_method(rb_mGC, "verify_internal_consistency", gc_verify_internal_consistency, 0);
 
-    rb_define_singleton_method(rb_mGC, "compact", gc_compact, 0);
-    rb_define_singleton_method(rb_mGC, "auto_compact", gc_get_auto_compact, 0);
-    rb_define_singleton_method(rb_mGC, "auto_compact=", gc_set_auto_compact, 1);
-    rb_define_singleton_method(rb_mGC, "latest_compact_info", gc_compact_stats, 0);
-    rb_define_singleton_method(rb_mGC, "verify_compaction_references", gc_verify_compaction_references, -1);
+    rb_define_singleton_method(rb_mGC, "compact", rb_f_notimplement, 0);
+    rb_define_singleton_method(rb_mGC, "auto_compact", rb_f_notimplement, 0);
+    rb_define_singleton_method(rb_mGC, "auto_compact=", rb_f_notimplement, 1);
+    rb_define_singleton_method(rb_mGC, "latest_compact_info", rb_f_notimplement, 0);
+    rb_define_singleton_method(rb_mGC, "verify_compaction_references", rb_f_notimplement, -1);
 }
 
 static size_t heap_sizes[6] = {
