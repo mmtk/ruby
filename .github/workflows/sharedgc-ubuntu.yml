@@ -101,7 +101,7 @@ jobs:
 
       - name: Build shared GC
         run: |
-          echo "RUBY_GC_LIBRARY=librubygc.${{ matrix.gc_name }}.so" >> $GITHUB_ENV
+          echo "RUBY_GC_LIBRARY=${{ matrix.gc_name }}" >> $GITHUB_ENV
           make shared-gc SHARED_GC=${{ matrix.gc_name }} MMTK_BUILD=${{ matrix.build }}
 
       - name: Verify MMTk bindgen
