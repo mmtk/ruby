@@ -9,6 +9,7 @@
 #include "gc/gc_impl.h"
 #include "gc/mmtk.h"
 
+#include "ccan/list/list.h"
 #include "darray.h"
 
 struct objspace {
@@ -27,7 +28,7 @@ struct objspace {
     struct MMTk_final_job *finalizer_jobs;
     rb_postponed_job_handle_t finalizer_postponed_job;
 
-    struct MMTk_ractor_cache *ractor_caches;
+    struct ccan_list_head ractor_caches;
     unsigned long live_ractor_cache_count;
 
     pthread_mutex_t mutex;
@@ -40,7 +41,7 @@ struct objspace {
 };
 
 struct MMTk_ractor_cache {
-    struct MMTk_ractor_cache *next_ractor_cache;
+    struct ccan_list_node list_node;
 
     MMTk_Mutator *mutator;
     bool gc_mutator_p;
@@ -187,12 +188,11 @@ rb_mmtk_get_mutators(void (*visit_mutator)(MMTk_Mutator *mutator, void *data), v
 {
     struct objspace *objspace = rb_gc_get_objspace();
 
-    struct MMTk_ractor_cache *ractor_cache = objspace->ractor_caches;
+    struct MMTk_ractor_cache *ractor_cache;
     RUBY_ASSERT(ractor_cache != NULL);
 
-    while (ractor_cache != NULL) {
+    ccan_list_for_each(&objspace->ractor_caches, ractor_cache, list_node) {
         visit_mutator(ractor_cache->mutator, data);
-        ractor_cache = ractor_cache->next_ractor_cache;
     }
 }
 
@@ -429,6 +429,8 @@ rb_gc_impl_objspace_init(void *objspace_ptr)
     objspace->finalizer_table = st_init_numtable();
     objspace->finalizer_postponed_job = rb_postponed_job_preregister(0, gc_run_finalizers, objspace);
 
+    ccan_list_head_init(&objspace->ractor_caches);
+
     objspace->mutex = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
     objspace->cond_world_stopped = (pthread_cond_t)PTHREAD_COND_INITIALIZER;
     objspace->cond_world_started = (pthread_cond_t)PTHREAD_COND_INITIALIZER;
@@ -450,8 +452,7 @@ rb_gc_impl_ractor_cache_alloc(void *objspace_ptr, void *ractor)
     objspace->live_ractor_cache_count++;
 
     struct MMTk_ractor_cache *cache = malloc(sizeof(struct MMTk_ractor_cache));
-    cache->next_ractor_cache = objspace->ractor_caches;
-    objspace->ractor_caches = cache;
+    ccan_list_add(&objspace->ractor_caches, &cache->list_node);
 
     cache->mutator = mmtk_bind_mutator(cache);
 
@@ -459,13 +460,17 @@ rb_gc_impl_ractor_cache_alloc(void *objspace_ptr, void *ractor)
 }
 
 void
-rb_gc_impl_ractor_cache_free(void *objspace_ptr, void *cache)
+rb_gc_impl_ractor_cache_free(void *objspace_ptr, void *cache_ptr)
 {
-    // TODO: implement mmtk_destroy_mutator
     struct objspace *objspace = objspace_ptr;
+    struct MMTk_ractor_cache *cache = cache_ptr;
+
+    ccan_list_del(&cache->list_node);
 
     RUBY_ASSERT(objspace->live_ractor_cache_count > 1);
     objspace->live_ractor_cache_count--;
+
+    mmtk_destroy_mutator(cache->mutator);
 }
 
 void rb_gc_impl_set_params(void *objspace_ptr) { }

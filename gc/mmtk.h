@@ -102,6 +102,8 @@ void mmtk_initialize_collection(MMTk_VMThread tls);
 
 MMTk_Mutator *mmtk_bind_mutator(MMTk_VMMutatorThread tls);
 
+void mmtk_destroy_mutator(MMTk_Mutator *mutator);
+
 void mmtk_handle_user_collection_request(MMTk_VMMutatorThread tls);
 
 void mmtk_set_gc_enabled(bool enable);

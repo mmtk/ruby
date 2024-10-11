@@ -81,6 +81,14 @@ pub extern "C" fn mmtk_bind_mutator(tls: VMMutatorThread) -> *mut RubyMutator {
     Box::into_raw(memory_manager::bind_mutator(mmtk(), tls))
 }
 
+#[no_mangle]
+pub extern "C" fn mmtk_destroy_mutator(mutator: *mut RubyMutator) {
+    // notify mmtk-core about destroyed mutator
+    memory_manager::destroy_mutator(unsafe { &mut *mutator });
+    // turn the ptr back to a box, and let Rust properly reclaim it
+    let _ = unsafe { Box::from_raw(mutator) };
+}
+
 // =============== GC ===============
 
 #[no_mangle]
