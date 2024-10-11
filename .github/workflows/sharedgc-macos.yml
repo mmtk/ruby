@@ -104,6 +104,17 @@ jobs:
           echo "RUBY_GC_LIBRARY=librubygc.${{ matrix.gc_name }}.dylib" >> $GITHUB_ENV
           make shared-gc SHARED_GC=${{ matrix.gc_name }} MMTK_BUILD=${{ matrix.build }}
 
+      - name: Verify MMTk bindgen
+        run: |
+          cd ../src/gc/mmtk
+          cargo install --force cbindgen@0.26.0
+          cbindgen --config cbindgen.toml --output ../mmtk.h
+          if read -n1 -d '' < <(git diff ../mmtk.h); then
+            git diff ../mmtk.h
+            exit 1
+          fi
+        if: ${{ matrix.gc_name == 'mmtk' }}
+
       - run: make prepare-gems
         if: ${{ matrix.test_task == 'test-bundled-gems' }}
 
