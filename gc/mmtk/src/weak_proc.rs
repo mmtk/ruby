@@ -83,7 +83,7 @@ impl WeakProcessor {
         worker.add_work(WorkBucketStage::Prepare, UpdateFinalizerObjIdTables);
 
         let global_tables_count = (crate::upcalls().global_tables_count)();
-        let work_packets = (0..(global_tables_count - 1))
+        let work_packets = (0..global_tables_count)
                 .map(|i| {
                     Box::new(UpdateGlobalTables { idx: i }) as _
                 })
