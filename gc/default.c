@@ -2269,7 +2269,7 @@ newobj_init(VALUE klass, VALUE flags, int wb_protected, rb_objspace_t *objspace,
 #if USE_MMTK
     if (rb_mmtk_enabled_p()) {
         rb_mmtk_maybe_register_obj_free_candidate(obj);
-        rb_mmtk_maybe_register_ppp(obj);
+        rb_mmtk_maybe_register_initial_ppp(obj);
     }
 #endif
 

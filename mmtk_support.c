@@ -6,6 +6,7 @@
 #include "internal/imemo.h"
 #include "internal/thread.h"
 #include "internal/variable.h"
+#include "iseq.h"
 #include "ruby/ruby.h"
 #include "ractor_core.h"
 #include "vm_core.h"
@@ -633,8 +634,13 @@ rb_mmtk_maybe_forward(VALUE value)
 // PPP support
 ////////////////////////////////////////////////////////////////////////////////
 
+// Return true if an object is a PPP when allocated.
+// This does not include PPP types that may become PPPs during its lifetime, such as
+// -   Hash (when starting to compare keys by identity)
+// -   iseq (since ISEQ_COMPILE_DATA_ALLOC)
 static bool
-rb_mmtk_is_ppp(VALUE obj) {
+rb_mmtk_is_initially_ppp(VALUE obj)
+{
     RUBY_ASSERT(!rb_special_const_p(obj));
 
     switch (RB_BUILTIN_TYPE(obj)) {
@@ -642,7 +648,6 @@ rb_mmtk_is_ppp(VALUE obj) {
         return true;
       case T_IMEMO:
         switch (imemo_type(obj)) {
-          case imemo_iseq:
           case imemo_tmpbuf:
           case imemo_ast:
           case imemo_ifunc:
@@ -657,6 +662,32 @@ rb_mmtk_is_ppp(VALUE obj) {
     }
 }
 
+// Return true if a registered PPP is no longer a PPP.  Return false otherwise.
+// The return value doesn't matter for objects that are not registered as PPP.
+static bool
+rb_mmtk_is_no_longer_ppp(MMTk_ObjectReference objref)
+{
+    VALUE obj = (VALUE)objref;
+    RUBY_ASSERT(!rb_special_const_p(obj));
+
+    switch (RB_BUILTIN_TYPE(obj)) {
+      case T_IMEMO:
+        switch (imemo_type(obj)) {
+          case imemo_iseq: {
+            if (rb_mmtk_iseq_is_no_longer_ppp((rb_iseq_t*)obj)) {
+                return true;
+            }
+          }
+          default:
+            break;
+        }
+      default:
+        break;
+    }
+
+    return false;
+}
+
 static void
 rb_mmtk_flush_ppp_buffer(struct rb_mmtk_values_buffer *buffer)
 {
@@ -666,14 +697,23 @@ rb_mmtk_flush_ppp_buffer(struct rb_mmtk_values_buffer *buffer)
 }
 
 void
-rb_mmtk_maybe_register_ppp(VALUE obj) {
+rb_mmtk_register_ppp(VALUE obj)
+{
     RUBY_ASSERT(!rb_special_const_p(obj));
 
-    if (rb_mmtk_is_ppp(obj)) {
-        struct rb_mmtk_values_buffer *buffer = &rb_mmtk_mutator_local.ppp_buffer;
-        if (rb_mmtk_values_buffer_append(buffer, obj)) {
-            rb_mmtk_flush_ppp_buffer(buffer);
-        }
+    struct rb_mmtk_values_buffer *buffer = &rb_mmtk_mutator_local.ppp_buffer;
+    if (rb_mmtk_values_buffer_append(buffer, obj)) {
+        rb_mmtk_flush_ppp_buffer(buffer);
+    }
+}
+
+void
+rb_mmtk_maybe_register_initial_ppp(VALUE obj)
+{
+    RUBY_ASSERT(!rb_special_const_p(obj));
+
+    if (rb_mmtk_is_initially_ppp(obj)) {
+        rb_mmtk_register_ppp(obj);
     }
 }
 
@@ -1661,6 +1701,7 @@ MMTk_RubyUpcalls ruby_upcalls = {
     rb_mmtk_scan_misc_roots,
     rb_mmtk_scan_final_jobs_roots,
     rb_mmtk_scan_roots_in_mutator_thread,
+    rb_mmtk_is_no_longer_ppp,
     rb_mmtk_scan_object_ruby_style,
     rb_mmtk_call_gc_mark_children,
     rb_mmtk_call_obj_free,

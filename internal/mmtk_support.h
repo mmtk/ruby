@@ -68,7 +68,8 @@ bool rb_mmtk_object_moved_p(VALUE obj);
 VALUE rb_mmtk_maybe_forward(VALUE object);
 
 // PPP support
-void rb_mmtk_maybe_register_ppp(VALUE obj);
+void rb_mmtk_register_ppp(VALUE obj);
+void rb_mmtk_maybe_register_initial_ppp(VALUE obj);
 
 // Finalization and exiting
 void rb_mmtk_maybe_register_obj_free_candidate(VALUE obj);
