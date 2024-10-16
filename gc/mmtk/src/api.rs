@@ -1,4 +1,5 @@
 use std::sync::atomic::Ordering;
+use mmtk::util::options::PlanSelector;
 
 use crate::abi::RawVecOfObjRef;
 use crate::abi::RubyBindingOptions;
@@ -38,6 +39,12 @@ pub extern "C" fn mmtk_is_reachable(object: ObjectReference) -> bool {
 pub extern "C" fn mmtk_builder_default() -> *mut MMTKBuilder {
     let mut builder = MMTKBuilder::new();
     builder.options.no_finalizer.set(true);
+
+    // TODO(@mattvh): Clean up this hack
+    if matches!(*builder.options.plan, PlanSelector::GenImmix) {
+        let plan_selector = "MarkSweep".parse::<PlanSelector>().unwrap();
+        builder.options.plan.set(plan_selector);
+    }
 
     // Between 1MiB and 500MiB
     builder.options.gc_trigger.set(GCTriggerSelector::DynamicHeapSize(1 << 20, 500 << 20));

@@ -527,6 +527,11 @@ rb_mmtk_builder_init(void)
         break;
     }
 
+    // if the MMTK Plan hasn't already been overridden, use MarkSweep as default, not GenImmix.
+    if (!getenv("MMTK_PLAN")) {
+
+    }
+
     return builder;
 }
 
