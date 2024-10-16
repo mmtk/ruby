@@ -44,8 +44,8 @@ pub extern "C" fn mmtk_builder_default() -> *mut MMTKBuilder {
     let plan_selector = "MarkSweep".parse::<PlanSelector>().unwrap();
     builder.options.plan.set(plan_selector);
 
-    // 100MiB
-    builder.options.gc_trigger.set(GCTriggerSelector::FixedHeapSize(100 << 20));
+    // Between 1MiB and 500MiB
+    builder.options.gc_trigger.set(GCTriggerSelector::DynamicHeapSize(1 << 20, 500 << 20));
 
     Box::into_raw(Box::new(builder))
 }
