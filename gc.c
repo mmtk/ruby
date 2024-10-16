@@ -1195,6 +1195,44 @@ rb_data_free(void *objspace, VALUE obj)
     return true;
 }
 
+void
+rb_gc_obj_free_vm_weak_references(VALUE obj)
+{
+    if (FL_TEST(obj, FL_EXIVAR)) {
+        rb_free_generic_ivar((VALUE)obj);
+        FL_UNSET(obj, FL_EXIVAR);
+    }
+
+    switch (BUILTIN_TYPE(obj)) {
+      case T_STRING:
+        if (FL_TEST(obj, RSTRING_FSTR)) {
+            st_data_t fstr = (st_data_t)obj;
+            st_delete(rb_vm_fstring_table(), &fstr, NULL);
+            RB_DEBUG_COUNTER_INC(obj_str_fstr);
+
+            FL_UNSET(obj, RSTRING_FSTR);
+        }
+        break;
+      case T_SYMBOL:
+        rb_gc_free_dsymbol(obj);
+        break;
+      case T_IMEMO:
+        switch (imemo_type(obj)) {
+          case imemo_callinfo:
+            rb_vm_ci_free((const struct rb_callinfo *)obj);
+            break;
+          case imemo_ment:
+            rb_free_method_entry_vm_weak_references((const rb_method_entry_t *)obj);
+            break;
+          default:
+            break;
+        }
+        break;
+      default:
+        break;
+    }
+}
+
 bool
 rb_gc_obj_free(void *objspace, VALUE obj)
 {
@@ -1209,11 +1247,6 @@ rb_gc_obj_free(void *objspace, VALUE obj)
         break;
       default:
         break;
-    }
-
-    if (FL_TEST(obj, FL_EXIVAR)) {
-        rb_free_generic_ivar((VALUE)obj);
-        FL_UNSET(obj, FL_EXIVAR);
     }
 
     switch (BUILTIN_TYPE(obj)) {
@@ -1399,10 +1432,7 @@ rb_gc_obj_free(void *objspace, VALUE obj)
         break;
 
       case T_SYMBOL:
-        {
-            rb_gc_free_dsymbol(obj);
-            RB_DEBUG_COUNTER_INC(obj_symbol);
-        }
+        RB_DEBUG_COUNTER_INC(obj_symbol);
         break;
 
       case T_IMEMO:

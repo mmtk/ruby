@@ -3030,6 +3030,7 @@ rb_gc_impl_shutdown_free_objects(void *objspace_ptr)
             VALUE vp = (VALUE)p;
             asan_unpoisoning_object(vp) {
                 if (RB_BUILTIN_TYPE(vp) != T_NONE) {
+                    rb_gc_obj_free_vm_weak_references(vp);
                     rb_gc_obj_free(objspace, vp);
                 }
             }
@@ -3102,6 +3103,7 @@ rb_gc_impl_shutdown_call_finalizer(void *objspace_ptr)
             VALUE vp = (VALUE)p;
             asan_unpoisoning_object(vp) {
                 if (rb_gc_shutdown_call_finalizer_p(vp)) {
+                    rb_gc_obj_free_vm_weak_references(vp);
                     rb_gc_obj_free(objspace, vp);
                 }
             }
@@ -3529,6 +3531,7 @@ gc_sweep_plane(rb_objspace_t *objspace, rb_heap_t *heap, uintptr_t p, bits_t bit
                 rb_gc_event_hook(vp, RUBY_INTERNAL_EVENT_FREEOBJ);
 
                 bool has_object_id = FL_TEST(vp, FL_SEEN_OBJ_ID);
+                rb_gc_obj_free_vm_weak_references(vp);
                 if (rb_gc_obj_free(objspace, vp)) {
                     if (has_object_id) {
                         obj_free_object_id(objspace, vp);
