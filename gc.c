@@ -3262,7 +3262,7 @@ struct global_vm_table_foreach_data {
 };
 
 static int
-vm_table_foreach(st_data_t key, st_data_t value, st_data_t data, int error)
+vm_weak_table_foreach_key(st_data_t key, st_data_t value, st_data_t data, int error)
 {
     struct global_vm_table_foreach_data *iter_data = (struct global_vm_table_foreach_data *)data;
 
@@ -3270,7 +3270,7 @@ vm_table_foreach(st_data_t key, st_data_t value, st_data_t data, int error)
 }
 
 static int
-vm_table_update(st_data_t *key, st_data_t *value, st_data_t data, int existing)
+vm_weak_table_foreach_update_key(st_data_t *key, st_data_t *value, st_data_t data, int existing)
 {
     struct global_vm_table_foreach_data *iter_data = (struct global_vm_table_foreach_data *)data;
 
@@ -3278,9 +3278,30 @@ vm_table_update(st_data_t *key, st_data_t *value, st_data_t data, int existing)
 }
 
 static int
-vm_gen_ivar_foreach(st_data_t key, st_data_t value, st_data_t data, int error)
+vm_weak_table_str_sym_foreach(st_data_t key, st_data_t value, st_data_t data, int error)
 {
-    int retval = vm_table_foreach(key, value, data, error);
+    struct global_vm_table_foreach_data *iter_data = (struct global_vm_table_foreach_data *)data;
+
+    if (STATIC_SYM_P(value)) {
+        return ST_CONTINUE;
+    }
+    else {
+        return iter_data->callback((VALUE)value, iter_data->data);
+    }
+}
+
+static int
+vm_weak_table_foreach_update_value(st_data_t *key, st_data_t *value, st_data_t data, int existing)
+{
+    struct global_vm_table_foreach_data *iter_data = (struct global_vm_table_foreach_data *)data;
+
+    return iter_data->update_callback((VALUE *)value, iter_data->data);
+}
+
+static int
+vm_weak_table_gen_ivar_foreach(st_data_t key, st_data_t value, st_data_t data, int error)
+{
+    int retval = vm_weak_table_foreach_key(key, value, data, error);
     if (retval == ST_DELETE) {
         FL_UNSET((VALUE)key, FL_EXIVAR);
     }
@@ -3288,11 +3309,11 @@ vm_gen_ivar_foreach(st_data_t key, st_data_t value, st_data_t data, int error)
 }
 
 static int
-vm_frozen_strings_foreach(st_data_t key, st_data_t value, st_data_t data, int error)
+vm_weak_table_frozen_strings_foreach(st_data_t key, st_data_t value, st_data_t data, int error)
 {
     GC_ASSERT(RB_TYPE_P((VALUE)key, T_STRING));
 
-    int retval = vm_table_foreach(key, value, data, error);
+    int retval = vm_weak_table_foreach_key(key, value, data, error);
     if (retval == ST_DELETE) {
         FL_UNSET((VALUE)key, RSTRING_FSTR);
     }
@@ -3313,42 +3334,52 @@ rb_gc_vm_weak_table_foreach(vm_table_foreach_callback_func callback,
         .data = data
     };
 
-    #define ITER_TABLE_WITH_CB(tbl) do { \
-        if (tbl->num_entries > 0) {      \
-            st_foreach_with_replace(     \
-                tbl,                     \
-                vm_table_foreach,   \
-                vm_table_update, \
-                (st_data_t)&foreach_data    \
-            );                           \
-        }                                \
-    } while (0)
-
     switch (table) {
       case RB_GC_VM_CI_TABLE: {
-        ITER_TABLE_WITH_CB(vm->ci_table);
+        st_foreach_with_replace(
+            vm->ci_table,
+            vm_weak_table_foreach_key,
+            vm_weak_table_foreach_update_key,
+            (st_data_t)&foreach_data
+        );
         break;
       }
       case RB_GC_VM_OVERLOADED_CME_TABLE: {
-        ITER_TABLE_WITH_CB(vm->overloaded_cme_table);
+        st_foreach_with_replace(
+            vm->overloaded_cme_table,
+            vm_weak_table_foreach_key,
+            vm_weak_table_foreach_update_key,
+            (st_data_t)&foreach_data
+        );
         break;
       }
       case RB_GC_VM_GLOBAL_SYMBOLS_TABLE: {
-        ITER_TABLE_WITH_CB(global_symbols.str_sym);
+        st_foreach_with_replace(
+            global_symbols.str_sym,
+            vm_weak_table_str_sym_foreach,
+            vm_weak_table_foreach_update_value,
+            (st_data_t)&foreach_data
+        );
         break;
       }
       case RB_GC_VM_GENERIC_IV_TABLE: {
         st_table *generic_iv_tbl = rb_generic_ivtbl_get();
-        if (generic_iv_tbl->num_entries > 0) {
-            st_foreach_with_replace(generic_iv_tbl, vm_gen_ivar_foreach, vm_table_update, (st_data_t)&foreach_data);
-        }
+        st_foreach_with_replace(
+            generic_iv_tbl,
+            vm_weak_table_gen_ivar_foreach,
+            vm_weak_table_foreach_update_key,
+            (st_data_t)&foreach_data
+        );
         break;
       }
       case RB_GC_VM_FROZEN_STRINGS_TABLE: {
         st_table *frozen_strings = GET_VM()->frozen_strings;
-        if (frozen_strings->num_entries > 0) {
-            st_foreach_with_replace(frozen_strings, vm_frozen_strings_foreach, vm_table_update, (st_data_t)&foreach_data);
-        }
+        st_foreach_with_replace(
+            frozen_strings,
+            vm_weak_table_frozen_strings_foreach,
+            vm_weak_table_foreach_update_key,
+            (st_data_t)&foreach_data
+        );
         break;
       }
       default:
