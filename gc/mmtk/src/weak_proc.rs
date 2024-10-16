@@ -89,7 +89,7 @@ impl WeakProcessor {
                 })
                 .collect();
 
-            worker.scheduler().work_buckets[WorkBucketStage::Prepare].bulk_add(work_packets);
+        worker.scheduler().work_buckets[WorkBucketStage::VMRefClosure].bulk_add(work_packets);
 
         worker.scheduler().work_buckets[WorkBucketStage::VMRefClosure].bulk_add(vec![
             Box::new(UpdateWbUnprotectedObjectsList) as _,
