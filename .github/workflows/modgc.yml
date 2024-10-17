@@ -24,25 +24,22 @@ jobs:
   check:
     strategy:
       matrix:
-        gc_name: ['default', 'mmtk']
-        build: ['debug', 'release']
-        mmtk_plan: ['MarkSweep', 'Immix']
+        gc:
+          - name: default
+          - name: mmtk
+            mmtk_cargo_build_flags: --release
+            mmtk_plan: MarkSweep
+          - name: mmtk
+            mmtk_cargo_build_flags:
+            mmtk_plan: MarkSweep
         os: [macos-latest, ubuntu-latest]
         include:
           - test_task: check
-        # This matrix configuration will generate multiple 'default' GC jobs, but we only care about one
-        # So exclude all default "release" builds and all other plans except one.
-        exclude:
-          - gc_name: 'default'
-            build: 'release'
-          - gc_name: 'default'
-            mmtk_plan: 'Immix'
       fail-fast: false
 
     env:
       GITPULLOPTIONS: --no-tags origin ${{ github.ref }}
       RUBY_DEBUG: ci
-      MMTK_PLAN: ${{ matrix.mmtk_plan }}
 
     runs-on: ${{ matrix.os }}
 
@@ -69,7 +66,6 @@ jobs:
       - name: Install libraries (Ubuntu)
         uses: ./.github/actions/setup/ubuntu
         if: ${{ contains(matrix.os, 'ubuntu') }}
-
 
       - uses: ruby/setup-ruby@a6e6f86333f0a2523ece813039b8b4be04560854 # v1.190.0
         with:
@@ -122,10 +118,11 @@ jobs:
       - name: Build MMTK Ruby lib
         run: |
           cd ../src/gc/mmtk
-          cargo build ${{ matrix.build != 'debug' && format('--{0}', matrix.build) || format('') }}
+          cargo build ${{ matrix.gc.mmtk_cargo_build_flags }}
           echo "RUST_LOG=" >> $GITHUB_ENV
+          echo "MMTK_PLAN=${{ matrix.gc.mmtk_plan }}" >> $GITHUB_ENV
           echo "EXCLUDES=../src/test/.excludes-mmtk" >> $GITHUB_ENV
-        if: ${{ matrix.gc_name == 'mmtk' }}
+        if: ${{ matrix.gc.name == 'mmtk' }}
 
       - name: Build shared GC
         run: |
@@ -141,10 +138,9 @@ jobs:
             git diff ../mmtk.h
             exit 1
           fi
-        if: ${{ matrix.gc_name == 'mmtk' }}
+        if: ${{ matrix.gc.name == 'mmtk' }}
 
-        # Ruby crashes when building with MMTK plans other than MarkSweep
-      - run: MMTK_PLAN=MarkSweep $SETARCH make
+      - run: $SETARCH make
 
       - run: |
           $SETARCH make golf
