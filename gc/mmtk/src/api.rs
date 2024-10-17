@@ -1,6 +1,5 @@
 use std::sync::atomic::Ordering;
 use mmtk::util::options::PlanSelector;
-use mmtk::Plan;
 
 use crate::abi::RawVecOfObjRef;
 use crate::abi::RubyBindingOptions;
