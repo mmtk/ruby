@@ -83,29 +83,27 @@ rb_mmtk_system_physical_memory(void)
 #ifdef __linux__
     const long physical_pages = sysconf(_SC_PHYS_PAGES);
     const long page_size = sysconf(_SC_PAGE_SIZE);
-    if (physical_pages == -1 || page_size == -1)
-    {
+    if (physical_pages == -1 || page_size == -1) {
         rb_bug("failed to get system physical memory size");
     }
-    return (size_t) physical_pages * (size_t) page_size;
+    return (size_t)physical_pages * (size_t)page_size;
 #elif defined(__APPLE__)
     int mib[2];
     mib[0] = CTL_HW;
     mib[1] = HW_MEMSIZE; // total physical memory
     int64_t physical_memory;
     size_t length = sizeof(int64_t);
-    if (sysctl(mib, 2, &physical_memory, &length, NULL, 0) == -1)
-    {
+    if (sysctl(mib, 2, &physical_memory, &length, NULL, 0) == -1) {
         rb_bug("failed to get system physical memory size");
     }
-    return (size_t) physical_memory;
+    return (size_t)physical_memory;
 #else
 #error no implementation of rb_mmtk_system_physical_memory on this platform
 #endif
 }
 
 static size_t
-rb_mmtk_parse_heap_limit(const char *argv, bool* had_error)
+rb_mmtk_parse_heap_limit(const char *argv, bool *had_error)
 {
     char *endval = NULL;
     int pow = 0;
@@ -498,7 +496,8 @@ rb_mmtk_builder_init(void)
             rb_warn("MMTk maximum heap size invalid, using default");
             mmtk_max_heap_size = RB_MMTK_DEFAULT_HEAP_MAX;
         }
-    };
+    }
+
     if ((mmtk_min_heap_size_arg = getenv("MMTK_HEAP_MIN"))) {
         bool min_error;
         mmtk_min_heap_size = rb_mmtk_parse_heap_limit(mmtk_min_heap_size_arg, &min_error);
@@ -508,8 +507,7 @@ rb_mmtk_builder_init(void)
         }
     };
 
-    switch (mode)
-    {
+    switch (mode) {
       case RB_MMTK_FIXED_HEAP:
         mmtk_set_fixed_heap(builder, mmtk_max_heap_size);
         break;
@@ -525,11 +523,6 @@ rb_mmtk_builder_init(void)
       default:
         rb_bug("Unreachable: Invalid MMTK Heap Mode");
         break;
-    }
-
-    // if the MMTK Plan hasn't already been overridden, use MarkSweep as default, not GenImmix.
-    if (!getenv("MMTK_PLAN")) {
-
     }
 
     return builder;
