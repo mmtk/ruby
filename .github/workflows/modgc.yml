@@ -27,11 +27,11 @@ jobs:
         gc:
           - name: default
           - name: mmtk
+            mmtk_plan: MarkSweep
             mmtk_cargo_build_flags: --release
-            mmtk_plan: MarkSweep
           - name: mmtk
-            mmtk_cargo_build_flags:
             mmtk_plan: MarkSweep
+            mmtk_cargo_build_flags:
         os: [macos-latest, ubuntu-latest]
         include:
           - test_task: check
