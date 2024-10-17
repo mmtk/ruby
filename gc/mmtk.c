@@ -399,12 +399,23 @@ rb_mmtk_update_table_i(VALUE val, void *data)
 }
 
 static int
-rb_mmtk_update_obj_id_tables_i(st_data_t key, st_data_t val, st_data_t data)
+rb_mmtk_update_obj_id_tables_obj_to_id_i(st_data_t key, st_data_t val, st_data_t data)
 {
     RUBY_ASSERT(RB_FL_TEST(key, FL_SEEN_OBJ_ID));
 
     if (!mmtk_is_reachable((MMTk_ObjectReference)key)) {
-        RB_FL_UNSET(key, FL_SEEN_OBJ_ID);
+        return ST_DELETE;
+    }
+
+    return ST_CONTINUE;
+}
+
+static int
+rb_mmtk_update_obj_id_tables_id_to_obj_i(st_data_t key, st_data_t val, st_data_t data)
+{
+    RUBY_ASSERT(RB_FL_TEST(val, FL_SEEN_OBJ_ID));
+
+    if (!mmtk_is_reachable((MMTk_ObjectReference)val)) {
         return ST_DELETE;
     }
 
@@ -416,7 +427,8 @@ rb_mmtk_update_obj_id_tables(void)
 {
     struct objspace *objspace = rb_gc_get_objspace();
 
-    st_foreach(objspace->obj_to_id_tbl, rb_mmtk_update_obj_id_tables_i, 0);
+    st_foreach(objspace->obj_to_id_tbl, rb_mmtk_update_obj_id_tables_obj_to_id_i, 0);
+    st_foreach(objspace->id_to_obj_tbl, rb_mmtk_update_obj_id_tables_id_to_obj_i, 0);
 }
 
 static int
