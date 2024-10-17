@@ -40,11 +40,12 @@ pub extern "C" fn mmtk_builder_default() -> *mut MMTKBuilder {
     let mut builder = MMTKBuilder::new();
     builder.options.no_finalizer.set(true);
 
-    // TODO(@mattvh): Clean up this hack
-    if matches!(*builder.options.plan, PlanSelector::GenImmix) {
-        let plan_selector = "MarkSweep".parse::<PlanSelector>().unwrap();
-        builder.options.plan.set(plan_selector);
-    }
+    // Set the default plan to MarkSweep
+    let plan_selector = "MarkSweep".parse::<PlanSelector>().unwrap();
+    builder.options.plan.set(plan_selector);
+
+    // And allow the environment to override it
+    builder.options.read_env_var_settings();
 
     // Between 1MiB and 500MiB
     builder.options.gc_trigger.set(GCTriggerSelector::DynamicHeapSize(1 << 20, 500 << 20));
