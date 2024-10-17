@@ -485,7 +485,7 @@ rb_mmtk_builder_init(void)
     enum mmtk_heap_mode mode = RB_MMTK_DYNAMIC_HEAP;
 
     // switch to fixed mode if defined, for any other value assume the default, which is dynamic
-    if (getenv("MMTK_HEAP_MODE") && !strncmp(getenv("MMTK_HEAP_MODE"), "fixed", 5)) {
+    if (getenv("MMTK_HEAP_MODE") && !strcmp(getenv("MMTK_HEAP_MODE"), "fixed")) {
         mode = RB_MMTK_FIXED_HEAP;
     }
 
