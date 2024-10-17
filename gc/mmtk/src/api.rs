@@ -1,5 +1,6 @@
 use std::sync::atomic::Ordering;
 use mmtk::util::options::PlanSelector;
+use mmtk::Plan;
 
 use crate::abi::RawVecOfObjRef;
 use crate::abi::RubyBindingOptions;
@@ -37,15 +38,18 @@ pub extern "C" fn mmtk_is_reachable(object: ObjectReference) -> bool {
 
 #[no_mangle]
 pub extern "C" fn mmtk_builder_default() -> *mut MMTKBuilder {
-    let mut builder = MMTKBuilder::new();
+    let mut builder = MMTKBuilder::new_no_env_vars();
     builder.options.no_finalizer.set(true);
 
-    // Set the default plan to MarkSweep
-    let plan_selector = "MarkSweep".parse::<PlanSelector>().unwrap();
-    builder.options.plan.set(plan_selector);
+    // Parse the env var, if it's not found set the plan name to MarkSweep
+    let plan_name = std::env::var("MMTK_PLAN")
+        .unwrap_or(String::from("MarkSweep"));
 
-    // And allow the environment to override it
-    builder.options.read_env_var_settings();
+    // Parse the plan name into a valid MMTK Plan, if the name is not a valid plan use MarkSweep
+    let plan_selector = plan_name.parse::<PlanSelector>()
+        .unwrap_or("MarkSweep".parse::<PlanSelector>().unwrap());
+
+    builder.options.plan.set(plan_selector);
 
     // Between 1MiB and 500MiB
     builder.options.gc_trigger.set(GCTriggerSelector::DynamicHeapSize(1 << 20, 500 << 20));
