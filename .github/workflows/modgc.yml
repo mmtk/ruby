@@ -28,10 +28,10 @@ jobs:
           - name: default
           - name: mmtk
             mmtk_plan: MarkSweep
-            mmtk_cargo_build_flags: --release
+            mmtk_build: release
           - name: mmtk
             mmtk_plan: MarkSweep
-            mmtk_cargo_build_flags:
+            mmtk_build: debug
         os: [macos-latest, ubuntu-latest]
         include:
           - test_task: check
@@ -118,7 +118,7 @@ jobs:
       - name: Build MMTK Ruby lib
         run: |
           cd ../src/gc/mmtk
-          cargo build ${{ matrix.gc.mmtk_cargo_build_flags }}
+          cargo build ${{ matrix.gc.mmtk_build != 'debug' && format('--{0}', matrix.gc.mmtk_build) || format('') }}
           echo "RUST_LOG=" >> $GITHUB_ENV
           echo "MMTK_PLAN=${{ matrix.gc.mmtk_plan }}" >> $GITHUB_ENV
           echo "EXCLUDES=../src/test/.excludes-mmtk" >> $GITHUB_ENV
@@ -127,7 +127,7 @@ jobs:
       - name: Build shared GC
         run: |
           echo "RUBY_GC_LIBRARY=${{ matrix.gc.name }}" >> $GITHUB_ENV
-          make shared-gc SHARED_GC=${{ matrix.gc.name }} MMTK_BUILD=${{ matrix.build }}
+          make shared-gc SHARED_GC=${{ matrix.gc.name }} MMTK_BUILD=${{ matrix.gc.mmtk_build }}
 
       - name: Verify MMTk bindgen
         run: |
