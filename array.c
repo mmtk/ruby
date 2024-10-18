@@ -3556,28 +3556,24 @@ sort_by_i(RB_BLOCK_CALL_FUNC_ARGLIST(i, dummy))
 
 /*
  *  call-seq:
- *    array.sort_by! {|element| ... } -> self
- *    array.sort_by! -> new_enumerator
+ *    sort_by! {|element| ... } -> self
+ *    sort_by! -> new_enumerator
  *
- *  Sorts the elements of +self+ in place,
- *  using an ordering determined by the block; returns self.
+ *  With a block given, sorts the elements of +self+ in place;
+ *  returns self.
  *
  *  Calls the block with each successive element;
- *  sorts elements based on the values returned from the block.
- *
- *  For duplicates returned by the block, the ordering is indeterminate, and may be unstable.
- *
- *  This example sorts strings based on their sizes:
+ *  sorts elements based on the values returned from the block:
  *
  *    a = ['aaaa', 'bbb', 'cc', 'd']
  *    a.sort_by! {|element| element.size }
  *    a # => ["d", "cc", "bbb", "aaaa"]
  *
- *  Returns a new Enumerator if no block given:
+ *  For duplicate values returned by the block, the ordering is indeterminate, and may be unstable.
  *
- *    a = ['aaaa', 'bbb', 'cc', 'd']
- *    a.sort_by! # => #<Enumerator: ["aaaa", "bbb", "cc", "d"]:sort_by!>
+ *  With no block given, returns a new Enumerator.
  *
+ *  Related: see {Methods for Assigning}[rdoc-ref:Array@Methods+for+Assigning].
  */
 
 static VALUE
@@ -7928,40 +7924,41 @@ finish_exact_sum(long n, VALUE r, VALUE v, int z)
 
 /*
  * call-seq:
- *   array.sum(init = 0) -> object
- *   array.sum(init = 0) {|element| ... } -> object
+ *   sum(init = 0) -> object
+ *   sum(init = 0) {|element| ... } -> object
  *
- *  When no block is given, returns the object equivalent to:
+ *  With no block given, returns the sum of +init+ and all elements of +self+;
+ *  for array +array+ and value +init+, equivalent to:
  *
  *    sum = init
  *    array.each {|element| sum += element }
  *    sum
  *
- *  For example, <tt>[e1, e2, e3].sum</tt> returns <tt>init + e1 + e2 + e3</tt>.
+ *  For example, <tt>[e0, e1, e2].sum</tt> returns <tt>init + e0 + e1 + e2</tt>.
  *
  *  Examples:
  *
- *    a = [0, 1, 2, 3]
- *    a.sum # => 6
- *    a.sum(100) # => 106
+ *    [0, 1, 2, 3].sum                 # => 6
+ *    [0, 1, 2, 3].sum(100)            # => 106
+ *    ['abc', 'def', 'ghi'].sum('jkl') # => "jklabcdefghi"
+ *    [[:foo, :bar], ['foo', 'bar']].sum([2, 3])
+ *    # => [2, 3, :foo, :bar, "foo", "bar"]
  *
- *  The elements need not be numeric, but must be <tt>+</tt>-compatible
- *  with each other and with +init+:
+ *  The +init+ value and elements need not be numeric, but must all be <tt>+</tt>-compatible:
  *
- *    a = ['abc', 'def', 'ghi']
- *    a.sum('jkl') # => "jklabcdefghi"
+ *    # Raises TypeError: Array can't be coerced into Integer.
+ *    [[:foo, :bar], ['foo', 'bar']].sum(2)
  *
- *  When a block is given, it is called with each element
- *  and the block's return value (instead of the element itself) is used as the addend:
+ *  With a block given, calls the block with each element of +self+;
+ *  the block's return value (instead of the element itself) is used as the addend:
  *
- *    a = ['zero', 1, :two]
- *    s = a.sum('Coerced and concatenated: ') {|element| element.to_s }
- *    s # => "Coerced and concatenated: zero1two"
+ *    ['zero', 1, :two].sum('Coerced and concatenated: ') {|element| element.to_s }
+ *    # => "Coerced and concatenated: zero1two"
  *
  *  Notes:
  *
  *  - Array#join and Array#flatten may be faster than Array#sum
- *    for an +Array+ of Strings or an +Array+ of Arrays.
+ *    for an array of strings or an array of arrays.
  *  - Array#sum method may not respect method redefinition of "+" methods such as Integer#+.
  *
  */
