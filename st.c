@@ -2380,7 +2380,7 @@ rb_mmtk_st_maybe_update_key_record(st_data_t *slot, bool weak, bool forward)
     return delete_entry;
 }
 
-void
+size_t
 rb_mmtk_st_update_entries_range(st_table *tab, size_t begin, size_t end, bool weak_keys, bool weak_records, bool forward)
 {
     // Either the keys or the values must be weak, otherwise it is a strong table.
@@ -2417,14 +2417,18 @@ rb_mmtk_st_update_entries_range(st_table *tab, size_t begin, size_t end, bool we
     }
 
     rbimpl_atomic_size_sub(&tab->num_entries, deleted_entries);
+
+    return deleted_entries;
 }
 
-void
+size_t
 rb_mmtk_st_update_bins_range(st_table *tab, size_t begin, size_t end)
 {
     RUBY_ASSERT(end <= get_bins_num(tab));
 
     unsigned int const size_ind = get_size_ind(tab);
+
+    size_t deleted_bins = 0;
 
     // Delete bins that point to deleted entries.
     for (st_index_t ind = begin; ind < end; ind++) {
@@ -2435,8 +2439,11 @@ rb_mmtk_st_update_bins_range(st_table *tab, size_t begin, size_t end)
         st_table_entry *entry = &tab->entries[bin - ENTRY_BASE];
         if (DELETED_ENTRY_P(entry)) {
             MARK_BIN_DELETED(tab, ind);
+            deleted_bins++;
         }
     }
+
+    return deleted_bins;
 }
 
 // Update a deduplication table.

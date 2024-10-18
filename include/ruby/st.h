@@ -190,8 +190,8 @@ void rb_hash_bulk_insert_into_st_table(long, const VALUE *, VALUE);
 #if USE_MMTK
 size_t rb_mmtk_st_get_num_entries(const st_table *tab);
 void rb_mmtk_st_get_size_info(const st_table *tab, size_t *entries_start, size_t *entries_bound, size_t *bins_num);
-void rb_mmtk_st_update_entries_range(st_table *tab, size_t begin, size_t end, bool weak_keys, bool weak_records, bool forward);
-void rb_mmtk_st_update_bins_range(st_table *tab, size_t begin, size_t end);
+size_t rb_mmtk_st_update_entries_range(st_table *tab, size_t begin, size_t end, bool weak_keys, bool weak_records, bool forward);
+size_t rb_mmtk_st_update_bins_range(st_table *tab, size_t begin, size_t end);
 void rb_mmtk_st_update_dedup_table(st_table *tab);
 #endif
 
