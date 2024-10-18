@@ -87,17 +87,18 @@ typedef struct MMTk_RubyUpcalls {
     void (*move_givtbl)(MMTk_ObjectReference old_objref, MMTk_ObjectReference new_objref);
     size_t (*vm_live_bytes)(void);
     void (*update_frozen_strings_table)(void);
-    void (*update_finalizer_table)(void);
-    void (*update_obj_id_tables)(void);
+    void (*update_finalizer_and_obj_id_tables)(void);
     void (*update_global_symbols_table)(void);
     void (*update_overloaded_cme_table)(void);
     void (*update_ci_table)(void);
     struct st_table *(*get_frozen_strings_table)(void);
     struct st_table *(*get_finalizer_table)(void);
-    struct st_table *(*get_obj_id_tables)(void);
+    struct st_table *(*get_obj_to_id_table)(void);
+    struct st_table *(*get_id_to_obj_table)(void);
     struct st_table *(*get_global_symbols_table)(void);
     struct st_table *(*get_overloaded_cme_table)(void);
     struct st_table *(*get_ci_table)(void);
+    size_t (*st_get_num_entries)(const struct st_table *table);
     void (*st_get_size_info)(const struct st_table *table,
                              size_t *entries_start,
                              size_t *entries_bound,

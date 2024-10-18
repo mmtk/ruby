@@ -1669,19 +1669,19 @@ rb_mmtk_move_givtbl(MMTk_ObjectReference old_objref, MMTk_ObjectReference new_ob
 }
 
 void rb_mmtk_cleanup_generic_iv_tbl(void); // Defined in variable.c
-void rb_mmtk_update_frozen_strings_table(void); // Defined in gc.c
-void rb_mmtk_update_finalizer_table(void); // Defined in gc.c
-void rb_mmtk_update_obj_id_tables(void); // Defined in gc.c
+void rb_mmtk_update_frozen_strings_table(void); // Defined in default.c
+void rb_mmtk_update_finalizer_and_obj_id_tables(void); // Defined in default.c
 void rb_mmtk_update_global_symbols_table(void); // Defined in gc.c
-void rb_mmtk_update_overloaded_cme_table(void); // Defined in gc.c
-void rb_mmtk_update_ci_table(void); // Defined in gc.c
+void rb_mmtk_update_overloaded_cme_table(void); // Defined in default.c
+void rb_mmtk_update_ci_table(void); // Defined in default.c
 
-st_table* rb_mmtk_get_frozen_strings_table(void); // Defined in gc.c
-st_table* rb_mmtk_get_finalizer_table(void); // Defined in gc.c
-st_table* rb_mmtk_get_obj_id_tables(void); // Defined in gc.c
+st_table* rb_mmtk_get_frozen_strings_table(void); // Defined in default.c
+st_table* rb_mmtk_get_finalizer_table(void); // Defined in default.c
+st_table* rb_mmtk_get_obj_to_id_table(void); // Defined in default.c
+st_table* rb_mmtk_get_id_to_obj_table(void); // Defined in default.c
 st_table* rb_mmtk_get_global_symbols_table(void); // Defined in gc.c
-st_table* rb_mmtk_get_overloaded_cme_table(void); // Defined in gc.c
-st_table* rb_mmtk_get_ci_table(void); // Defined in gc.c
+st_table* rb_mmtk_get_overloaded_cme_table(void); // Defined in default.c
+st_table* rb_mmtk_get_ci_table(void); // Defined in default.c
 
 MMTk_RubyUpcalls ruby_upcalls = {
     rb_mmtk_init_gc_worker_thread,
@@ -1710,17 +1710,18 @@ MMTk_RubyUpcalls ruby_upcalls = {
     rb_mmtk_move_givtbl,
     rb_mmtk_vm_live_bytes,
     rb_mmtk_update_frozen_strings_table,
-    rb_mmtk_update_finalizer_table,
-    rb_mmtk_update_obj_id_tables,
+    rb_mmtk_update_finalizer_and_obj_id_tables,
     rb_mmtk_update_global_symbols_table,
     rb_mmtk_update_overloaded_cme_table,
     rb_mmtk_update_ci_table,
     rb_mmtk_get_frozen_strings_table,
     rb_mmtk_get_finalizer_table,
-    rb_mmtk_get_obj_id_tables,
+    rb_mmtk_get_obj_to_id_table,
+    rb_mmtk_get_id_to_obj_table,
     rb_mmtk_get_global_symbols_table,
     rb_mmtk_get_overloaded_cme_table,
     rb_mmtk_get_ci_table,
+    rb_mmtk_st_get_num_entries,
     rb_mmtk_st_get_size_info,
     rb_mmtk_st_update_entries_range,
     rb_mmtk_st_update_bins_range,

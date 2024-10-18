@@ -2341,6 +2341,12 @@ rb_st_compact_table(st_table *tab)
 }
 
 #if USE_MMTK
+size_t
+rb_mmtk_st_get_num_entries(const st_table *tab)
+{
+    return tab->num_entries;
+}
+
 void
 rb_mmtk_st_get_size_info(const st_table *tab, size_t *entries_start, size_t *entries_bound, size_t *bins_num)
 {

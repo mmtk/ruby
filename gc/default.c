@@ -10264,8 +10264,13 @@ rb_mmtk_update_frozen_strings_table(void)
 }
 
 void
-rb_mmtk_update_finalizer_table(void)
+rb_mmtk_update_finalizer_and_obj_id_tables(void)
 {
+    // Note: The finalizer table, the obj-to-ID table and the ID-to-obj table must be processed
+    // sequentially in this order.  While processing the finalizer table, it may need to look up the
+    // obj-to-ID table to get the ID of the (dead) object if the ID was observed before.  So we
+    // can't clear the obj-to-ID table while processing the finalizer table.
+
     // The macro `finalizer_table` insists on accessing the field via the hard-coded identifier `objspace`.
     rb_objspace_t *objspace = rb_gc_get_objspace();
 
@@ -10279,12 +10284,6 @@ rb_mmtk_update_finalizer_table(void)
                               RB_MMTK_VALUES_STRONG_REF,
                               rb_mmtk_on_finalizer_table_delete,
                               NULL);
-}
-
-void
-rb_mmtk_update_obj_id_tables(void)
-{
-    rb_objspace_t *objspace = rb_gc_get_objspace();
 
     // Update the obj_to_id_tbl first, and remove dead objects from both
     // obj_to_id_tbl and id_to_obj_tbl.
@@ -10347,10 +10346,17 @@ rb_mmtk_get_finalizer_table(void)
 }
 
 st_table*
-rb_mmtk_get_obj_id_tables(void)
+rb_mmtk_get_obj_to_id_table(void)
 {
     rb_objspace_t *objspace = rb_gc_get_objspace();
     return objspace->obj_to_id_tbl;
+}
+
+st_table*
+rb_mmtk_get_id_to_obj_table(void)
+{
+    rb_objspace_t *objspace = rb_gc_get_objspace();
+    return objspace->id_to_obj_tbl;
 }
 
 st_table*
