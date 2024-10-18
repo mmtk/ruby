@@ -119,9 +119,10 @@ jobs:
         run: |
           cd ../src/gc/mmtk
           cargo build ${{ matrix.gc.mmtk_build != 'debug' && format('--{0}', matrix.gc.mmtk_build) || format('') }}
-          echo "RUST_LOG=" >> $GITHUB_ENV
-          echo "MMTK_PLAN=${{ matrix.gc.mmtk_plan }}" >> $GITHUB_ENV
-          echo "EXCLUDES=../src/test/.excludes-mmtk" >> $GITHUB_ENV
+          echo 'RUST_LOG=' >> $GITHUB_ENV
+          echo 'MMTK_PLAN=${{ matrix.gc.mmtk_plan }}' >> $GITHUB_ENV
+          echo 'EXCLUDES=../src/test/.excludes-mmtk' >> $GITHUB_ENV
+          echo 'MSPECOPT="-B ../src/spec/mmtk.mspec"' >> $GITHUB_ENV
         if: ${{ matrix.gc.name == 'mmtk' }}
 
       - name: Build shared GC
