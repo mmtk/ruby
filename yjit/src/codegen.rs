@@ -458,6 +458,7 @@ macro_rules! perf_call {
 }
 
 use crate::codegen::JCCKinds::*;
+use crate::log::Log;
 
 #[allow(non_camel_case_types, unused)]
 pub enum JCCKinds {
@@ -1222,6 +1223,8 @@ pub fn gen_single_block(
         asm_comment!(asm, "Block: {} {}", iseq_get_location(blockid.iseq, blockid_idx), chain_depth);
         asm_comment!(asm, "reg_mapping: {:?}", asm.ctx.get_reg_mapping());
     }
+
+    Log::add_block_with_chain_depth(blockid, asm.ctx.get_chain_depth());
 
     // Mark the start of an ISEQ for --yjit-perf
     jit_perf_symbol_push!(jit, &mut asm, &get_iseq_name(iseq), PerfMap::ISEQ);
@@ -6868,8 +6871,8 @@ fn gen_send_cfunc(
     // We also do this after the C call to minimize the impact of spill_temps() on asm.ccall().
     if get_option!(gen_stats) {
         // Assemble the method name string
-        let mid = unsafe { vm_ci_mid(ci) };
-        let name_str = get_method_name(recv_known_class, mid);
+        let mid = unsafe { rb_get_def_original_id((*cme).def) };
+        let name_str = get_method_name(Some(unsafe { (*cme).owner }), mid);
 
         // Get an index for this cfunc name
         let cfunc_idx = get_cfunc_idx(&name_str);
@@ -9096,7 +9099,10 @@ fn gen_send_general(
 
 /// Get class name from a class pointer.
 fn get_class_name(class: Option<VALUE>) -> String {
-    class.and_then(|class| unsafe {
+    class.filter(|&class| {
+        // type checks for rb_class2name()
+        unsafe { RB_TYPE_P(class, RUBY_T_MODULE) || RB_TYPE_P(class, RUBY_T_CLASS) }
+    }).and_then(|class| unsafe {
         cstr_to_rust_string(rb_class2name(class))
     }).unwrap_or_else(|| "Unknown".to_string())
 }
