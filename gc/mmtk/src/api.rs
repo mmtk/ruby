@@ -45,12 +45,24 @@ pub extern "C" fn mmtk_builder_default() -> *mut MMTKBuilder {
     const DEFAULT_HEAP_MIN: usize = 1 << 20;
 
     let mut mmtk_heap_min = match std::env::var("MMTK_HEAP_MIN") {
-        Ok(min) => parse_capacity(min, DEFAULT_HEAP_MIN),
+        Ok(min) => {
+            let capa = parse_capacity(&min, DEFAULT_HEAP_MIN);
+            if capa == DEFAULT_HEAP_MIN {
+                eprintln!("MMTK_HEAP_MIN: value ({}) unusable, Using default.", min)
+            };
+            capa
+        },
         Err(_) => DEFAULT_HEAP_MIN
     };
 
     let mut mmtk_heap_max = match std::env::var("MMTK_HEAP_MAX") {
-        Ok(max) => parse_capacity(max, default_heap_max()),
+        Ok(max) => {
+            let capa = parse_capacity(&max, default_heap_max());
+            if capa == default_heap_max() {
+                eprintln!("MMTK_HEAP_MAX: value ({}) unusable, Using default.", max)
+            };
+            capa
+        },
         Err(_) => default_heap_max()
     };
 

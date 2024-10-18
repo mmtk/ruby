@@ -97,7 +97,7 @@ pub fn default_heap_max() -> usize {
         .expect("Invalid Memory size") as usize
 }
 
-pub fn parse_capacity(input: String, default: usize) -> usize {
+pub fn parse_capacity(input: &String, default: usize) -> usize {
     let trimmed = input.trim();
 
     const KIBIBYTE: usize = 1024;
