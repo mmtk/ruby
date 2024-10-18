@@ -568,10 +568,16 @@ rb_gc_impl_during_gc_p(void *objspace_ptr)
     return false;
 }
 
+static void
+rb_gc_impl_prepare_heap_i(MMTk_ObjectReference obj, void *d)
+{
+    rb_gc_prepare_heap_process_object((VALUE)obj);
+}
+
 void
 rb_gc_impl_prepare_heap(void *objspace_ptr)
 {
-    // TODO
+    mmtk_enumerate_objects(rb_gc_impl_prepare_heap_i, NULL);
 }
 
 void
