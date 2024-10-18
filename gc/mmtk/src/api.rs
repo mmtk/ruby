@@ -10,6 +10,7 @@ use crate::mmtk;
 use crate::Ruby;
 use crate::RubySlot;
 use crate::utils::default_heap_max;
+use crate::utils::parse_capacity;
 use mmtk::memory_manager;
 use mmtk::memory_manager::mmtk_init;
 use mmtk::util::constants::MIN_OBJECT_SIZE;
@@ -44,21 +45,13 @@ pub extern "C" fn mmtk_builder_default() -> *mut MMTKBuilder {
     const DEFAULT_HEAP_MIN: usize = 1 << 20;
 
     let mut mmtk_heap_min = match std::env::var("MMTK_HEAP_MIN") {
-        Ok(min) if (min.parse::<usize>().is_ok()) => min.parse::<usize>().unwrap(),
-        Ok(min) if (!min.parse::<usize>().is_ok()) => {
-            eprintln!("MMTK_HEAP_MIN value is incorrect ({}), Using default value.", min);
-            DEFAULT_HEAP_MIN
-        }
-        Ok(_) | Err(_) => DEFAULT_HEAP_MIN
+        Ok(min) => parse_capacity(min, DEFAULT_HEAP_MIN),
+        Err(_) => DEFAULT_HEAP_MIN
     };
 
     let mut mmtk_heap_max = match std::env::var("MMTK_HEAP_MAX") {
-        Ok(max) if (max.parse::<usize>().is_ok()) => max.parse::<usize>().unwrap(),
-        Ok(max) if (!max.parse::<usize>().is_ok()) => {
-            eprintln!("MMTK_HEAP_MAX value is incorrect ({}), Using default value.", max);
-            default_heap_max()
-        }
-        Ok(_) | Err(_) => default_heap_max()
+        Ok(max) => parse_capacity(max, default_heap_max()),
+        Err(_) => default_heap_max()
     };
 
     if mmtk_heap_min >= mmtk_heap_max {
