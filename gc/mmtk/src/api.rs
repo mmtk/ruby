@@ -44,12 +44,20 @@ pub extern "C" fn mmtk_builder_default() -> *mut MMTKBuilder {
     const DEFAULT_HEAP_MIN: usize = 1 << 20;
 
     let mut mmtk_heap_min = match std::env::var("MMTK_HEAP_MIN") {
-        Ok(mode) if (mode.parse::<usize>().is_ok()) => mode.parse::<usize>().unwrap(),
+        Ok(min) if (min.parse::<usize>().is_ok()) => min.parse::<usize>().unwrap(),
+        Ok(min) if (!min.parse::<usize>().is_ok()) => {
+            eprintln!("MMTK_HEAP_MIN value is incorrect ({}), Using default value.", min);
+            DEFAULT_HEAP_MIN
+        }
         Ok(_) | Err(_) => DEFAULT_HEAP_MIN
     };
 
     let mut mmtk_heap_max = match std::env::var("MMTK_HEAP_MAX") {
-        Ok(mode) if (mode.parse::<usize>().is_ok()) => mode.parse::<usize>().unwrap(),
+        Ok(max) if (max.parse::<usize>().is_ok()) => max.parse::<usize>().unwrap(),
+        Ok(max) if (!max.parse::<usize>().is_ok()) => {
+            eprintln!("MMTK_HEAP_MAX value is incorrect ({}), Using default value.", max);
+            default_heap_max()
+        }
         Ok(_) | Err(_) => default_heap_max()
     };
 
