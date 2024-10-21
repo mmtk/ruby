@@ -821,7 +821,9 @@ rb_gc_impl_writebarrier_unprotect(void *objspace_ptr, VALUE obj)
 void
 rb_gc_impl_writebarrier_remember(void *objspace_ptr, VALUE obj)
 {
-    rb_gc_impl_writebarrier(objspace_ptr, obj, Qundef);
+    struct MMTk_ractor_cache *cache = rb_gc_get_ractor_newobj_cache();
+
+    mmtk_object_reference_write_post(cache->mutator, (MMTk_ObjectReference)obj);
 }
 
 // Heap walking
