@@ -91,6 +91,7 @@ typedef struct MMTk_RubyUpcalls {
     void (*update_global_symbols_table)(void);
     void (*update_overloaded_cme_table)(void);
     void (*update_ci_table)(void);
+    struct st_table *(*get_generic_iv_tbl)(void);
     struct st_table *(*get_frozen_strings_table)(void);
     struct st_table *(*get_finalizer_table)(void);
     struct st_table *(*get_obj_to_id_table)(void);

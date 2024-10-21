@@ -1172,6 +1172,11 @@ rb_ref_update_generic_ivar(VALUE obj)
 }
 
 #if USE_MMTK
+st_table*
+rb_mmtk_get_generic_iv_tbl(void)
+{
+    return generic_iv_tbl_;
+}
 
 static int
 rb_mmtk_cleanup_generic_iv_tbl_check(st_data_t key, st_data_t value, st_data_t argp, int error)

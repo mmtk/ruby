@@ -1675,6 +1675,7 @@ void rb_mmtk_update_global_symbols_table(void); // Defined in gc.c
 void rb_mmtk_update_overloaded_cme_table(void); // Defined in default.c
 void rb_mmtk_update_ci_table(void); // Defined in default.c
 
+st_table* rb_mmtk_get_generic_iv_tbl(void); // Defined in variable.c
 st_table* rb_mmtk_get_frozen_strings_table(void); // Defined in default.c
 st_table* rb_mmtk_get_finalizer_table(void); // Defined in default.c
 st_table* rb_mmtk_get_obj_to_id_table(void); // Defined in default.c
@@ -1714,6 +1715,7 @@ MMTk_RubyUpcalls ruby_upcalls = {
     rb_mmtk_update_global_symbols_table,
     rb_mmtk_update_overloaded_cme_table,
     rb_mmtk_update_ci_table,
+    rb_mmtk_get_generic_iv_tbl,
     rb_mmtk_get_frozen_strings_table,
     rb_mmtk_get_finalizer_table,
     rb_mmtk_get_obj_to_id_table,
