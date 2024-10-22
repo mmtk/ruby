@@ -547,7 +547,7 @@ rb_mmtk_obj_free_iter_wrapper(VALUE obj, void *data)
 {
     struct objspace *objspace = data;
 
-    if (RB_BUILTIN_TYPE(obj) != T_NONE) {
+    if (!RB_TYPE_P(obj, T_NONE)) {
         rb_gc_obj_free_vm_weak_references(obj);
         rb_gc_obj_free(objspace, obj);
     }
