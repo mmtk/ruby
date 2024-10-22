@@ -1449,7 +1449,6 @@ rb_gc_obj_free(void *objspace, VALUE obj)
         return FALSE;
     }
     else {
-        RBASIC(obj)->flags = 0;
         return TRUE;
     }
 }

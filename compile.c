@@ -4873,10 +4873,8 @@ static_literal_value(const NODE *node, rb_iseq_t *iseq)
       case NODE_FILE:
       case NODE_STR:
         if (ISEQ_COMPILE_DATA(iseq)->option->debug_frozen_string_literal || RTEST(ruby_debug)) {
-            VALUE debug_info = rb_ary_new_from_args(2, rb_iseq_path(iseq), INT2FIX((int)nd_line(node)));
-            VALUE lit = rb_str_dup(get_string_value(node));
-            rb_ivar_set(lit, id_debug_created_info, rb_ary_freeze(debug_info));
-            return rb_str_freeze(lit);
+            VALUE lit = get_string_value(node);
+            return rb_str_with_debug_created_info(lit, rb_iseq_path(iseq), (int)nd_line(node));
         }
         else {
             return get_string_value(node);
@@ -10927,28 +10925,25 @@ iseq_compile_each0(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const no
         debugp_param("nd_lit", get_string_value(node));
         if (!popped) {
             VALUE lit = get_string_value(node);
-            switch (ISEQ_COMPILE_DATA(iseq)->option->frozen_string_literal) {
+            const rb_compile_option_t *option = ISEQ_COMPILE_DATA(iseq)->option;
+            if ((option->debug_frozen_string_literal || RTEST(ruby_debug)) &&
+                option->frozen_string_literal != ISEQ_FROZEN_STRING_LITERAL_DISABLED) {
+                lit = rb_str_with_debug_created_info(lit, rb_iseq_path(iseq), line);
+            }
+            switch (option->frozen_string_literal) {
               case ISEQ_FROZEN_STRING_LITERAL_UNSET:
                 ADD_INSN1(ret, node, putchilledstring, lit);
-                RB_OBJ_WRITTEN(iseq, Qundef, lit);
                 break;
               case ISEQ_FROZEN_STRING_LITERAL_DISABLED:
                 ADD_INSN1(ret, node, putstring, lit);
-                RB_OBJ_WRITTEN(iseq, Qundef, lit);
                 break;
               case ISEQ_FROZEN_STRING_LITERAL_ENABLED:
-                if (ISEQ_COMPILE_DATA(iseq)->option->debug_frozen_string_literal || RTEST(ruby_debug)) {
-                    VALUE debug_info = rb_ary_new_from_args(2, rb_iseq_path(iseq), INT2FIX(line));
-                    lit = rb_str_dup(lit);
-                    rb_ivar_set(lit, id_debug_created_info, rb_ary_freeze(debug_info));
-                    lit = rb_str_freeze(lit);
-                }
                 ADD_INSN1(ret, node, putobject, lit);
-                RB_OBJ_WRITTEN(iseq, Qundef, lit);
                 break;
               default:
                 rb_bug("invalid frozen_string_literal");
             }
+            RB_OBJ_WRITTEN(iseq, Qundef, lit);
         }
         break;
       }
@@ -12897,19 +12892,17 @@ ibf_load_param_keyword(const struct ibf_load *load, ibf_offset_t param_keyword_o
 {
     if (param_keyword_offset) {
         struct rb_iseq_param_keyword *kw = IBF_R(param_keyword_offset, struct rb_iseq_param_keyword, 1);
-        ID *ids = IBF_R(kw->table, ID, kw->num);
         int dv_num = kw->num - kw->required_num;
         VALUE *dvs = dv_num ? IBF_R(kw->default_values, VALUE, dv_num) : NULL;
-        int i;
 
-        for (i=0; i<kw->num; i++) {
-            ids[i] = ibf_load_id(load, ids[i]);
-        }
+        int i;
         for (i=0; i<dv_num; i++) {
             dvs[i] = ibf_load_object(load, dvs[i]);
         }
 
-        kw->table = ids;
+        // Will be set once the local table is loaded.
+        kw->table = NULL;
+
         kw->default_values = dvs;
         return kw;
     }
@@ -13580,6 +13573,13 @@ ibf_load_iseq_each(struct ibf_load *load, rb_iseq_t *iseq, ibf_offset_t offset)
     load_body->parent_iseq          = ibf_load_iseq(load, (const rb_iseq_t *)(VALUE)parent_iseq_index);
     load_body->local_iseq           = ibf_load_iseq(load, (const rb_iseq_t *)(VALUE)local_iseq_index);
     load_body->mandatory_only_iseq  = ibf_load_iseq(load, (const rb_iseq_t *)(VALUE)mandatory_only_iseq_index);
+
+    // This must be done after the local table is loaded.
+    if (load_body->param.keyword != NULL) {
+        RUBY_ASSERT(load_body->local_table);
+        struct rb_iseq_param_keyword *keyword = (struct rb_iseq_param_keyword *) load_body->param.keyword;
+        keyword->table = &load_body->local_table[keyword->bits_start - keyword->num];
+    }
 
     ibf_load_code(load, iseq, bytecode_offset, bytecode_size, iseq_size);
 #if VM_INSN_INFO_TABLE_IMPL == 2

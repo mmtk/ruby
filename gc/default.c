@@ -3031,7 +3031,9 @@ rb_gc_impl_shutdown_free_objects(void *objspace_ptr)
             asan_unpoisoning_object(vp) {
                 if (RB_BUILTIN_TYPE(vp) != T_NONE) {
                     rb_gc_obj_free_vm_weak_references(vp);
-                    rb_gc_obj_free(objspace, vp);
+                    if (rb_gc_obj_free(objspace, vp)) {
+                        RBASIC(vp)->flags = 0;
+                    }
                 }
             }
         }
@@ -3104,7 +3106,9 @@ rb_gc_impl_shutdown_call_finalizer(void *objspace_ptr)
             asan_unpoisoning_object(vp) {
                 if (rb_gc_shutdown_call_finalizer_p(vp)) {
                     rb_gc_obj_free_vm_weak_references(vp);
-                    rb_gc_obj_free(objspace, vp);
+                    if (rb_gc_obj_free(objspace, vp)) {
+                        RBASIC(vp)->flags = 0;
+                    }
                 }
             }
         }

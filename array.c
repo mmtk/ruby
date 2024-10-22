@@ -2985,21 +2985,17 @@ rb_ary_to_s(VALUE ary)
  *  call-seq:
  *    to_a -> self or new_array
  *
- *  When +self+ is an instance of +Array+, returns +self+:
+ *  When +self+ is an instance of +Array+, returns +self+.
  *
- *    a = [:foo, 'bar', 2]
- *    a.to_a # => [:foo, "bar", 2]
- *
- *  Otherwise, returns a new +Array+ containing the elements of +self+:
+ *  Otherwise, returns a new array containing the elements of +self+:
  *
  *    class MyArray < Array; end
- *    a = MyArray.new(['foo', 'bar', 'two'])
- *    a.instance_of?(Array) # => false
- *    a.kind_of?(Array) # => true
- *    a1 = a.to_a
- *    a1 # => ["foo", "bar", "two"]
- *    a1.class # => Array # Not MyArray
+ *    my_a = MyArray.new(['foo', 'bar', 'two'])
+ *    a = my_a.to_a
+ *    a # => ["foo", "bar", "two"]
+ *    a.class # => Array # Not MyArray.
  *
+ *  Related: see {Methods for Converting}[rdoc-ref:Array@Methods+for+Converting].
  */
 
 static VALUE
@@ -7485,20 +7481,20 @@ done:
 
 /*
  *  call-seq:
- *    array.take(n) -> new_array
+ *    take(count) -> new_array
  *
- *  Returns a new +Array+ containing the first +n+ element of +self+,
- *  where +n+ is a non-negative Integer;
- *  does not modify +self+.
+ *  Returns a new array containing the first +count+ element of +self+
+ *  (as available);
+ *  +count+ must be a non-negative numeric;
+ *  does not modify +self+:
  *
- *  Examples:
+ *    a = ['a', 'b', 'c', 'd']
+ *    a.take(2)   # => ["a", "b"]
+ *    a.take(2.1) # => ["a", "b"]
+ *    a.take(50)  # => ["a", "b", "c", "d"]
+ *    a.take(0)   # => []
  *
- *    a = [0, 1, 2, 3, 4, 5]
- *    a.take(1) # => [0]
- *    a.take(2) # => [0, 1]
- *    a.take(50) # => [0, 1, 2, 3, 4, 5]
- *    a # => [0, 1, 2, 3, 4, 5]
- *
+ *  Related: see {Methods for Fetching}[rdoc-ref:Array@Methods+for+Fetching].
  */
 
 static VALUE
@@ -7513,25 +7509,23 @@ rb_ary_take(VALUE obj, VALUE n)
 
 /*
  *  call-seq:
- *    array.take_while {|element| ... } -> new_array
- *    array.take_while -> new_enumerator
- *
- *  Returns a new +Array+ containing zero or more leading elements of +self+;
- *  does not modify +self+.
+ *    take_while {|element| ... } -> new_array
+ *    take_while -> new_enumerator
  *
  *  With a block given, calls the block with each successive element of +self+;
- *  stops if the block returns +false+ or +nil+;
- *  returns a new +Array+ containing those elements for which the block returned a truthy value:
+ *  stops iterating if the block returns +false+ or +nil+;
+ *  returns a new array containing those elements for which the block returned a truthy value:
  *
  *    a = [0, 1, 2, 3, 4, 5]
  *    a.take_while {|element| element < 3 } # => [0, 1, 2]
- *    a.take_while {|element| true } # => [0, 1, 2, 3, 4, 5]
- *    a # => [0, 1, 2, 3, 4, 5]
+ *    a.take_while {|element| true }        # => [0, 1, 2, 3, 4, 5]
+ *    a.take_while {|element| false }       # => []
  *
- *  With no block given, returns a new Enumerator:
+ *  With no block given, returns a new Enumerator.
  *
- *    [0, 1].take_while # => #<Enumerator: [0, 1]:take_while>
+ *  Does not modify +self+.
  *
+ *  Related: see {Methods for Fetching}[rdoc-ref:Array@Methods+for+Fetching].
  */
 
 static VALUE
