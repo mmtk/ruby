@@ -379,41 +379,6 @@ rb_gc_rebuild_shape(VALUE obj, size_t heap_id)
     return (uint32_t)rb_shape_id(new_shape);
 }
 
-struct st_table *rb_generic_ivtbl_get(void);
-
-struct st_table *
-rb_gc_get_generic_ivar_table(void)
-{
-    return rb_generic_ivtbl_get();
-}
-
-struct st_table *
-rb_gc_get_frozen_strings_table(void)
-{
-    return rb_vm_fstring_table();
-}
-
-extern rb_symbols_t ruby_global_symbols;
-#define global_symbols ruby_global_symbols
-
-struct st_table *
-rb_gc_get_global_symbols_table(void)
-{
-    return global_symbols.str_sym;
-}
-
-struct st_table *
-rb_gc_get_overloaded_cme_table(void)
-{
-    return GET_VM()->overloaded_cme_table;
-}
-
-struct st_table *
-rb_gc_get_ci_table(void)
-{
-    return GET_VM()->ci_table;
-}
-
 void rb_vm_update_references(void *ptr);
 
 #define rb_setjmp(env) RUBY_SETJMP(env)
@@ -3362,6 +3327,8 @@ vm_weak_table_frozen_strings_foreach(st_data_t key, st_data_t value, st_data_t d
     }
     return retval;
 }
+
+struct st_table *rb_generic_ivtbl_get(void);
 
 void
 rb_gc_vm_weak_table_foreach(vm_table_foreach_callback_func callback,
