@@ -72,6 +72,7 @@ size_t rb_obj_memsize_of(VALUE obj);
 short rb_gc_vm_weak_table_count(void);
 void rb_gc_vm_weak_table_foreach(vm_table_foreach_callback_func callback, vm_table_update_callback_func update_callback, void *data, enum rb_gc_vm_weak_tables table);
 void rb_gc_prepare_heap_process_object(VALUE obj);
+bool ruby_free_at_exit_p(void);
 RUBY_SYMBOL_EXPORT_END
 
 

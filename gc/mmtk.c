@@ -559,8 +559,9 @@ rb_mmtk_obj_free_iter_wrapper(VALUE obj, void *data)
 static void each_object(struct objspace *objspace, int (*func)(VALUE, void *), void *data);
 
 void rb_gc_impl_shutdown_free_objects(void *objspace_ptr) {
-    // TODO (@mattvh) Fix test fails
-    // each_object(objspace_ptr, rb_mmtk_obj_free_iter_wrapper, objspace_ptr);
+    mmtk_set_gc_enabled(false);
+    each_object(objspace_ptr, rb_mmtk_obj_free_iter_wrapper, objspace_ptr);
+    mmtk_set_gc_enabled(true);
 }
 
 // GC
@@ -970,7 +971,9 @@ rb_gc_impl_make_zombie(void *objspace_ptr, VALUE obj, void (*dfree)(void *), voi
         prev = RUBY_ATOMIC_PTR_CAS(objspace->finalizer_jobs, job->next, job);
     } while (prev != job->next);
 
-    rb_postponed_job_trigger(objspace->finalizer_postponed_job);
+    if (!ruby_free_at_exit_p()) {
+        rb_postponed_job_trigger(objspace->finalizer_postponed_job);
+    }
 }
 
 VALUE
