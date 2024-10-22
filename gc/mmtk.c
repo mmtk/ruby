@@ -848,7 +848,7 @@ each_object(struct objspace *objspace, int (*func)(VALUE, void *), void *data)
 
     VALUE *obj_ptr;
     rb_darray_foreach(objs, i, obj_ptr) {
-        if (!mmtk_is_live_object((MMTk_ObjectReference)*obj_ptr)) continue;
+        if (!mmtk_is_mmtk_object((MMTk_ObjectReference)*obj_ptr)) continue;
 
         if (func(*obj_ptr, data) != 0) {
             break;
