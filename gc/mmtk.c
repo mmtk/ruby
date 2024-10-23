@@ -1303,10 +1303,15 @@ rb_gc_impl_stat(void *objspace_ptr, VALUE hash_or_sym)
     return hash;
 }
 
-size_t
+VALUE
 rb_gc_impl_stat_heap(void *objspace_ptr, VALUE heap_name, VALUE hash_or_sym)
 {
-    return 0;
+    if (RB_TYPE_P(hash_or_sym, T_HASH)) {
+        return hash_or_sym;
+    }
+    else {
+        return Qundef;
+    }
 }
 
 // Miscellaneous
