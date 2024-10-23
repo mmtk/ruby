@@ -1,5 +1,8 @@
 # frozen_string_literal: true
 
+# GC.latest_gc_info doesn't return anything
+MSpec.register(:exclude, "CApiGCSpecs rb_gc_latest_gc_info returns a value when symbol is given")
+MSpec.register(:exclude, "CApiGCSpecs rb_gc_latest_gc_info returns the populated hash when a hash is given")
 # Testing behaviour specific to default GC
 MSpec.register(:exclude, "GC.stat increases major_gc_count after GC is run")
 MSpec.register(:exclude, "GC.stat provides some number for heap_free_slots")
