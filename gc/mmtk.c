@@ -1244,7 +1244,7 @@ setup_gc_stat_symbols(void)
     }
 }
 
-size_t
+VALUE
 rb_gc_impl_stat(void *objspace_ptr, VALUE hash_or_sym)
 {
     struct objspace *objspace = objspace_ptr;
@@ -1259,12 +1259,12 @@ rb_gc_impl_stat(void *objspace_ptr, VALUE hash_or_sym)
         key = hash_or_sym;
     }
     else {
-        rb_raise(rb_eTypeError, "non-hash or symbol given");
+        rb_bug("non-hash or symbol given");
     }
 
 #define SET(name, attr) \
     if (key == gc_stat_symbols[gc_stat_sym_##name]) \
-        return attr; \
+        return SIZET2NUM(attr); \
     else if (hash != Qnil) \
         rb_hash_aset(hash, gc_stat_symbols[gc_stat_sym_##name], SIZET2NUM(attr));
 
@@ -1278,11 +1278,12 @@ rb_gc_impl_stat(void *objspace_ptr, VALUE hash_or_sym)
         SET(last_heap_address, (size_t)mmtk_last_heap_address());
 #undef SET
 
-    if (!NIL_P(key)) { /* matched key should return above */
-        rb_raise(rb_eArgError, "unknown key: %"PRIsVALUE, rb_sym2str(key));
+    if (!NIL_P(key)) {
+        // Matched key should return above
+        return Qundef;
     }
 
-    return 0;
+    return hash;
 }
 
 size_t
