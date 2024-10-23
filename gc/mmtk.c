@@ -1209,9 +1209,26 @@ rb_gc_impl_gc_count(void *objspace_ptr)
 }
 
 VALUE
-rb_gc_impl_latest_gc_info(void *objspace_ptr, VALUE key)
+rb_gc_impl_latest_gc_info(void *objspace_ptr, VALUE hash_or_key)
 {
-    return Qnil;
+    VALUE hash = Qnil, key = Qnil;
+
+    if (SYMBOL_P(hash_or_key)) {
+        key = hash_or_key;
+    }
+    else if (RB_TYPE_P(hash_or_key, T_HASH)) {
+        hash = hash_or_key;
+    }
+    else {
+        rb_bug("gc_info_decode: non-hash or symbol given");
+    }
+
+    if (!NIL_P(key)) {
+        // Matched key should return above
+        return Qundef;
+    }
+
+    return hash;
 }
 
 enum gc_stat_sym {
