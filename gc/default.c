@@ -3462,7 +3462,9 @@ rb_gc_impl_shutdown_free_objects(void *objspace_ptr)
             VALUE vp = (VALUE)p;
             asan_unpoisoning_object(vp) {
                 if (RB_BUILTIN_TYPE(vp) != T_NONE) {
-                    rb_gc_obj_free(objspace, vp);
+                    if (rb_gc_obj_free(objspace, vp)) {
+                        RBASIC(vp)->flags = 0;
+                    }
                 }
             }
         }
@@ -3579,7 +3581,9 @@ rb_gc_impl_shutdown_call_finalizer(void *objspace_ptr)
             VALUE vp = (VALUE)p;
             asan_unpoisoning_object(vp) {
                 if (rb_gc_shutdown_call_finalizer_p(vp)) {
-                    rb_gc_obj_free(objspace, vp);
+                    if (rb_gc_obj_free(objspace, vp)) {
+                        RBASIC(vp)->flags = 0;
+                    }
                 }
             }
         }
@@ -6773,9 +6777,9 @@ rb_gc_impl_copy_attributes(void *objspace_ptr, VALUE dest, VALUE obj)
     rb_objspace_t *objspace = objspace_ptr;
 
     if (RVALUE_WB_UNPROTECTED(objspace, obj)) {
-        rb_gc_writebarrier_unprotect(dest);
+        rb_gc_impl_writebarrier_unprotect(objspace, dest);
     }
-    rb_gc_copy_finalizer(dest, obj);
+    rb_gc_impl_copy_finalizer(objspace, dest, obj);
 }
 
 void
@@ -7424,12 +7428,8 @@ gc_set_candidate_object_i(void *vstart, void *vend, size_t stride, void *data)
               case T_NONE:
               case T_ZOMBIE:
                 break;
-              case T_STRING:
-                // precompute the string coderange. This both save time for when it will be
-                // eventually needed, and avoid mutating heap pages after a potential fork.
-                rb_enc_str_coderange(v);
-                // fall through
               default:
+                rb_gc_prepare_heap_process_object(v);
                 if (!RVALUE_OLD_P(objspace, v) && !RVALUE_WB_UNPROTECTED(objspace, v)) {
                     RVALUE_AGE_SET_CANDIDATE(objspace, v);
                 }
@@ -8440,17 +8440,16 @@ gc_config_set_key(st_data_t key, st_data_t value, st_data_t data)
     return ST_CONTINUE;
 }
 
-VALUE
+void
 rb_gc_impl_config_set(void *objspace_ptr, VALUE hash)
 {
     rb_objspace_t *objspace = objspace_ptr;
 
-    if(!RB_TYPE_P(hash, T_HASH)) {
+    if (!RB_TYPE_P(hash, T_HASH)) {
         rb_raise(rb_eArgError, "expected keyword arguments");
     }
 
     rb_hash_stlike_foreach(hash, gc_config_set_key, (st_data_t)objspace);
-    return rb_gc_impl_config_get(objspace_ptr);
 }
 
 VALUE

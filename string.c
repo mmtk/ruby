@@ -2220,52 +2220,9 @@ ec_str_alloc_heap(struct rb_execution_context_struct *ec, VALUE klass)
 }
 
 static inline VALUE
-str_duplicate_setup(VALUE klass, VALUE str, VALUE dup)
+str_duplicate_setup_encoding(VALUE str, VALUE dup, VALUE flags)
 {
-    const VALUE flag_mask =
-        ENC_CODERANGE_MASK | ENCODING_MASK |
-        FL_FREEZE
-        ;
-    VALUE flags = FL_TEST_RAW(str, flag_mask);
     int encidx = 0;
-    if (STR_EMBED_P(str)) {
-        long len = RSTRING_LEN(str);
-
-        RUBY_ASSERT(STR_EMBED_P(dup));
-        RUBY_ASSERT(str_embed_capa(dup) >= len + 1);
-        MEMCPY(RSTRING(dup)->as.embed.ary, RSTRING(str)->as.embed.ary, char, len + 1);
-    }
-    else {
-        VALUE root = str;
-        if (FL_TEST_RAW(str, STR_SHARED)) {
-            root = RSTRING(str)->as.heap.aux.shared;
-        }
-        else if (UNLIKELY(!(flags & FL_FREEZE))) {
-            root = str = str_new_frozen(klass, str);
-            flags = FL_TEST_RAW(str, flag_mask);
-        }
-        RUBY_ASSERT(!STR_SHARED_P(root));
-        RUBY_ASSERT(RB_OBJ_FROZEN_RAW(root));
-
-        RSTRING(dup)->as.heap.ptr = RSTRING_PTR(str);
-        FL_SET(root, STR_SHARED_ROOT);
-        RB_OBJ_WRITE(dup, &RSTRING(dup)->as.heap.aux.shared, root);
-
-        WHEN_USING_MMTK({
-            if (!STR_EMBED_P(root)) {
-                // If root is not embedded, copy over the strbuf.
-                // In the case where root has the `STR_NOFREE` flag,
-                // its strbuf will be NULL.  We just copy NULL over.
-                VALUE strbuf = rb_mmtk_str_get_strbuf_nullable(root);
-                rb_mmtk_str_set_strbuf(dup, strbuf);
-            }
-        })
-
-        flags |= RSTRING_NOEMBED | STR_SHARED;
-    }
-
-    STR_SET_LEN(dup, RSTRING_LEN(str));
-
     if ((flags & ENCODING_MASK) == (ENCODING_INLINE_MAX<<ENCODING_SHIFT)) {
         encidx = rb_enc_get_index(str);
         flags &= ~ENCODING_MASK;
@@ -2275,18 +2232,65 @@ str_duplicate_setup(VALUE klass, VALUE str, VALUE dup)
     return dup;
 }
 
+static const VALUE flag_mask = ENC_CODERANGE_MASK | ENCODING_MASK | FL_FREEZE;
+
 static inline VALUE
-ec_str_duplicate(struct rb_execution_context_struct *ec, VALUE klass, VALUE str)
+str_duplicate_setup_embed(VALUE klass, VALUE str, VALUE dup)
 {
-    VALUE dup;
+    VALUE flags = FL_TEST_RAW(str, flag_mask);
+    long len = RSTRING_LEN(str);
+
+    RUBY_ASSERT(STR_EMBED_P(dup));
+    RUBY_ASSERT(str_embed_capa(dup) >= len + 1);
+    MEMCPY(RSTRING(dup)->as.embed.ary, RSTRING(str)->as.embed.ary, char, len + 1);
+    STR_SET_LEN(dup, RSTRING_LEN(str));
+    return str_duplicate_setup_encoding(str, dup, flags);
+}
+
+static inline VALUE
+str_duplicate_setup_heap(VALUE klass, VALUE str, VALUE dup)
+{
+    VALUE flags = FL_TEST_RAW(str, flag_mask);
+    VALUE root = str;
+    if (FL_TEST_RAW(str, STR_SHARED)) {
+        root = RSTRING(str)->as.heap.aux.shared;
+    }
+    else if (UNLIKELY(!(flags & FL_FREEZE))) {
+        root = str = str_new_frozen(klass, str);
+        flags = FL_TEST_RAW(str, flag_mask);
+    }
+    RUBY_ASSERT(!STR_SHARED_P(root));
+    RUBY_ASSERT(RB_OBJ_FROZEN_RAW(root));
+
+    RSTRING(dup)->as.heap.ptr = RSTRING_PTR(str);
+    FL_SET(root, STR_SHARED_ROOT);
+    RB_OBJ_WRITE(dup, &RSTRING(dup)->as.heap.aux.shared, root);
+    WHEN_USING_MMTK({
+        // The `dup` instance must be a newly allocated object.
+        RUBY_ASSERT(RSTRING_EXT(dup)->strbuf == 0);
+        if (!STR_EMBED_P(root)) {
+            // If root is not embedded, copy over the strbuf.
+            // In the case where root has the `STR_NOFREE` flag,
+            // its strbuf will be NULL.  We just copy NULL over.
+            VALUE strbuf = rb_mmtk_str_get_strbuf_nullable(root);
+            rb_mmtk_str_set_strbuf(dup, strbuf);
+        }
+    })
+    flags |= RSTRING_NOEMBED | STR_SHARED;
+
+    STR_SET_LEN(dup, RSTRING_LEN(str));
+    return str_duplicate_setup_encoding(str, dup, flags);
+}
+
+static inline VALUE
+str_duplicate_setup(VALUE klass, VALUE str, VALUE dup)
+{
     if (STR_EMBED_P(str)) {
-        dup = ec_str_alloc_embed(ec, klass, RSTRING_LEN(str) + TERM_LEN(str));
+        return str_duplicate_setup_embed(klass, str, dup);
     }
     else {
-        dup = ec_str_alloc_heap(ec, klass);
+        return str_duplicate_setup_heap(klass, str, dup);
     }
-
-    return str_duplicate_setup(klass, str, dup);
 }
 
 static inline VALUE
@@ -2332,11 +2336,30 @@ VALUE
 rb_ec_str_resurrect(struct rb_execution_context_struct *ec, VALUE str, bool chilled)
 {
     RUBY_DTRACE_CREATE_HOOK(STRING, RSTRING_LEN(str));
-    VALUE new_str = ec_str_duplicate(ec, rb_cString, str);
+    VALUE new_str, klass = rb_cString;
+
+    if (!(chilled && RTEST(rb_ivar_defined(str, id_debug_created_info))) && STR_EMBED_P(str)) {
+        new_str = ec_str_alloc_embed(ec, klass, RSTRING_LEN(str) + TERM_LEN(str));
+        str_duplicate_setup_embed(klass, str, new_str);
+    }
+    else {
+        new_str = ec_str_alloc_heap(ec, klass);
+        str_duplicate_setup_heap(klass, str, new_str);
+    }
     if (chilled) {
         STR_CHILL_RAW(new_str);
     }
     return new_str;
+}
+
+VALUE
+rb_str_with_debug_created_info(VALUE str, VALUE path, int line)
+{
+    VALUE debug_info = rb_ary_new_from_args(2, path, INT2FIX(line));
+    if (OBJ_FROZEN_RAW(str)) str = rb_str_dup(str);
+    rb_ivar_set(str, id_debug_created_info, rb_ary_freeze(debug_info));
+    STR_CHILL_RAW(str);
+    return rb_str_freeze(str);
 }
 
 /*
@@ -4993,9 +5016,9 @@ static void*
 memrchr(const char *search_str, int chr, long search_len)
 {
     const char *ptr = search_str + search_len;
-    do {
+    while (ptr > search_str) {
         if ((unsigned char)*(--ptr) == chr) return (void *)ptr;
-    } while (ptr >= search_str);
+    }
 
     return ((void *)0);
 }

@@ -598,7 +598,7 @@ typedef struct gc_function_map {
     void (*gc_disable)(void *objspace_ptr, bool finish_current_gc);
     bool (*gc_enabled_p)(void *objspace_ptr);
     VALUE (*config_get)(void *objpace_ptr);
-    VALUE (*config_set)(void *objspace_ptr, VALUE hash);
+    void (*config_set)(void *objspace_ptr, VALUE hash);
     void (*stress_set)(void *objspace_ptr, VALUE flag);
     VALUE (*stress_get)(void *objspace_ptr);
     // Object allocation
@@ -669,7 +669,7 @@ ruby_external_gc_init(void)
     char *gc_so_path = NULL;
     void *handle = NULL;
     if (gc_so_file) {
-        /* Check to make sure that gc_so_file matches /[\w-_.]+/ so that it does
+        /* Check to make sure that gc_so_file matches /[\w-_]+/ so that it does
          * not load a shared object outside of the directory. */
         for (size_t i = 0; i < strlen(gc_so_file); i++) {
             char c = gc_so_file[i];
@@ -677,17 +677,27 @@ ruby_external_gc_init(void)
             switch (c) {
               case '-':
               case '_':
-              case '.':
                 break;
               default:
-                fprintf(stderr, "Only alphanumeric, dash, underscore, and period is allowed in "RUBY_GC_LIBRARY"\n");
+                fprintf(stderr, "Only alphanumeric, dash, and underscore is allowed in "RUBY_GC_LIBRARY"\n");
                 exit(1);
             }
         }
 
-        gc_so_path = alloca(strlen(SHARED_GC_DIR) + strlen(gc_so_file) + 1);
-        strcpy(gc_so_path, SHARED_GC_DIR);
-        strcpy(gc_so_path + strlen(SHARED_GC_DIR), gc_so_file);
+        size_t gc_so_path_size = strlen(SHARED_GC_DIR "librubygc." SOEXT) + strlen(gc_so_file) + 1;
+        gc_so_path = alloca(gc_so_path_size);
+        {
+            size_t gc_so_path_idx = 0;
+#define GC_SO_PATH_APPEND(str) do { \
+    gc_so_path_idx += strlcpy(gc_so_path + gc_so_path_idx, str, gc_so_path_size - gc_so_path_idx); \
+} while (0)
+            GC_SO_PATH_APPEND(SHARED_GC_DIR);
+            GC_SO_PATH_APPEND("librubygc.");
+            GC_SO_PATH_APPEND(gc_so_file);
+            GC_SO_PATH_APPEND(SOEXT);
+            GC_ASSERT(gc_so_path_idx == gc_so_path_size - 1);
+#undef GC_SO_PATH_APPEND
+        }
 
         handle = dlopen(gc_so_path, RTLD_LAZY | RTLD_GLOBAL);
         if (!handle) {
@@ -1333,7 +1343,6 @@ rb_gc_obj_free(void *objspace, VALUE obj)
         return FALSE;
     }
     else {
-        RBASIC(obj)->flags = 0;
         return TRUE;
     }
 }
@@ -3128,6 +3137,20 @@ rb_gc_location(VALUE value)
 }
 
 void
+rb_gc_prepare_heap_process_object(VALUE obj)
+{
+    switch (BUILTIN_TYPE(obj)) {
+      case T_STRING:
+        // Precompute the string coderange. This both save time for when it will be
+        // eventually needed, and avoid mutating heap pages after a potential fork.
+        rb_enc_str_coderange(obj);
+        break;
+      default:
+        break;
+    }
+}
+
+void
 rb_gc_prepare_heap(void)
 {
     rb_gc_impl_prepare_heap(rb_gc_get_objspace());
@@ -3649,7 +3672,11 @@ gc_config_get(rb_execution_context_t *ec, VALUE self)
 static VALUE
 gc_config_set(rb_execution_context_t *ec, VALUE self, VALUE hash)
 {
-    return rb_gc_impl_config_set(rb_gc_get_objspace(), hash);
+    void *objspace = rb_gc_get_objspace();
+
+    rb_gc_impl_config_set(objspace, hash);
+
+    return rb_gc_impl_config_get(objspace);
 }
 
 static VALUE

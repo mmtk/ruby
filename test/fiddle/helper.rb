@@ -4,7 +4,7 @@ require 'rbconfig/sizeof'
 require 'test/unit'
 require 'fiddle'
 
-# puts("Fiddle::VERSION: #{Fiddle::VERSION}")
+puts("Fiddle::VERSION: #{Fiddle::VERSION}") if $VERBOSE
 
 # FIXME: this is stolen from DL and needs to be refactored.
 
@@ -183,11 +183,20 @@ module Fiddle
       end
     end
 
+    def ffi_backend?
+      RUBY_ENGINE != 'ruby'
+    end
+
     def under_gc_stress
       stress, GC.stress = GC.stress, true
       yield
     ensure
       GC.stress = stress
+    end
+
+    def assert_ractor_shareable(object)
+      Ractor.make_shareable(object)
+      assert_operator(Ractor, :shareable?, object)
     end
   end
 end
