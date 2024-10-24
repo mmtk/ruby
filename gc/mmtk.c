@@ -1223,6 +1223,17 @@ rb_gc_impl_latest_gc_info(void *objspace_ptr, VALUE hash_or_key)
         rb_bug("gc_info_decode: non-hash or symbol given");
     }
 
+#define SET(name, attr) \
+    if (key == ID2SYM(rb_intern_const(#name))) \
+        return (attr); \
+    else if (hash != Qnil) \
+        rb_hash_aset(hash, ID2SYM(rb_intern_const(#name)), (attr));
+
+    /* Hack to get StackProf working because it calls rb_gc_latest_gc_info with
+     * the :state key and expects a result. This always returns the :none state. */
+    SET(state, ID2SYM(rb_intern_const("none")));
+#undef SET
+
     if (!NIL_P(key)) {
         // Matched key should return above
         return Qundef;
