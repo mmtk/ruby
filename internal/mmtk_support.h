@@ -72,7 +72,8 @@ void rb_mmtk_register_ppp(VALUE obj);
 void rb_mmtk_maybe_register_initial_ppp(VALUE obj);
 
 // Finalization and exiting
-void rb_mmtk_maybe_register_obj_free_candidate(VALUE obj);
+void rb_mmtk_register_obj_free_candidate(VALUE obj);
+void rb_mmtk_maybe_register_initial_obj_free_candidate(VALUE obj);
 void rb_mmtk_call_obj_free_on_exit(void);
 
 bool rb_gc_obj_free_on_exit_started(void);

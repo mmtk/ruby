@@ -729,7 +729,7 @@ rb_mmtk_flush_obj_free_candidates(struct rb_mmtk_values_buffer *buffer)
     rb_mmtk_values_buffer_clear(buffer);
 }
 
-static void
+void
 rb_mmtk_register_obj_free_candidate(VALUE obj)
 {
     RUBY_DEBUG_LOG("Object registered for obj_free: %p: %s %s",
@@ -747,7 +747,7 @@ rb_mmtk_register_obj_free_candidate(VALUE obj)
 }
 
 static bool
-rb_mmtk_is_obj_free_candidate(VALUE obj)
+rb_mmtk_is_initial_obj_free_candidate(VALUE obj)
 {
     // Any object that has non-trivial cleaning-up code in `obj_free`
     // should be registered as "finalizable" to MMTk.
@@ -759,11 +759,16 @@ rb_mmtk_is_obj_free_candidate(VALUE obj)
         // Just let them leak for now.
         // We'll prioritize eliminating the underlying buffer of ordinary objects.
         return false;
+      case T_DATA:
+        // RTypedData with both RUBY_TYPED_EMBEDDABLE and RUBY_TYPED_DEFAULT_FREE do not need
+        // obj_free.  However, this function is called in the early stage of allocation, so we can't
+        // make this decision, yet.  So we return `false` for now and let `rb_data_object_wrap` and
+        // `typed_data_alloc` to decide whether to register the object as a candidate.
+        return false;
       case T_MODULE:
       case T_CLASS:
       case T_HASH:
       case T_REGEXP:
-      case T_DATA:
       case T_FILE:
       case T_ICLASS:
       case T_BIGNUM:
@@ -819,9 +824,9 @@ rb_mmtk_is_obj_free_candidate(VALUE obj)
 }
 
 void
-rb_mmtk_maybe_register_obj_free_candidate(VALUE obj)
+rb_mmtk_maybe_register_initial_obj_free_candidate(VALUE obj)
 {
-    if (rb_mmtk_is_obj_free_candidate(obj)) {
+    if (rb_mmtk_is_initial_obj_free_candidate(obj)) {
         rb_mmtk_register_obj_free_candidate(obj);
     }
 }

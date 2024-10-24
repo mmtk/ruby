@@ -125,6 +125,13 @@
 #include "builtin.h"
 #include "shape.h"
 
+#if USE_MMTK
+#include "internal/mmtk_support.h"
+#endif
+
+// Conditional compilation macros for MMTk.
+#include "internal/mmtk_macros.h"
+
 unsigned int
 rb_gc_vm_lock(void)
 {
@@ -957,7 +964,12 @@ rb_data_object_wrap(VALUE klass, void *datap, RUBY_DATA_FUNC dmark, RUBY_DATA_FU
 {
     RUBY_ASSERT_ALWAYS(dfree != (RUBY_DATA_FUNC)1);
     if (klass) rb_data_object_check(klass);
-    return newobj_of(GET_RACTOR(), klass, T_DATA, (VALUE)dmark, (VALUE)dfree, (VALUE)datap, !dmark, sizeof(struct RTypedData));
+    VALUE result = newobj_of(GET_RACTOR(), klass, T_DATA, (VALUE)dmark, (VALUE)dfree, (VALUE)datap, !dmark, sizeof(struct RTypedData));
+    WHEN_USING_MMTK({
+        // Conservatively consider all RData as candidates of obj_free.
+        rb_mmtk_register_obj_free_candidate(result);
+    })
+    return result;
 }
 
 VALUE
@@ -974,7 +986,21 @@ typed_data_alloc(VALUE klass, VALUE typed_flag, void *datap, const rb_data_type_
     RBIMPL_NONNULL_ARG(type);
     if (klass) rb_data_object_check(klass);
     bool wb_protected = (type->flags & RUBY_FL_WB_PROTECTED) || !type->function.dmark;
-    return newobj_of(GET_RACTOR(), klass, T_DATA, (VALUE)type, 1 | typed_flag, (VALUE)datap, wb_protected, size);
+    VALUE result = newobj_of(GET_RACTOR(), klass, T_DATA, (VALUE)type, 1 | typed_flag, (VALUE)datap, wb_protected, size);
+    WHEN_USING_MMTK({
+        // Although MMTk allow the allocation of arbitrarily sized objects,
+        // the current newobj_of still assumes the object fits in one of the size pools,
+        // and `rb_data_typed_object_zalloc` still checks if the `size` is "allocatable".
+        // We test if this concrete instance is embedded.
+        // TODO: Remove the limit and make all embeddable RTypedData embedded.
+        bool is_embedded = typed_flag & TYPED_DATA_EMBEDDED;
+        bool using_default_free = type->function.dfree == RUBY_TYPED_DEFAULT_FREE;
+        if (!(is_embedded && using_default_free)) {
+            // Embedded objects using default free do not need obj_free.
+            rb_mmtk_register_obj_free_candidate(result);
+        }
+    })
+    return result;
 }
 
 VALUE
