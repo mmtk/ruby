@@ -232,9 +232,7 @@ module Bundler
       end
     end
 
-    # Used to make bin stubs that are not created by bundler work
-    # under bundler. The new Gem.bin_path only considers gems in
-    # +specs+
+    # Used to give better error messages when activating specs outside of the current bundle
     def replace_bin_path(specs_by_name)
       gem_class = (class << Gem; self; end)
 
@@ -273,31 +271,6 @@ module Bundler
 
         spec
       end
-
-      redefine_method(gem_class, :activate_bin_path) do |name, *args|
-        exec_name = args.first
-        return ENV["BUNDLE_BIN_PATH"] if exec_name == "bundle"
-
-        # Copy of Rubygems activate_bin_path impl
-        requirement = args.last
-        spec = find_spec_for_exe name, exec_name, [requirement]
-
-        gem_bin = File.join(spec.full_gem_path, spec.bindir, exec_name)
-        gem_from_path_bin = File.join(File.dirname(spec.loaded_from), spec.bindir, exec_name)
-        File.exist?(gem_bin) ? gem_bin : gem_from_path_bin
-      end
-
-      redefine_method(gem_class, :bin_path) do |name, *args|
-        exec_name = args.first
-        return ENV["BUNDLE_BIN_PATH"] if exec_name == "bundle"
-
-        spec = find_spec_for_exe(name, *args)
-        exec_name ||= spec.default_executable
-
-        gem_bin = File.join(spec.full_gem_path, spec.bindir, exec_name)
-        gem_from_path_bin = File.join(File.dirname(spec.loaded_from), spec.bindir, exec_name)
-        File.exist?(gem_bin) ? gem_bin : gem_from_path_bin
-      end
     end
 
     # Replace or hook into RubyGems to provide a bundlerized view
@@ -314,7 +287,7 @@ module Bundler
         Gem::BUNDLED_GEMS.replace_require(specs) if Gem::BUNDLED_GEMS.respond_to?(:replace_require)
       end
       replace_gem(specs, specs_by_name)
-      stub_rubygems(specs)
+      stub_rubygems(specs_by_name.values)
       replace_bin_path(specs_by_name)
 
       Gem.clear_paths
@@ -420,7 +393,9 @@ module Bundler
     def download_gem(spec, uri, cache_dir, fetcher)
       require "rubygems/remote_fetcher"
       uri = Bundler.settings.mirror_for(uri)
-      Bundler::Retry.new("download gem from #{uri}").attempts do
+      redacted_uri = Gem::Uri.redact(uri)
+
+      Bundler::Retry.new("download gem from #{redacted_uri}").attempts do
         gem_file_name = spec.file_name
         local_gem_path = File.join cache_dir, gem_file_name
         return if File.exist? local_gem_path
@@ -442,7 +417,7 @@ module Bundler
         end
       end
     rescue Gem::RemoteFetcher::FetchError => e
-      raise Bundler::HTTPError, "Could not download gem from #{uri} due to underlying error <#{e.message}>"
+      raise Bundler::HTTPError, "Could not download gem from #{redacted_uri} due to underlying error <#{e.message}>"
     end
 
     def build(spec, skip_validation = false)

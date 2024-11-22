@@ -1521,6 +1521,7 @@ impl std::fmt::Debug for Branch {
 impl PendingBranch {
     /// Set up a branch target at `target_idx`. Find an existing block to branch to
     /// or generate a stub for one.
+    #[must_use]
     fn set_target(
         &self,
         target_idx: u32,
@@ -1594,6 +1595,7 @@ impl PendingBranch {
         }
 
         branch.assert_layout();
+        incr_counter!(compiled_branch_count);
 
         branchref
     }
@@ -2307,7 +2309,9 @@ pub fn limit_block_versions(blockid: BlockId, ctx: &Context) -> Context {
 
         return generic_ctx;
     }
-    incr_counter_to!(max_inline_versions, next_versions);
+    if ctx.inline() {
+        incr_counter_to!(max_inline_versions, next_versions);
+    }
 
     return *ctx;
 }
@@ -2365,6 +2369,9 @@ unsafe fn add_block_version(blockref: BlockRef, cb: &CodeBlock) {
     }
 
     incr_counter!(compiled_block_count);
+    if Context::decode(block.ctx).inline() {
+        incr_counter!(inline_block_count);
+    }
 
     // Mark code pages for code GC
     let iseq_payload = get_iseq_payload(block.iseq.get()).unwrap();
@@ -3450,8 +3457,6 @@ fn new_pending_branch(jit: &mut JITState, gen_fn: BranchGenFn) -> PendingBranchR
         targets: [Cell::new(None), Cell::new(None)],
     });
 
-    incr_counter!(compiled_branch_count); // TODO not true. count at finalize time
-
     // Add to the list of outgoing branches for the block
     jit.queue_outgoing_branch(branch.clone());
 
@@ -3846,6 +3851,7 @@ impl Assembler
     }
 }
 
+#[must_use]
 pub fn gen_branch(
     jit: &mut JITState,
     asm: &mut Assembler,
@@ -3854,17 +3860,17 @@ pub fn gen_branch(
     target1: Option<BlockId>,
     ctx1: Option<&Context>,
     gen_fn: BranchGenFn,
-) {
+) -> Option<()> {
     let branch = new_pending_branch(jit, gen_fn);
 
     // Get the branch targets or stubs
-    let target0_addr = branch.set_target(0, target0, ctx0, jit);
+    let target0_addr = branch.set_target(0, target0, ctx0, jit)?;
     let target1_addr = if let Some(ctx) = ctx1 {
         let addr = branch.set_target(1, target1.unwrap(), ctx, jit);
         if addr.is_none() {
             // target1 requested but we're out of memory.
             // Avoid unwrap() in gen_fn()
-            return;
+            return None;
         }
 
         addr
@@ -3872,10 +3878,10 @@ pub fn gen_branch(
 
     // Call the branch generation function
     asm.mark_branch_start(&branch);
-    if let Some(dst_addr) = target0_addr {
-        branch.gen_fn.call(asm, Target::CodePtr(dst_addr), target1_addr.map(|addr| Target::CodePtr(addr)));
-    }
+    branch.gen_fn.call(asm, Target::CodePtr(target0_addr), target1_addr.map(|addr| Target::CodePtr(addr)));
     asm.mark_branch_end(&branch);
+
+    Some(())
 }
 
 pub fn gen_direct_jump(jit: &mut JITState, ctx: &Context, target0: BlockId, asm: &mut Assembler) {
@@ -3915,10 +3921,7 @@ pub fn gen_direct_jump(jit: &mut JITState, ctx: &Context, target0: BlockId, asm:
 }
 
 /// Create a stub to force the code up to this point to be executed
-pub fn defer_compilation(
-    jit: &mut JITState,
-    asm: &mut Assembler,
-) {
+pub fn defer_compilation(jit: &mut JITState, asm: &mut Assembler) -> Result<(), ()> {
     if asm.ctx.is_deferred() {
         panic!("Double defer!");
     }
@@ -3935,7 +3938,7 @@ pub fn defer_compilation(
     };
 
     // Likely a stub since the context is marked as deferred().
-    let target0_address = branch.set_target(0, blockid, &next_ctx, jit);
+    let dst_addr = branch.set_target(0, blockid, &next_ctx, jit).ok_or(())?;
 
     // Pad the block if it has the potential to be invalidated. This must be
     // done before gen_fn() in case the jump is overwritten by a fallthrough.
@@ -3946,9 +3949,7 @@ pub fn defer_compilation(
     // Call the branch generation function
     asm_comment!(asm, "defer_compilation");
     asm.mark_branch_start(&branch);
-    if let Some(dst_addr) = target0_address {
-        branch.gen_fn.call(asm, Target::CodePtr(dst_addr), None);
-    }
+    branch.gen_fn.call(asm, Target::CodePtr(dst_addr), None);
     asm.mark_branch_end(&branch);
 
     // If the block we're deferring from is empty
@@ -3957,6 +3958,8 @@ pub fn defer_compilation(
     }
 
     incr_counter!(defer_count);
+
+    Ok(())
 }
 
 /// Remove a block from the live control flow graph.

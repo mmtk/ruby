@@ -2189,7 +2189,7 @@ rb_vm_search_method_slowpath(const struct rb_callinfo *ci, VALUE klass)
 {
     const struct rb_callcache *cc;
 
-    VM_ASSERT(RB_TYPE_P(klass, T_CLASS) || RB_TYPE_P(klass, T_ICLASS), "klass=%"PRIxVALUE", type=%d", klass, TYPE(klass));
+    VM_ASSERT_TYPE2(klass, T_CLASS, T_ICLASS);
 
     RB_VM_LOCK_ENTER();
     {
@@ -3035,6 +3035,7 @@ warn_unused_block(const rb_callable_method_entry_t *cme, const rb_iseq_t *iseq, 
     rb_vm_t *vm = GET_VM();
     st_table *dup_check_table = vm->unused_block_warning_table;
     st_data_t key;
+    bool strict_unused_block = rb_warning_category_enabled_p(RB_WARN_CATEGORY_STRICT_UNUSED_BLOCK);
 
     union {
         VALUE v;
@@ -3046,7 +3047,7 @@ warn_unused_block(const rb_callable_method_entry_t *cme, const rb_iseq_t *iseq, 
     };
 
     // relax check
-    if (!vm->unused_block_warning_strict) {
+    if (!strict_unused_block) {
         key = (st_data_t)cme->def->original_id;
 
         if (st_lookup(dup_check_table, key, NULL)) {
@@ -3072,16 +3073,16 @@ warn_unused_block(const rb_callable_method_entry_t *cme, const rb_iseq_t *iseq, 
     if (st_insert(dup_check_table, key, 1)) {
         // already shown
     }
-    else {
+    else if (RTEST(ruby_verbose) || strict_unused_block) {
         VALUE m_loc = rb_method_entry_location((const rb_method_entry_t *)cme);
         VALUE name = rb_gen_method_name(cme->defined_class, ISEQ_BODY(iseq)->location.base_label);
 
         if (!NIL_P(m_loc)) {
-            rb_warning("the block passed to '%"PRIsVALUE"' defined at %"PRIsVALUE":%"PRIsVALUE" may be ignored",
-                       name, RARRAY_AREF(m_loc, 0), RARRAY_AREF(m_loc, 1));
+            rb_warn("the block passed to '%"PRIsVALUE"' defined at %"PRIsVALUE":%"PRIsVALUE" may be ignored",
+                    name, RARRAY_AREF(m_loc, 0), RARRAY_AREF(m_loc, 1));
         }
         else {
-            rb_warning("the block may be ignored because '%"PRIsVALUE"' does not use a block", name);
+            rb_warn("the block may be ignored because '%"PRIsVALUE"' does not use a block", name);
         }
     }
 }
@@ -4144,7 +4145,7 @@ aliased_callable_method_entry(const rb_callable_method_entry_t *me)
 
     if (orig_me->defined_class == 0) {
         VALUE defined_class = rb_find_defined_class_by_owner(me->defined_class, orig_me->owner);
-        VM_ASSERT(RB_TYPE_P(orig_me->owner, T_MODULE));
+        VM_ASSERT_TYPE(orig_me->owner, T_MODULE);
         cme = rb_method_entry_complement_defined_class(orig_me, me->called_id, defined_class);
 
         if (me->def->reference_count == 1) {

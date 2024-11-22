@@ -1888,7 +1888,7 @@ void rb_obj_freeze_inline(VALUE x)
     if (RB_FL_ABLE(x)) {
         RB_FL_SET_RAW(x, RUBY_FL_FREEZE);
         if (TYPE(x) == T_STRING) {
-            RB_FL_UNSET_RAW(x, FL_USER3); // STR_CHILLED
+            RB_FL_UNSET_RAW(x, FL_USER2 | FL_USER3); // STR_CHILLED
         }
 
         rb_shape_t * next_shape = rb_shape_transition_shape_frozen(x);
@@ -3068,7 +3068,7 @@ rb_autoload_load(VALUE module, ID name)
 
     // At this point, we assume there might be autoloading, so fail if it's ractor:
     if (UNLIKELY(!rb_ractor_main_p())) {
-        rb_raise(rb_eRactorUnsafeError, "require by autoload on non-main Ractor is not supported (%s)", rb_id2name(name));
+        return rb_ractor_autoload_load(module, name);
     }
 
     // This state is stored on the stack and is used during the autoload process.
@@ -3354,6 +3354,7 @@ rb_const_remove(VALUE mod, ID id)
         undefined_constant(mod, ID2SYM(id));
     }
 
+    rb_const_warn_if_deprecated(ce, mod, id);
     rb_clear_constant_cache_for_id(id);
 
     val = ce->value;

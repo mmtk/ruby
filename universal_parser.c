@@ -23,7 +23,7 @@
 # define FALSE   0
 #endif
 #define numberof(array) ((int)(sizeof(array) / sizeof((array)[0])))
-#define rb_strlen_lit(str) (sizeof(str "") - 1)
+#define rb_strlen_lit(str) ((sizeof(str "") / sizeof(str ""[0])) - 1)
 #undef FIXNUM_MAX
 #define FIXNUM_MAX (LONG_MAX / 2)
 
@@ -86,7 +86,6 @@
 
 #define rb_attr_get p->config->attr_get
 
-#define rb_ary_new           p->config->ary_new
 #define rb_ary_push          p->config->ary_push
 #undef rb_ary_new_from_args
 #define rb_ary_new_from_args p->config->ary_new_from_args

@@ -51,11 +51,24 @@ Note: We're only listing outstanding class updates.
         #=> [2022-02-24 00:00:00 UTC, 2022-02-25 00:00:00 UTC, 2022-02-26 00:00:00 UTC]
         ```
 
+* Refinement
+
+    * Removed deprecated method Refinement#refined_class. [[Feature #19714]]
+
 * RubyVM::AbstractSyntaxTree
 
     * Add RubyVM::AbstractSyntaxTree::Node#locations method which returns location objects
       associated with the AST node. [[Feature #20624]]
     * Add RubyVM::AbstractSyntaxTree::Location class which holds location information. [[Feature #20624]]
+
+* Fiber::Scheduler
+
+    * An optional `Fiber::Scheduler#blocking_operation_wait` hook allows blocking operations to be moved out of the
+      event loop in order to reduce latency and improve multi-core processor utilization. [[Feature #20876]]
+
+* IO::Buffer
+
+    * `IO::Buffer#copy` can release the GVL, allowing other threads to run while copying data. [[Feature #20902]]
 
 ## Stdlib updates
 
@@ -73,32 +86,51 @@ Note: We're only listing outstanding class updates.
 
 The following default gem is added.
 
-* win32-registry 0.0.1
+* win32-registry 0.1.0
 
 The following default gems are updated.
 
 * RubyGems 3.6.0.dev
+* benchmark 0.4.0
 * bundler 2.6.0.dev
+* date 3.4.0
+* delegate 0.4.0
 * erb 4.0.4
-* fiddle 1.1.4.dev
-* io-console 0.7.2
+* etc 1.4.4
+* fcntl 1.2.0
+* fiddle 1.1.6.dev
+* fileutils 1.7.3
+* io-console 0.8.0.beta1
 * ipaddr 1.2.7
 * irb 1.14.1
-* json 2.7.2
+* json 2.8.2
 * logger 1.6.1
-* net-http 0.4.1
-* optparse 0.5.0
+* net-http 0.5.0
+* open-uri 0.5.0
+* optparse 0.6.0
+* ostruct 0.6.1
+* pathname 0.4.0
+* pp 0.6.1
 * prism 1.0.0
-* psych 5.2.0.beta1
-* rdoc 6.7.0
-* reline 0.5.10
-* resolv 0.4.0
+* pstore 0.1.4
+* psych 5.2.0
+* rdoc 6.8.1
+* reline 0.5.11
+* resolv 0.5.0
+* securerandom 0.3.2
+* shellwords 0.2.1
+* singleton 0.3.0
 * stringio 3.1.2.dev
 * strscan 3.1.1.dev
-* syntax_suggest 2.0.1
-* time 0.4.0
-* uri 0.13.1
-* zlib 3.1.1
+* syntax_suggest 2.0.2
+* tempfile 0.3.1
+* time 0.4.1
+* timeout 0.4.2
+* tmpdir 0.3.0
+* uri 1.0.2
+* win32ole 1.9.0
+* yaml 0.4.0
+* zlib 3.2.0
 
 The following bundled gem is added.
 
@@ -106,15 +138,16 @@ The following bundled gem is added.
 
 The following bundled gems are updated.
 
-* minitest 5.25.1
+* minitest 5.25.2
 * power_assert 2.0.4
 * rake 13.2.1
 * test-unit 3.6.2
-* rexml 3.3.8
+* rexml 3.3.9
 * rss 0.3.1
 * net-ftp 0.3.8
-* net-imap 0.4.17
+* net-imap 0.5.1
 * net-smtp 0.5.0
+* prime 0.1.3
 * rbs 3.6.1
 * typeprof 0.21.11
 * debug 1.9.2
@@ -122,7 +155,7 @@ The following bundled gems are updated.
 
 The following bundled gems are promoted from default gems.
 
-* mutex_m 0.2.0
+* mutex_m 0.3.0
 * getoptlong 0.2.1
 * base64 0.2.0
 * bigdecimal 3.1.8
@@ -212,3 +245,5 @@ details of the default gems or bundled gems.
 [Feature #20497]: https://bugs.ruby-lang.org/issues/20497
 [Feature #20624]: https://bugs.ruby-lang.org/issues/20624
 [Feature #20775]: https://bugs.ruby-lang.org/issues/20775
+[Feature #20876]: https://bugs.ruby-lang.org/issues/20876
+[Feature #20902]: https://bugs.ruby-lang.org/issues/20902

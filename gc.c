@@ -74,6 +74,12 @@
 #include <emscripten.h>
 #endif
 
+/* For ruby_annotate_mmap */
+#ifdef __linux__
+#include <linux/prctl.h>
+#include <sys/prctl.h>
+#endif
+
 #undef LIST_HEAD /* ccan/list conflicts with BSD-origin sys/queue.h. */
 
 #include "constant.h"
@@ -579,6 +585,8 @@ rb_gc_guarded_ptr_val(volatile VALUE *ptr, VALUE val)
 static const char *obj_type_name(VALUE obj);
 #define RB_AMALGAMATED_DEFAULT_GC
 #include "gc/default.c"
+static int external_gc_loaded = FALSE;
+
 
 #if USE_SHARED_GC && !defined(HAVE_DLOPEN)
 # error "Shared GC requires dlopen"
@@ -651,14 +659,16 @@ typedef struct gc_function_map {
     unsigned long long (*get_total_time)(void *objspace_ptr);
     size_t (*gc_count)(void *objspace_ptr);
     VALUE (*latest_gc_info)(void *objspace_ptr, VALUE key);
-    size_t (*stat)(void *objspace_ptr, VALUE hash_or_sym);
-    size_t (*stat_heap)(void *objspace_ptr, VALUE heap_name, VALUE hash_or_sym);
+    VALUE (*stat)(void *objspace_ptr, VALUE hash_or_sym);
+    VALUE (*stat_heap)(void *objspace_ptr, VALUE heap_name, VALUE hash_or_sym);
     // Miscellaneous
     size_t (*obj_flags)(void *objspace_ptr, VALUE obj, ID* flags, size_t max);
     bool (*pointer_to_heap_p)(void *objspace_ptr, const void *ptr);
     bool (*garbage_object_p)(void *objspace_ptr, VALUE obj);
     void (*set_event_hook)(void *objspace_ptr, const rb_event_flag_t event);
     void (*copy_attributes)(void *objspace_ptr, VALUE dest, VALUE obj);
+    // GC Identification
+    const char *(*active_gc_name)(void);
 } rb_gc_function_map_t;
 
 static rb_gc_function_map_t rb_gc_functions;
@@ -711,6 +721,7 @@ ruby_external_gc_init(void)
             fprintf(stderr, "ruby_external_gc_init: Shared library %s cannot be opened: %s\n", gc_so_path, dlerror());
             exit(1);
         }
+        external_gc_loaded = TRUE;
     }
 
     rb_gc_function_map_t gc_functions;
@@ -802,6 +813,8 @@ ruby_external_gc_init(void)
     load_external_gc_func(garbage_object_p);
     load_external_gc_func(set_event_hook);
     load_external_gc_func(copy_attributes);
+    //GC Identification
+    load_external_gc_func(active_gc_name);
 
 # undef load_external_gc_func
 
@@ -881,6 +894,8 @@ ruby_external_gc_init(void)
 # define rb_gc_impl_garbage_object_p rb_gc_functions.garbage_object_p
 # define rb_gc_impl_set_event_hook rb_gc_functions.set_event_hook
 # define rb_gc_impl_copy_attributes rb_gc_functions.copy_attributes
+// GC Identification
+# define rb_gc_impl_active_gc_name rb_gc_functions.active_gc_name
 #endif
 
 static VALUE initial_stress = Qfalse;
@@ -2891,6 +2906,25 @@ rb_gc_copy_attributes(VALUE dest, VALUE obj)
     rb_gc_impl_copy_attributes(rb_gc_get_objspace(), dest, obj);
 }
 
+int
+rb_gc_external_gc_loaded_p(void)
+{
+    return external_gc_loaded;
+}
+
+const char *
+rb_gc_active_gc_name(void)
+{
+    const char *gc_name = rb_gc_impl_active_gc_name();
+    const size_t len = strlen(gc_name);
+    if (len > RB_GC_MAX_NAME_LEN) {
+        rb_bug("GC should have a name no more than %d chars long. Currently: %zu (%s)",
+               RB_GC_MAX_NAME_LEN, len, gc_name);
+    }
+    return gc_name;
+
+}
+
 // TODO: rearchitect this function to work for a generic GC
 size_t
 rb_obj_gc_flags(VALUE obj, ID* flags, size_t max)
@@ -3640,7 +3674,17 @@ gc_count(rb_execution_context_t *ec, VALUE self)
 VALUE
 rb_gc_latest_gc_info(VALUE key)
 {
-    return rb_gc_impl_latest_gc_info(rb_gc_get_objspace(), key);
+    if (!SYMBOL_P(key) && !RB_TYPE_P(key, T_HASH)) {
+        rb_raise(rb_eTypeError, "non-hash or symbol given");
+    }
+
+    VALUE val = rb_gc_impl_latest_gc_info(rb_gc_get_objspace(), key);
+
+    if (val == Qundef) {
+        rb_raise(rb_eArgError, "unknown key: %"PRIsVALUE, rb_sym2str(key));
+    }
+
+    return val;
 }
 
 static VALUE
@@ -3649,25 +3693,40 @@ gc_stat(rb_execution_context_t *ec, VALUE self, VALUE arg) // arg is (nil || has
     if (NIL_P(arg)) {
         arg = rb_hash_new();
     }
-
-    size_t val = rb_gc_impl_stat(rb_gc_get_objspace(), arg);
-
-    if (SYMBOL_P(arg)) {
-        return SIZET2NUM(val);
+    else if (!RB_TYPE_P(arg, T_HASH) && !SYMBOL_P(arg)) {
+        rb_raise(rb_eTypeError, "non-hash or symbol given");
     }
-    else {
-        return arg;
+
+    VALUE ret = rb_gc_impl_stat(rb_gc_get_objspace(), arg);
+
+    if (ret == Qundef) {
+        GC_ASSERT(SYMBOL_P(arg));
+
+        rb_raise(rb_eArgError, "unknown key: %"PRIsVALUE, rb_sym2str(arg));
     }
+
+    return ret;
 }
 
 size_t
-rb_gc_stat(VALUE key)
+rb_gc_stat(VALUE arg)
 {
-    if (SYMBOL_P(key)) {
-        return rb_gc_impl_stat(rb_gc_get_objspace(), key);
+    if (!RB_TYPE_P(arg, T_HASH) && !SYMBOL_P(arg)) {
+        rb_raise(rb_eTypeError, "non-hash or symbol given");
+    }
+
+    VALUE ret = rb_gc_impl_stat(rb_gc_get_objspace(), arg);
+
+    if (ret == Qundef) {
+        GC_ASSERT(SYMBOL_P(arg));
+
+        rb_raise(rb_eArgError, "unknown key: %"PRIsVALUE, rb_sym2str(arg));
+    }
+
+    if (SYMBOL_P(arg)) {
+        return NUM2SIZET(ret);
     }
     else {
-        rb_gc_impl_stat(rb_gc_get_objspace(), key);
         return 0;
     }
 }
@@ -3679,20 +3738,38 @@ gc_stat_heap(rb_execution_context_t *ec, VALUE self, VALUE heap_name, VALUE arg)
         arg = rb_hash_new();
     }
 
-    size_t val = rb_gc_impl_stat_heap(rb_gc_get_objspace(), heap_name, arg);
-
-    if (SYMBOL_P(arg)) {
-        return SIZET2NUM(val);
+    if (NIL_P(heap_name)) {
+        if (!RB_TYPE_P(arg, T_HASH)) {
+            rb_raise(rb_eTypeError, "non-hash given");
+        }
+    }
+    else if (FIXNUM_P(heap_name)) {
+        if (!SYMBOL_P(arg) && !RB_TYPE_P(arg, T_HASH)) {
+            rb_raise(rb_eTypeError, "non-hash or symbol given");
+        }
     }
     else {
-        return arg;
+        rb_raise(rb_eTypeError, "heap_name must be nil or an Integer");
     }
+
+    VALUE ret = rb_gc_impl_stat_heap(rb_gc_get_objspace(), heap_name, arg);
+
+    if (ret == Qundef) {
+        GC_ASSERT(SYMBOL_P(arg));
+
+        rb_raise(rb_eArgError, "unknown key: %"PRIsVALUE, rb_sym2str(arg));
+    }
+
+    return ret;
 }
 
 static VALUE
 gc_config_get(rb_execution_context_t *ec, VALUE self)
 {
-    return rb_gc_impl_config_get(rb_gc_get_objspace());
+    VALUE cfg_hash = rb_gc_impl_config_get(rb_gc_get_objspace());
+    rb_hash_aset(cfg_hash, sym("implementation"), rb_fstring_cstr(rb_gc_impl_active_gc_name()));
+
+    return cfg_hash;
 }
 
 static VALUE
@@ -3784,8 +3861,6 @@ gc_disable(rb_execution_context_t *ec, VALUE _)
 {
     return rb_gc_disable();
 }
-
-
 
 // TODO: think about moving ruby_gc_set_params into Init_heap or Init_gc
 void
@@ -4678,4 +4753,37 @@ Init_GC(void)
     rb_define_module_function(rb_mObjSpace, "count_objects", count_objects, -1);
 
     rb_gc_impl_init();
+}
+
+// Set a name for the anonymous virtual memory area. `addr` is the starting
+// address of the area and `size` is its length in bytes. `name` is a
+// NUL-terminated human-readable string.
+//
+// This function is usually called after calling `mmap()`.  The human-readable
+// annotation helps developers identify the call site of `mmap()` that created
+// the memory mapping.
+//
+// This function currently only works on Linux 5.17 or higher.  After calling
+// this function, we can see annotations in the form of "[anon:...]" in
+// `/proc/self/maps`, where `...` is the content of `name`.  This function has
+// no effect when called on other platforms.
+void
+ruby_annotate_mmap(const void *addr, unsigned long size, const char *name)
+{
+#if defined(__linux__) && defined(PR_SET_VMA) && defined(PR_SET_VMA_ANON_NAME)
+    // The name length cannot exceed 80 (including the '\0').
+    RUBY_ASSERT(strlen(name) < 80);
+    prctl(PR_SET_VMA, PR_SET_VMA_ANON_NAME, (unsigned long)addr, size, name);
+    // We ignore errors in prctl. prctl may set errno to EINVAL for several
+    // reasons.
+    // 1. The attr (PR_SET_VMA_ANON_NAME) is not a valid attribute.
+    // 2. addr is an invalid address.
+    // 3. The string pointed by name is too long.
+    // The first error indicates PR_SET_VMA_ANON_NAME is not available, and may
+    // happen if we run the compiled binary on an old kernel.  In theory, all
+    // other errors should result in a failure.  But since EINVAL cannot tell
+    // the first error from others, and this function is mainly used for
+    // debugging, we silently ignore the error.
+    errno = 0;
+#endif
 }

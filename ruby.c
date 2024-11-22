@@ -414,6 +414,7 @@ usage(const char *name, int help, int highlight, int columns)
         M("deprecated",   "", "Deprecated features."),
         M("experimental", "", "Experimental features."),
         M("performance",  "", "Performance issues."),
+        M("strict_unused_block", "", "Warning unused block strictly"),
     };
 #if USE_RJIT
     extern const struct ruby_opt_message rb_rjit_option_messages[];
@@ -1260,6 +1261,9 @@ proc_W_option(ruby_cmdline_options_t *opt, const char *s, int *warning)
         else if (NAME_MATCH_P("performance", s, len)) {
             bits = 1U << RB_WARN_CATEGORY_PERFORMANCE;
         }
+        else if (NAME_MATCH_P("strict_unused_block", s, len)) {
+            bits = 1U << RB_WARN_CATEGORY_STRICT_UNUSED_BLOCK;
+        }
         else {
             rb_warn("unknown warning category: '%s'", s);
         }
@@ -1852,6 +1856,10 @@ ruby_opt_init(ruby_cmdline_options_t *opt)
 #if USE_YJIT
     rb_yjit_init(opt->yjit);
 #endif
+
+    // Call yjit_hook.rb after rb_yjit_init() to use `RubyVM::YJIT.enabled?`
+    void Init_builtin_yjit_hook();
+    Init_builtin_yjit_hook();
 
     ruby_set_script_name(opt->script_name);
     require_libraries(&opt->req_list);
@@ -2642,8 +2650,15 @@ process_options(int argc, char **argv, ruby_cmdline_options_t *opt)
 
         if (!result.ast) {
             pm_parse_result_t *pm = &result.prism;
-            iseq = pm_iseq_new_main(&pm->node, opt->script_name, path, parent, optimize);
+            int error_state;
+            iseq = pm_iseq_new_main(&pm->node, opt->script_name, path, parent, optimize, &error_state);
+
             pm_parse_result_free(pm);
+
+            if (error_state) {
+                RUBY_ASSERT(iseq == NULL);
+                rb_jump_tag(error_state);
+            }
         }
         else {
             rb_ast_t *ast = result.ast;

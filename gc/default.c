@@ -5,6 +5,10 @@
 #ifndef _WIN32
 # include <sys/mman.h>
 # include <unistd.h>
+# ifdef __linux__
+#  include <linux/prctl.h>
+#  include <sys/prctl.h>
+# endif
 #endif
 
 #if !defined(PAGE_SIZE) && defined(HAVE_SYS_USER_H)
@@ -265,13 +269,6 @@ int ruby_rgengc_debug;
  */
 #ifndef RGENGC_ESTIMATE_OLDMALLOC
 # define RGENGC_ESTIMATE_OLDMALLOC 1
-#endif
-
-/* RGENGC_FORCE_MAJOR_GC
- * Force major/full GC if this macro is not 0.
- */
-#ifndef RGENGC_FORCE_MAJOR_GC
-# define RGENGC_FORCE_MAJOR_GC 0
 #endif
 
 #ifndef GC_PROFILE_MORE_DETAIL
@@ -1927,11 +1924,22 @@ heap_page_body_allocate(void)
 #ifdef HAVE_MMAP
         GC_ASSERT(HEAP_PAGE_ALIGN % sysconf(_SC_PAGE_SIZE) == 0);
 
-        char *ptr = mmap(NULL, HEAP_PAGE_ALIGN + HEAP_PAGE_SIZE,
+        size_t mmap_size = HEAP_PAGE_ALIGN + HEAP_PAGE_SIZE;
+        char *ptr = mmap(NULL, mmap_size,
                          PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (ptr == MAP_FAILED) {
             return NULL;
         }
+
+        // If we are building `default.c` as part of the ruby executable, we
+        // may just call `ruby_annotate_mmap`.  But if we are building
+        // `default.c` as a shared library, we will not have access to private
+        // symbols, and we have to either call prctl directly or make our own
+        // wrapper.
+#if defined(__linux__) && defined(PR_SET_VMA) && defined(PR_SET_VMA_ANON_NAME)
+        prctl(PR_SET_VMA, PR_SET_VMA_ANON_NAME, ptr, mmap_size, "Ruby:GC:default:heap_page_body_allocate");
+        errno = 0;
+#endif
 
         char *aligned = ptr + HEAP_PAGE_ALIGN;
         aligned -= ((VALUE)aligned & (HEAP_PAGE_ALIGN - 1));
@@ -5061,7 +5069,7 @@ rb_gc_impl_mark_weak(void *objspace_ptr, VALUE *ptr)
 
     /* If we are in a minor GC and the other object is old, then obj should
      * already be marked and cannot be reclaimed in this GC cycle so we don't
-     * need to add it to the weak refences list. */
+     * need to add it to the weak references list. */
     if (!is_full_marking(objspace) && RVALUE_OLD_P(objspace, obj)) {
         GC_ASSERT(RVALUE_MARKED(objspace, obj));
         GC_ASSERT(!objspace->flags.during_compacting);
@@ -6059,9 +6067,6 @@ gc_marks_finish(rb_objspace_t *objspace)
         if (objspace->rgengc.old_objects > objspace->rgengc.old_objects_limit) {
             gc_needs_major_flags |= GPR_FLAG_MAJOR_BY_OLDGEN;
         }
-        if (RGENGC_FORCE_MAJOR_GC) {
-            gc_needs_major_flags = GPR_FLAG_MAJOR_BY_FORCE;
-        }
 
         gc_report(1, objspace, "gc_marks_finish (marks %"PRIdSIZE" objects, "
                   "old %"PRIdSIZE" objects, total %"PRIdSIZE" slots, "
@@ -6782,6 +6787,12 @@ rb_gc_impl_copy_attributes(void *objspace_ptr, VALUE dest, VALUE obj)
     rb_gc_impl_copy_finalizer(objspace, dest, obj);
 }
 
+const char *
+rb_gc_impl_active_gc_name(void)
+{
+    return "default";
+}
+
 void
 rb_gc_impl_writebarrier_remember(void *objspace_ptr, VALUE obj)
 {
@@ -7040,10 +7051,6 @@ gc_start(rb_objspace_t *objspace, unsigned int reason)
 
     if (gc_needs_major_flags) {
         reason |= gc_needs_major_flags;
-        do_full_mark = TRUE;
-    }
-    else if (RGENGC_FORCE_MAJOR_GC) {
-        reason = GPR_FLAG_MAJOR_BY_FORCE;
         do_full_mark = TRUE;
     }
 
@@ -7771,8 +7778,7 @@ static int
 gc_ref_update(void *vstart, void *vend, size_t stride, rb_objspace_t *objspace, struct heap_page *page)
 {
     VALUE v = (VALUE)vstart;
-    asan_unlock_freelist(page);
-    asan_lock_freelist(page);
+
     page->flags.has_uncollectible_wb_unprotected_objects = FALSE;
     page->flags.has_remembered_objects = FALSE;
 
@@ -7976,7 +7982,7 @@ gc_info_decode(rb_objspace_t *objspace, const VALUE hash_or_key, const unsigned 
         hash = hash_or_key;
     }
     else {
-        rb_raise(rb_eTypeError, "non-hash or symbol given");
+        rb_bug("gc_info_decode: non-hash or symbol given");
     }
 
     if (NIL_P(sym_major_by)) {
@@ -8062,8 +8068,9 @@ gc_info_decode(rb_objspace_t *objspace, const VALUE hash_or_key, const unsigned 
     SET(retained_weak_references_count, LONG2FIX(objspace->profile.retained_weak_references_count));
 #undef SET
 
-    if (!NIL_P(key)) {/* matched key should return above */
-        rb_raise(rb_eArgError, "unknown key: %"PRIsVALUE, rb_sym2str(key));
+    if (!NIL_P(key)) {
+        // Matched key should return above
+        return Qundef;
     }
 
     return hash;
@@ -8195,7 +8202,7 @@ ns_to_ms(uint64_t ns)
     return ns / (1000 * 1000);
 }
 
-size_t
+VALUE
 rb_gc_impl_stat(void *objspace_ptr, VALUE hash_or_sym)
 {
     rb_objspace_t *objspace = objspace_ptr;
@@ -8210,12 +8217,12 @@ rb_gc_impl_stat(void *objspace_ptr, VALUE hash_or_sym)
         key = hash_or_sym;
     }
     else {
-        rb_raise(rb_eTypeError, "non-hash or symbol given");
+        rb_bug("non-hash or symbol given");
     }
 
 #define SET(name, attr) \
     if (key == gc_stat_symbols[gc_stat_sym_##name]) \
-        return attr; \
+        return SIZET2NUM(attr); \
     else if (hash != Qnil) \
         rb_hash_aset(hash, gc_stat_symbols[gc_stat_sym_##name], SIZET2NUM(attr));
 
@@ -8287,8 +8294,9 @@ rb_gc_impl_stat(void *objspace_ptr, VALUE hash_or_sym)
 #endif
 #undef SET
 
-    if (!NIL_P(key)) { /* matched key should return above */
-        rb_raise(rb_eArgError, "unknown key: %"PRIsVALUE, rb_sym2str(key));
+    if (!NIL_P(key)) {
+        // Matched key should return above
+        return Qundef;
     }
 
 #if defined(RGENGC_PROFILE) && RGENGC_PROFILE >= 2
@@ -8302,7 +8310,7 @@ rb_gc_impl_stat(void *objspace_ptr, VALUE hash_or_sym)
     }
 #endif
 
-    return 0;
+    return hash;
 }
 
 enum gc_stat_heap_sym {
@@ -8336,12 +8344,12 @@ setup_gc_stat_heap_symbols(void)
     }
 }
 
-static size_t
+static VALUE
 stat_one_heap(rb_heap_t *heap, VALUE hash, VALUE key)
 {
 #define SET(name, attr) \
     if (key == gc_stat_heap_symbols[gc_stat_heap_sym_##name]) \
-        return attr; \
+        return SIZET2NUM(attr); \
     else if (hash != Qnil) \
         rb_hash_aset(hash, gc_stat_heap_symbols[gc_stat_heap_sym_##name], SIZET2NUM(attr));
 
@@ -8355,14 +8363,15 @@ stat_one_heap(rb_heap_t *heap, VALUE hash, VALUE key)
     SET(total_freed_objects, heap->total_freed_objects);
 #undef SET
 
-    if (!NIL_P(key)) { /* matched key should return above */
-        rb_raise(rb_eArgError, "unknown key: %"PRIsVALUE, rb_sym2str(key));
+    if (!NIL_P(key)) {
+        // Matched key should return above
+        return Qundef;
     }
 
-    return 0;
+    return hash;
 }
 
-size_t
+VALUE
 rb_gc_impl_stat_heap(void *objspace_ptr, VALUE heap_name, VALUE hash_or_sym)
 {
     rb_objspace_t *objspace = objspace_ptr;
@@ -8371,7 +8380,7 @@ rb_gc_impl_stat_heap(void *objspace_ptr, VALUE heap_name, VALUE hash_or_sym)
 
     if (NIL_P(heap_name)) {
         if (!RB_TYPE_P(hash_or_sym, T_HASH)) {
-            rb_raise(rb_eTypeError, "non-hash given");
+            rb_bug("non-hash given");
         }
 
         for (int i = 0; i < HEAP_COUNT; i++) {
@@ -8398,14 +8407,14 @@ rb_gc_impl_stat_heap(void *objspace_ptr, VALUE heap_name, VALUE hash_or_sym)
             return stat_one_heap(&heaps[heap_idx], hash_or_sym, Qnil);
         }
         else {
-            rb_raise(rb_eTypeError, "non-hash or symbol given");
+            rb_bug("non-hash or symbol given");
         }
     }
     else {
-        rb_raise(rb_eTypeError, "heap_name must be nil or an Integer");
+        rb_bug("heap_name must be nil or an Integer");
     }
 
-    return 0;
+    return hash_or_sym;
 }
 
 /* I could include internal.h for this, but doing so undefines some Array macros

@@ -9,10 +9,14 @@
 #include "ruby/io/buffer.h"
 #include "ruby/fiber/scheduler.h"
 
+// For `rb_nogvl`.
+#include "ruby/thread.h"
+
 #include "internal.h"
 #include "internal/array.h"
 #include "internal/bits.h"
 #include "internal/error.h"
+#include "internal/gc.h"
 #include "internal/numeric.h"
 #include "internal/string.h"
 #include "internal/io.h"
@@ -80,6 +84,8 @@ io_buffer_map_memory(size_t size, int flags)
     if (base == MAP_FAILED) {
         rb_sys_fail("io_buffer_map_memory:mmap");
     }
+
+    ruby_annotate_mmap(base, size, "Ruby:io_buffer_map_memory");
 #endif
 
     return base;
@@ -2327,8 +2333,32 @@ io_buffer_set_values(VALUE self, VALUE buffer_types, VALUE _offset, VALUE values
     return SIZET2NUM(offset);
 }
 
+static size_t IO_BUFFER_BLOCKING_SIZE = 1024*1024;
+
+struct io_buffer_memmove_arguments {
+    unsigned char * destination;
+    const unsigned char * source;
+    size_t length;
+};
+
+static void *
+io_buffer_memmove_blocking(void *data)
+{
+    struct io_buffer_memmove_arguments *arguments = (struct io_buffer_memmove_arguments *)data;
+
+    memmove(arguments->destination, arguments->source, arguments->length);
+
+    return NULL;
+}
+
 static void
-io_buffer_memcpy(struct rb_io_buffer *buffer, size_t offset, const void *source_base, size_t source_offset, size_t source_size, size_t length)
+io_buffer_memmove_unblock(void *data)
+{
+    // No safe way to interrupt.
+}
+
+static void
+io_buffer_memmove(struct rb_io_buffer *buffer, size_t offset, const void *source_base, size_t source_offset, size_t source_size, size_t length)
 {
     void *base;
     size_t size;
@@ -2340,7 +2370,17 @@ io_buffer_memcpy(struct rb_io_buffer *buffer, size_t offset, const void *source_
         rb_raise(rb_eArgError, "The computed source range exceeds the size of the source buffer!");
     }
 
-    memcpy((unsigned char*)base+offset, (unsigned char*)source_base+source_offset, length);
+    struct io_buffer_memmove_arguments arguments = {
+        .destination = (unsigned char*)base+offset,
+        .source = (unsigned char*)source_base+source_offset,
+        .length = length
+    };
+
+    if (arguments.length >= IO_BUFFER_BLOCKING_SIZE) {
+        rb_nogvl(io_buffer_memmove_blocking, &arguments, io_buffer_memmove_unblock, &arguments, RB_NOGVL_OFFLOAD_SAFE);
+    } else if (arguments.length != 0) {
+        memmove(arguments.destination, arguments.source, arguments.length);
+    }
 }
 
 // (offset, length, source_offset) -> length
@@ -2377,7 +2417,7 @@ io_buffer_copy_from(struct rb_io_buffer *buffer, const void *source_base, size_t
         length = source_size - source_offset;
     }
 
-    io_buffer_memcpy(buffer, offset, source_base, source_offset, source_size, length);
+    io_buffer_memmove(buffer, offset, source_base, source_offset, source_size, length);
 
     return SIZET2NUM(length);
 }
@@ -2420,7 +2460,7 @@ rb_io_buffer_initialize_copy(VALUE self, VALUE source)
  *    copy(source, [offset, [length, [source_offset]]]) -> size
  *
  *  Efficiently copy from a source IO::Buffer into the buffer, at +offset+
- *  using +memcpy+. For copying String instances, see #set_string.
+ *  using +memmove+. For copying String instances, see #set_string.
  *
  *    buffer = IO::Buffer.new(32)
  *    # =>
@@ -2469,6 +2509,19 @@ rb_io_buffer_initialize_copy(VALUE self, VALUE source)
  *    buffer = IO::Buffer.new(2)
  *    buffer.copy(IO::Buffer.for('test'), 0)
  *    # in `copy': Specified offset+length is bigger than the buffer size! (ArgumentError)
+ *
+ *  It is safe to copy between memory regions that overlaps each other.
+ *  In such case, the data is copied as if the data was first copied from the source buffer to
+ *  a temporary buffer, and then copied from the temporary buffer to the destination buffer.
+ *
+ *    buffer = IO::Buffer.new(10)
+ *    buffer.set_string("0123456789")
+ *    buffer.copy(buffer, 3, 7)
+ *    # => 7
+ *    buffer
+ *    # =>
+ *    # #<IO::Buffer 0x000056494f8ce440+10 INTERNAL>
+ *    # 0x00000000  30 31 32 30 31 32 33 34 35 36                   0120123456
  */
 static VALUE
 io_buffer_copy(int argc, VALUE *argv, VALUE self)
@@ -2530,7 +2583,7 @@ io_buffer_get_string(int argc, VALUE *argv, VALUE self)
  *  call-seq: set_string(string, [offset, [length, [source_offset]]]) -> size
  *
  *  Efficiently copy from a source String into the buffer, at +offset+ using
- *  +memcpy+.
+ *  +memmove+.
  *
  *    buf = IO::Buffer.new(8)
  *    # =>

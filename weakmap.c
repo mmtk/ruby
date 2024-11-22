@@ -221,7 +221,15 @@ static const rb_data_type_t weakmap_type = {
 static int
 wmap_cmp(st_data_t x, st_data_t y)
 {
-    return *(VALUE *)x != *(VALUE *)y;
+    VALUE x_obj = *(VALUE *)x;
+    VALUE y_obj = *(VALUE *)y;
+
+    if (!wmap_live_p(x_obj) && !wmap_live_p(y_obj)) {
+        return x != y;
+    }
+    else {
+        return x_obj != y_obj;
+    }
 }
 
 static st_index_t
@@ -431,18 +439,6 @@ wmap_values(VALUE self)
     return ary;
 }
 
-static VALUE
-nonspecial_obj_id(VALUE obj)
-{
-#if SIZEOF_LONG == SIZEOF_VOIDP
-    return (VALUE)((SIGNED_VALUE)(obj)|FIXNUM_FLAG);
-#elif SIZEOF_LONG_LONG == SIZEOF_VOIDP
-    return LL2NUM((SIGNED_VALUE)(obj) / 2);
-#else
-# error not supported
-#endif
-}
-
 static int
 wmap_aset_replace(st_data_t *key, st_data_t *val, st_data_t new_key_ptr, int existing)
 {
@@ -455,7 +451,7 @@ wmap_aset_replace(st_data_t *key, st_data_t *val, st_data_t new_key_ptr, int exi
     else {
         struct weakmap_entry *entry = xmalloc(sizeof(struct weakmap_entry));
 
-        *key = (st_data_t)&entry->key;;
+        *key = (st_data_t)&entry->key;
         *val = (st_data_t)&entry->val;
     }
 
@@ -487,7 +483,7 @@ wmap_aset(VALUE self, VALUE key, VALUE val)
     RB_OBJ_WRITTEN(self, Qundef, key);
     RB_OBJ_WRITTEN(self, Qundef, val);
 
-    return nonspecial_obj_id(val);
+    return Qnil;
 }
 
 /* Retrieves a weakly referenced object with the given key */

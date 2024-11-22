@@ -38,6 +38,7 @@ module SyncDefaultGems
     irb: 'ruby/irb',
     json: 'ruby/json',
     logger: 'ruby/logger',
+    mmtk: 'ruby/mmtk',
     open3: "ruby/open3",
     openssl: "ruby/openssl",
     optparse: "ruby/optparse",
@@ -190,14 +191,16 @@ module SyncDefaultGems
       cp_r("#{upstream}/man/irb.1", "man/irb.1")
       cp_r("#{upstream}/doc/irb", "doc")
     when "json"
-      rm_rf(%w[ext/json test/json])
+      rm_rf(%w[ext/json lib/json test/json])
       cp_r("#{upstream}/ext/json/ext", "ext/json")
       cp_r("#{upstream}/test/json", "test/json")
       rm_rf("test/json/lib")
       cp_r("#{upstream}/lib", "ext/json")
       cp_r("#{upstream}/json.gemspec", "ext/json")
-      rm_rf(%w[ext/json/lib/json/ext ext/json/lib/json/pure.rb ext/json/lib/json/pure])
-      `git checkout ext/json/extconf.rb ext/json/parser/prereq.mk ext/json/generator/depend ext/json/parser/depend ext/json/depend`
+      rm_rf(%w[ext/json/lib/json/pure.rb ext/json/lib/json/pure ext/json/lib/json/truffle_ruby/])
+      json_files = Dir.glob("ext/json/lib/json/ext/**/*", File::FNM_DOTMATCH).select { |f| File.file?(f) }
+      rm_rf(json_files - Dir.glob("ext/json/lib/json/ext/**/*.rb") - Dir.glob("ext/json/lib/json/ext/**/depend"))
+      `git checkout ext/json/extconf.rb ext/json/parser/prereq.mk ext/json/generator/depend ext/json/parser/depend ext/json/depend benchmark/`
     when "psych"
       rm_rf(%w[ext/psych test/psych])
       cp_r("#{upstream}/ext/psych", "ext")
@@ -402,6 +405,9 @@ module SyncDefaultGems
       cp_r("#{upstream}/lib/win32/registry.rb", "ext/win32/lib/win32")
       cp_r("#{upstream}/test/win32/test_registry.rb", "test/win32")
       cp_r("#{upstream}/win32-registry.gemspec", "ext/win32")
+    when "mmtk"
+      rm_rf("gc/mmtk")
+      cp_r("#{upstream}/gc/mmtk", "gc")
     else
       sync_lib gem, upstream
     end
@@ -415,6 +421,7 @@ module SyncDefaultGems
 
   def check_prerelease_version(gem)
     return if gem == "rubygems"
+    return if gem == "mmtk"
 
     gem = gem.downcase
 

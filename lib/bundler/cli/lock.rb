@@ -14,6 +14,8 @@ module Bundler
         exit 1
       end
 
+      check_for_conflicting_options
+
       print = options[:print]
       previous_output_stream = Bundler.ui.output_stream
       Bundler.ui.output_stream = :stderr if print
@@ -38,6 +40,7 @@ module Bundler
 
       Bundler.settings.temporary(frozen: false) do
         definition = Bundler.definition(update, file)
+        definition.locked_checksums = true if options["add-checksums"]
 
         Bundler::CLI::Common.configure_gem_version_promoter(definition, options) if options[:update]
 
@@ -60,6 +63,10 @@ module Bundler
 
         definition.resolve_remotely! unless options[:local]
 
+        if options["normalize-platforms"]
+          definition.normalize_platforms
+        end
+
         if print
           puts definition.to_lock
         else
@@ -69,6 +76,18 @@ module Bundler
       end
 
       Bundler.ui.output_stream = previous_output_stream
+    end
+
+    private
+
+    def check_for_conflicting_options
+      if options["normalize-platforms"] && options["add-platform"].any?
+        raise InvalidOption, "--normalize-platforms can't be used with --add-platform"
+      end
+
+      if options["normalize-platforms"] && options["remove-platform"].any?
+        raise InvalidOption, "--normalize-platforms can't be used with --remove-platform"
+      end
     end
   end
 end

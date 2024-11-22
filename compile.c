@@ -2010,7 +2010,7 @@ iseq_set_use_block(rb_iseq_t *iseq)
 
         rb_vm_t *vm = GET_VM();
 
-        if (!vm->unused_block_warning_strict) {
+        if (!rb_warning_category_enabled_p(RB_WARN_CATEGORY_STRICT_UNUSED_BLOCK)) {
             st_data_t key = (st_data_t)rb_intern_str(body->location.label); // String -> ID
             st_insert(vm->unused_block_warning_table, key, 1);
         }
@@ -8959,7 +8959,7 @@ compile_builtin_attr(rb_iseq_t *iseq, const NODE *node)
 
         if (!SYMBOL_P(symbol)) goto non_symbol_arg;
 
-        string = rb_sym_to_s(symbol);
+        string = rb_sym2str(symbol);
         if (strcmp(RSTRING_PTR(string), "leaf") == 0) {
             ISEQ_BODY(iseq)->builtin_attrs |= BUILTIN_ATTR_LEAF;
         }
@@ -8968,6 +8968,10 @@ compile_builtin_attr(rb_iseq_t *iseq, const NODE *node)
         }
         else if (strcmp(RSTRING_PTR(string), "use_block") == 0) {
             iseq_set_use_block(iseq);
+        }
+        else if (strcmp(RSTRING_PTR(string), "c_trace") == 0) {
+            // Let the iseq act like a C method in backtraces
+            ISEQ_BODY(iseq)->builtin_attrs |= BUILTIN_ATTR_C_TRACE;
         }
         else {
             goto unknown_arg;

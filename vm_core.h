@@ -70,7 +70,30 @@
 #define RUBY_ASSERT_MUTEX_OWNED(mutex) VM_ASSERT(rb_mutex_owned_p(mutex))
 
 #if defined(RUBY_ASSERT_CRITICAL_SECTION)
-// TODO add documentation
+/*
+# Critical Section Assertions
+
+These assertions are used to ensure that context switching does not occur between two points in the code. In theory,
+such code should already be protected by a mutex, but these assertions are used to ensure that the mutex is held.
+
+The specific case where it can be useful is where a mutex is held further up the call stack, and the code in question
+may not directly hold the mutex. In this case, the critical section assertions can be used to ensure that the mutex is
+held by someone else.
+
+These assertions are only enabled when RUBY_ASSERT_CRITICAL_SECTION is defined, which is only defined if VM_CHECK_MODE
+is set.
+
+## Example Usage
+
+```c
+RUBY_ASSERT_CRITICAL_SECTION_ENTER();
+// ... some code which does not invoke rb_vm_check_ints() ...
+RUBY_ASSERT_CRITICAL_SECTION_LEAVE();
+```
+
+If `rb_vm_check_ints()` is called between the `RUBY_ASSERT_CRITICAL_SECTION_ENTER()` and
+`RUBY_ASSERT_CRITICAL_SECTION_LEAVE()`, a failed assertion will result.
+*/
 extern int ruby_assert_critical_section_entered;
 #define RUBY_ASSERT_CRITICAL_SECTION_ENTER() do{ruby_assert_critical_section_entered += 1;}while(false)
 #define RUBY_ASSERT_CRITICAL_SECTION_LEAVE() do{VM_ASSERT(ruby_assert_critical_section_entered > 0);ruby_assert_critical_section_entered -= 1;}while(false)
@@ -377,6 +400,8 @@ enum rb_builtin_attr {
     BUILTIN_ATTR_SINGLE_NOARG_LEAF = 0x02,
     // This attribute signals JIT to duplicate the iseq for each block iseq so that its `yield` will be monomorphic.
     BUILTIN_ATTR_INLINE_BLOCK = 0x04,
+    // The iseq acts like a C method in backtraces.
+    BUILTIN_ATTR_C_TRACE = 0x08,
 };
 
 typedef VALUE (*rb_jit_func_t)(struct rb_execution_context_struct *, struct rb_control_frame_struct *);
@@ -586,6 +611,12 @@ rb_iseq_check(const rb_iseq_t *iseq)
     return iseq;
 }
 
+static inline bool
+rb_iseq_attr_p(const rb_iseq_t *iseq, enum rb_builtin_attr attr)
+{
+    return (ISEQ_BODY(iseq)->builtin_attrs & attr) == attr;
+}
+
 static inline const rb_iseq_t *
 def_iseq_ptr(rb_method_definition_t *def)
 {
@@ -773,7 +804,6 @@ typedef struct rb_vm_struct {
     struct rb_id_table *negative_cme_table;
     st_table *overloaded_cme_table; // cme -> overloaded_cme
     st_table *unused_block_warning_table;
-    bool unused_block_warning_strict;
 
     // This id table contains a mapping from ID to ICs. It does this with ID
     // keys and nested st_tables as values. The nested tables have ICs as keys
@@ -1131,6 +1161,7 @@ typedef struct rb_thread_struct {
     struct rb_unblock_callback unblock;
     VALUE locking_mutex;
     struct rb_mutex_struct *keeping_mutexes;
+    struct ccan_list_head interrupt_exec_tasks;
 
     struct rb_waiting_list *join_list;
 
@@ -1510,15 +1541,6 @@ VM_ENV_ESCAPED_P(const VALUE *ep)
     return VM_ENV_FLAGS(ep, VM_ENV_FLAG_ESCAPED) ? 1 : 0;
 }
 
-#if VM_CHECK_MODE > 0
-static inline int
-vm_assert_env(VALUE obj)
-{
-    VM_ASSERT(imemo_type_p(obj, imemo_env));
-    return 1;
-}
-#endif
-
 RBIMPL_ATTR_NONNULL((1))
 static inline VALUE
 VM_ENV_ENVVAL(const VALUE *ep)
@@ -1533,7 +1555,7 @@ VM_ENV_ENVVAL(const VALUE *ep)
     // and it should not be read from.
     // Therefore, we disable the following assertions when MMTk is enabled.
     VM_ASSERT(VM_ENV_ESCAPED_P(ep));
-    VM_ASSERT(vm_assert_env(envval));
+    VM_ASSERT(envval == Qundef || imemo_type_p(envval, imemo_env));
 #if USE_MMTK
     }
 #endif
@@ -1978,6 +2000,8 @@ rb_ec_vm_ptr(const rb_execution_context_t *ec)
         return NULL;
     }
 }
+
+NOINLINE(struct rb_execution_context_struct *rb_current_ec_noinline(void));
 
 static inline rb_execution_context_t *
 rb_current_execution_context(bool expect_ec)

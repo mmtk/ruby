@@ -1,50 +1,5 @@
 class Array
   # call-seq:
-  #   each {|element| ... } -> self
-  #   each -> new_enumerator
-  #
-  # With a block given, iterates over the elements of +self+,
-  # passing each element to the block;
-  # returns +self+:
-  #
-  #   a = [:foo, 'bar', 2]
-  #   a.each {|element|  puts "#{element.class} #{element}" }
-  #
-  # Output:
-  #
-  #   Symbol foo
-  #   String bar
-  #   Integer 2
-  #
-  # Allows the array to be modified during iteration:
-  #
-  #   a = [:foo, 'bar', 2]
-  #   a.each {|element| puts element; a.clear if element.to_s.start_with?('b') }
-  #
-  # Output:
-  #
-  #   foo
-  #   bar
-  #
-  # With no block given, returns a new Enumerator.
-  #
-  # Related: see {Methods for Iterating}[rdoc-ref:Array@Methods+for+Iterating].
-
-  def each
-    Primitive.attr! :inline_block
-
-    unless defined?(yield)
-      return Primitive.cexpr! 'SIZED_ENUMERATOR(self, 0, 0, ary_enum_length)'
-    end
-    _i = 0
-    value = nil
-    while Primitive.cexpr!(%q{ ary_fetch_next(self, LOCAL_PTR(_i), LOCAL_PTR(value)) })
-      yield value
-    end
-    self
-  end
-
-  # call-seq:
   #   shuffle!(random: Random) -> self
   #
   # Shuffles all elements in +self+ into a random order,
@@ -257,5 +212,75 @@ class Array
   def fetch_values(*indexes, &block)
     indexes.map! { |i| fetch(i, &block) }
     indexes
+  end
+
+  with_yjit do
+    if Primitive.rb_builtin_basic_definition_p(:each)
+      undef :each
+
+      def each # :nodoc:
+        Primitive.attr! :inline_block, :c_trace
+
+        unless defined?(yield)
+          return Primitive.cexpr! 'SIZED_ENUMERATOR(self, 0, 0, ary_enum_length)'
+        end
+        _i = 0
+        value = nil
+        while Primitive.cexpr!(%q{ ary_fetch_next(self, LOCAL_PTR(_i), LOCAL_PTR(value)) })
+          yield value
+        end
+        self
+      end
+    end
+
+    if Primitive.rb_builtin_basic_definition_p(:map)
+      undef :map
+
+      def map # :nodoc:
+        Primitive.attr! :inline_block, :c_trace
+
+        unless defined?(yield)
+          return Primitive.cexpr! 'SIZED_ENUMERATOR(self, 0, 0, ary_enum_length)'
+        end
+
+        _i = 0
+        value = nil
+        result = Primitive.ary_sized_alloc
+        while Primitive.cexpr!(%q{ ary_fetch_next(self, LOCAL_PTR(_i), LOCAL_PTR(value)) })
+          result << yield(value)
+        end
+        result
+      end
+
+      if Primitive.rb_builtin_basic_definition_p(:collect)
+        undef :collect
+        alias collect map
+      end
+    end
+
+    if Primitive.rb_builtin_basic_definition_p(:select)
+      undef :select
+
+      def select # :nodoc:
+        Primitive.attr! :inline_block, :c_trace
+
+        unless defined?(yield)
+          return Primitive.cexpr! 'SIZED_ENUMERATOR(self, 0, 0, ary_enum_length)'
+        end
+
+        _i = 0
+        value = nil
+        result = Primitive.ary_sized_alloc
+        while Primitive.cexpr!(%q{ ary_fetch_next(self, LOCAL_PTR(_i), LOCAL_PTR(value)) })
+          result << value if yield value
+        end
+        result
+      end
+
+      if Primitive.rb_builtin_basic_definition_p(:filter)
+        undef :filter
+        alias filter select
+      end
+    end
   end
 end

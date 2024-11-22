@@ -730,7 +730,7 @@ module Net   #:nodoc:
   class HTTP < Protocol
 
     # :stopdoc:
-    VERSION = "0.4.1"
+    VERSION = "0.5.0"
     HTTPVersion = '1.1'
     begin
       require 'zlib'
@@ -2559,6 +2559,11 @@ module Net   #:nodoc:
     alias_method :D, :debug
   end
 
+  # for backward compatibility until Ruby 3.5
+  # https://bugs.ruby-lang.org/issues/20900
+  # https://github.com/bblimke/webmock/pull/1081
+  HTTPSession = HTTP
+  deprecate_constant :HTTPSession
 end
 
 require_relative 'http/exceptions'
@@ -2573,5 +2578,3 @@ require_relative 'http/response'
 require_relative 'http/responses'
 
 require_relative 'http/proxy_delta'
-
-require_relative 'http/backward'

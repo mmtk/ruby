@@ -254,6 +254,7 @@ size_t rb_gc_obj_slot_size(VALUE obj);
 
 VALUE rb_gc_disable_no_rest(void);
 
+#define RB_GC_MAX_NAME_LEN 20
 
 /* gc.c (export) */
 const char *rb_objspace_data_type_name(VALUE obj);
@@ -268,6 +269,9 @@ void *ruby_sized_xrealloc(void *ptr, size_t new_size, size_t old_size) RUBY_ATTR
 void *ruby_sized_xrealloc2(void *ptr, size_t new_count, size_t element_size, size_t old_count) RUBY_ATTR_RETURNS_NONNULL RUBY_ATTR_ALLOC_SIZE((2, 3));
 void ruby_sized_xfree(void *x, size_t size);
 
+const char * rb_gc_active_gc_name(void);
+int rb_gc_external_gc_loaded_p(void);
+
 #if USE_SHARED_GC
 void ruby_load_external_gc_from_argv(int argc, char **argv);
 #endif
@@ -276,6 +280,7 @@ RUBY_SYMBOL_EXPORT_END
 int rb_ec_stack_check(struct rb_execution_context_struct *ec);
 void rb_gc_writebarrier_remember(VALUE obj);
 const char *rb_obj_info(VALUE obj);
+void ruby_annotate_mmap(const void *addr, unsigned long size, const char *name);
 
 #if defined(HAVE_MALLOC_USABLE_SIZE) || defined(HAVE_MALLOC_SIZE) || defined(_WIN32)
 

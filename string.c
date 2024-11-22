@@ -87,17 +87,21 @@ VALUE rb_cSymbol;
 
 /* Flags of RString
  *
+ * 0:     STR_SHARED (equal to ELTS_SHARED)
+ *            The string is shared. The buffer this string points to is owned by
+ *            another string (the shared root).
  * 1:     RSTRING_NOEMBED
  *            The string is not embedded. When a string is embedded, the contents
  *            follow the header. When a string is not embedded, the contents is
  *            on a separately allocated buffer.
- * 2:     STR_SHARED (equal to ELTS_SHARED)
- *            The string is shared. The buffer this string points to is owned by
- *            another string (the shared root).
- * 3:     STR_CHILLED (will be frozen in a future version)
- *            The string appears frozen but can be mutated with a warning.
+ * 2:     STR_CHILLED_LITERAL (will be frozen in a future version)
+ *            The string was allocated as a literal in a file without an explicit `frozen_string_literal` comment.
+ *            It emits a deprecation warning when mutated for the first time.
+ * 3:     STR_CHILLED_SYMBOL_TO_S (will be frozen in a future version)
+ *            The string was allocated by the `Symbol#to_s` method.
+ *            It emits a deprecation warning when mutated for the first time.
  * 4:     STR_PRECOMPUTED_HASH
- *            The string is embedded and has its precomputed hascode stored
+ *            The string is embedded and has its precomputed hashcode stored
  *            after the terminator.
  * 5:     STR_SHARED_ROOT
  *            Other strings may point to the contents of this string. When this
@@ -588,11 +592,32 @@ mustnot_wchar(VALUE str)
 
 static int fstring_cmp(VALUE a, VALUE b);
 
-static VALUE register_fstring(VALUE str, bool copy, bool precompute_hash);
+static VALUE register_fstring(VALUE str, bool copy, bool force_precompute_hash);
+
+#if SIZEOF_LONG == SIZEOF_VOIDP
+#define PRECOMPUTED_FAKESTR_HASH 1
+#else
+#endif
+
+#ifdef PRECOMPUTED_FAKESTR_HASH
+static st_index_t
+fstring_hash(VALUE str)
+{
+    if (FL_TEST_RAW(str, STR_FAKESTR)) {
+        // register_fstring precomputes the hash and stores it in capa for fake strings
+        return (st_index_t)RSTRING(str)->as.heap.aux.capa;
+    }
+    else {
+        return rb_str_hash(str);
+    }
+}
+#else
+#define fstring_hash rb_str_hash
+#endif
 
 const struct st_hash_type rb_fstring_hash_type = {
     fstring_cmp,
-    rb_str_hash,
+    fstring_hash,
 };
 
 #define BARE_STRING_P(str) (!FL_ANY_RAW(str, FL_EXIVAR) && RBASIC_CLASS(str) == rb_cString)
@@ -609,7 +634,7 @@ str_do_hash(VALUE str)
 }
 
 static VALUE
-str_precompute_hash(VALUE str)
+str_store_precomputed_hash(VALUE str, st_index_t hash)
 {
     RUBY_ASSERT(!FL_TEST_RAW(str, STR_PRECOMPUTED_HASH));
     RUBY_ASSERT(STR_EMBED_P(str));
@@ -620,7 +645,6 @@ str_precompute_hash(VALUE str)
     RUBY_ASSERT(free_bytes >= sizeof(st_index_t));
 #endif
 
-    st_index_t hash = str_do_hash(str);
     memcpy(RSTRING_END(str) + TERM_LEN(str), &hash, sizeof(hash));
 
     FL_SET(str, STR_PRECOMPUTED_HASH);
@@ -631,13 +655,12 @@ str_precompute_hash(VALUE str)
 struct fstr_update_arg {
     VALUE fstr;
     bool copy;
-    bool precompute_hash;
+    bool force_precompute_hash;
 };
 
 static int
 fstr_update_callback(st_data_t *key, st_data_t *value, st_data_t data, int existing)
 {
-
     struct fstr_update_arg *arg = (struct fstr_update_arg *)data;
     VALUE str = (VALUE)*key;
 
@@ -661,6 +684,9 @@ fstr_update_callback(st_data_t *key, st_data_t *value, st_data_t data, int exist
         return ST_STOP;
     }
     else {
+        // Unless the string is empty or binary, its coderange has been precomputed.
+        int coderange = ENC_CODERANGE(str);
+
         if (FL_TEST_RAW(str, STR_FAKESTR)) {
             if (arg->copy) {
                 VALUE new_str;
@@ -668,17 +694,22 @@ fstr_update_callback(st_data_t *key, st_data_t *value, st_data_t data, int exist
                 long capa = len + sizeof(st_index_t);
                 int term_len = TERM_LEN(str);
 
-                if (arg->precompute_hash && STR_EMBEDDABLE_P(capa, term_len)) {
+                if (arg->force_precompute_hash && STR_EMBEDDABLE_P(capa, term_len)) {
                     new_str = str_alloc_embed(rb_cString, capa + term_len);
                     memcpy(RSTRING_PTR(new_str), RSTRING_PTR(str), len);
                     STR_SET_LEN(new_str, RSTRING_LEN(str));
                     TERM_FILL(RSTRING_END(new_str), TERM_LEN(str));
                     rb_enc_copy(new_str, str);
-                    str_precompute_hash(new_str);
+                    str_store_precomputed_hash(new_str, fstring_hash(str));
                 }
                 else {
                     new_str = str_new(rb_cString, RSTRING(str)->as.heap.ptr, RSTRING(str)->len);
                     rb_enc_copy(new_str, str);
+#ifdef PRECOMPUTED_FAKESTR_HASH
+                    if (rb_str_capacity(new_str) >= RSTRING_LEN(str) + term_len + sizeof(st_index_t)) {
+                        str_store_precomputed_hash(new_str, (st_index_t)RSTRING(str)->as.heap.aux.capa);
+                    }
+#endif
                 }
                 str = new_str;
             }
@@ -702,6 +733,8 @@ fstr_update_callback(st_data_t *key, st_data_t *value, st_data_t data, int exist
                 str = str_new_frozen(rb_cString, str);
             }
         }
+
+        ENC_CODERANGE_SET(str, coderange);
         RBASIC(str)->flags |= RSTRING_FSTR;
 
         *key = *value = arg->fstr = str;
@@ -747,12 +780,20 @@ rb_fstring(VALUE str)
 }
 
 static VALUE
-register_fstring(VALUE str, bool copy, bool precompute_hash)
+register_fstring(VALUE str, bool copy, bool force_precompute_hash)
 {
     struct fstr_update_arg args = {
         .copy = copy,
-        .precompute_hash = precompute_hash
+        .force_precompute_hash = force_precompute_hash
     };
+
+#if SIZEOF_VOIDP == SIZEOF_LONG
+    if (FL_TEST_RAW(str, STR_FAKESTR)) {
+        // if the string hasn't been interned, we'll need the hash twice, so we
+        // compute it once and store it in capa
+        RSTRING(str)->as.heap.aux.capa = (long)str_do_hash(str);
+    }
+#endif
 
     RB_VM_LOCK_ENTER();
     {
@@ -776,7 +817,6 @@ static VALUE
 setup_fake_str(struct RString *fake_str, const char *name, long len, int encidx)
 {
     fake_str->basic.flags = T_STRING|RSTRING_NOEMBED|STR_NOFREE|STR_FAKESTR;
-    /* SHARED to be allocated by the callback */
 
     if (!name) {
         RUBY_ASSERT_ALWAYS(len == 0);
@@ -1234,7 +1274,7 @@ empty_str_alloc(VALUE klass)
 }
 
 static VALUE
-str_new0(VALUE klass, const char *ptr, long len, int termlen)
+str_enc_new(VALUE klass, const char *ptr, long len, rb_encoding *enc)
 {
     VALUE str;
 
@@ -1242,12 +1282,18 @@ str_new0(VALUE klass, const char *ptr, long len, int termlen)
         rb_raise(rb_eArgError, "negative string size (or size too big)");
     }
 
+    if (enc == NULL) {
+        enc = rb_ascii8bit_encoding();
+    }
+
     RUBY_DTRACE_CREATE_HOOK(STRING, len);
+
+    int termlen = rb_enc_mbminlen(enc);
 
     if (STR_EMBEDDABLE_P(len, termlen)) {
         str = str_alloc_embed(klass, len + termlen);
         if (len == 0) {
-            ENC_CODERANGE_SET(str, ENC_CODERANGE_7BIT);
+            ENC_CODERANGE_SET(str, rb_enc_asciicompat(enc) ? ENC_CODERANGE_7BIT : ENC_CODERANGE_VALID);
         }
     }
     else {
@@ -1265,9 +1311,13 @@ str_new0(VALUE klass, const char *ptr, long len, int termlen)
         })
 
     }
+
+    rb_enc_raw_set(str, enc);
+
     if (ptr) {
         memcpy(RSTRING_PTR(str), ptr, len);
     }
+
     STR_SET_LEN(str, len);
     TERM_FILL(RSTRING_PTR(str) + len, termlen);
     return str;
@@ -1276,7 +1326,7 @@ str_new0(VALUE klass, const char *ptr, long len, int termlen)
 static VALUE
 str_new(VALUE klass, const char *ptr, long len)
 {
-    return str_new0(klass, ptr, len, 1);
+    return str_enc_new(klass, ptr, len, rb_ascii8bit_encoding());
 }
 
 VALUE
@@ -1288,29 +1338,19 @@ rb_str_new(const char *ptr, long len)
 VALUE
 rb_usascii_str_new(const char *ptr, long len)
 {
-    VALUE str = rb_str_new(ptr, len);
-    ENCODING_CODERANGE_SET(str, rb_usascii_encindex(), ENC_CODERANGE_7BIT);
-    return str;
+    return str_enc_new(rb_cString, ptr, len, rb_usascii_encoding());
 }
 
 VALUE
 rb_utf8_str_new(const char *ptr, long len)
 {
-    VALUE str = str_new(rb_cString, ptr, len);
-    rb_enc_associate_index(str, rb_utf8_encindex());
-    return str;
+    return str_enc_new(rb_cString, ptr, len, rb_utf8_encoding());
 }
 
 VALUE
 rb_enc_str_new(const char *ptr, long len, rb_encoding *enc)
 {
-    VALUE str;
-
-    if (!enc) return rb_str_new(ptr, len);
-
-    str = str_new0(rb_cString, ptr, len, rb_enc_mbminlen(enc));
-    rb_enc_associate(str, enc);
-    return str;
+    return str_enc_new(rb_cString, ptr, len, enc);
 }
 
 VALUE
@@ -1328,17 +1368,13 @@ rb_str_new_cstr(const char *ptr)
 VALUE
 rb_usascii_str_new_cstr(const char *ptr)
 {
-    VALUE str = rb_str_new_cstr(ptr);
-    ENCODING_CODERANGE_SET(str, rb_usascii_encindex(), ENC_CODERANGE_7BIT);
-    return str;
+    return rb_enc_str_new_cstr(ptr, rb_usascii_encoding());
 }
 
 VALUE
 rb_utf8_str_new_cstr(const char *ptr)
 {
-    VALUE str = rb_str_new_cstr(ptr);
-    rb_enc_associate_index(str, rb_utf8_encindex());
-    return str;
+    return rb_enc_str_new_cstr(ptr, rb_utf8_encoding());
 }
 
 VALUE
@@ -1361,8 +1397,7 @@ str_new_static(VALUE klass, const char *ptr, long len, int encindex)
     }
 
     if (!ptr) {
-        rb_encoding *enc = rb_enc_get_from_index(encindex);
-        str = str_new0(klass, ptr, len, rb_enc_mbminlen(enc));
+        str = str_enc_new(klass, ptr, len, rb_enc_from_index(encindex));
     }
     else {
         RUBY_DTRACE_CREATE_HOOK(STRING, len);
@@ -1381,8 +1416,8 @@ str_new_static(VALUE klass, const char *ptr, long len, int encindex)
             RUBY_ASSERT(RSTRING_EXT(str)->strbuf == 0);
         })
 #endif
+        rb_enc_associate_index(str, encindex);
     }
-    rb_enc_associate_index(str, encindex);
     return str;
 }
 
@@ -1892,10 +1927,11 @@ str_new_frozen_buffer(VALUE klass, VALUE orig, int copy_encoding)
     VALUE str;
 
     long len = RSTRING_LEN(orig);
+    rb_encoding *enc = copy_encoding ? STR_ENC_GET(orig) : rb_ascii8bit_encoding();
     int termlen = copy_encoding ? TERM_LEN(orig) : 1;
 
     if (STR_EMBED_P(orig) || STR_EMBEDDABLE_P(len, termlen)) {
-        str = str_new0(klass, RSTRING_PTR(orig), len, termlen);
+        str = str_enc_new(klass, RSTRING_PTR(orig), len, enc);
         RUBY_ASSERT(STR_EMBED_P(str));
     }
     else {
@@ -1952,7 +1988,7 @@ str_new_frozen_buffer(VALUE klass, VALUE orig, int copy_encoding)
 VALUE
 rb_str_new_with_class(VALUE obj, const char *ptr, long len)
 {
-    return str_new0(rb_obj_class(obj), ptr, len, TERM_LEN(obj));
+    return str_enc_new(rb_obj_class(obj), ptr, len, STR_ENC_GET(obj));
 }
 
 static VALUE
@@ -2347,7 +2383,7 @@ rb_ec_str_resurrect(struct rb_execution_context_struct *ec, VALUE str, bool chil
         str_duplicate_setup_heap(klass, str, new_str);
     }
     if (chilled) {
-        STR_CHILL_RAW(new_str);
+        FL_SET_RAW(new_str, STR_CHILLED_LITERAL);
     }
     return new_str;
 }
@@ -2358,7 +2394,7 @@ rb_str_with_debug_created_info(VALUE str, VALUE path, int line)
     VALUE debug_info = rb_ary_new_from_args(2, path, INT2FIX(line));
     if (OBJ_FROZEN_RAW(str)) str = rb_str_dup(str);
     rb_ivar_set(str, id_debug_created_info, rb_ary_freeze(debug_info));
-    STR_CHILL_RAW(str);
+    FL_SET_RAW(str, STR_CHILLED_LITERAL);
     return rb_str_freeze(str);
 }
 
@@ -2487,8 +2523,6 @@ rb_str_s_new(int argc, VALUE *argv, VALUE klass)
     encoding = kwargs[0];
     capacity = kwargs[1];
 
-    int termlen = 1;
-
     if (n == 1) {
         orig = StringValue(orig);
     }
@@ -2504,7 +2538,6 @@ rb_str_s_new(int argc, VALUE *argv, VALUE klass)
 
     if (!UNDEF_P(encoding)) {
         enc = rb_to_encoding(encoding);
-        termlen = rb_enc_mbminlen(enc);
     }
 
     // If capacity is nil, we're basically just duping `orig`.
@@ -2535,13 +2568,9 @@ rb_str_s_new(int argc, VALUE *argv, VALUE klass)
         }
     }
 
-    VALUE str = str_new0(klass, NULL, capa, termlen);
+    VALUE str = str_enc_new(klass, NULL, capa, enc);
     STR_SET_LEN(str, 0);
-    TERM_FILL(RSTRING_PTR(str), termlen);
-
-    if (enc) {
-        rb_enc_associate(str, enc);
-    }
+    TERM_FILL(RSTRING_PTR(str), enc ? rb_enc_mbmaxlen(enc) : 1);
 
     if (!NIL_P(orig)) {
         rb_str_buf_append(str, orig);
@@ -2830,7 +2859,7 @@ rb_str_plus(VALUE str1, VALUE str2)
     if (len1 > LONG_MAX - len2) {
         rb_raise(rb_eArgError, "string size too big");
     }
-    str3 = str_new0(rb_cString, 0, len1+len2, termlen);
+    str3 = str_enc_new(rb_cString, 0, len1+len2, enc);
     ptr3 = RSTRING_PTR(str3);
     memcpy(ptr3, ptr1, len1);
     memcpy(ptr3+len1, ptr2, len2);
@@ -2929,7 +2958,7 @@ rb_str_times(VALUE str, VALUE times)
 
     len *= RSTRING_LEN(str);
     termlen = TERM_LEN(str);
-    str2 = str_new0(rb_cString, 0, len, termlen);
+    str2 = str_enc_new(rb_cString, 0, len, STR_ENC_GET(str));
     ptr2 = RSTRING_PTR(str2);
     if (len) {
         n = RSTRING_LEN(str);
@@ -3580,6 +3609,12 @@ VALUE
 rb_str_substr(VALUE str, long beg, long len)
 {
     return str_substr(str, beg, len, TRUE);
+}
+
+VALUE
+rb_str_substr_two_fixnums(VALUE str, VALUE beg, VALUE len, int empty)
+{
+    return str_substr(str, NUM2LONG(beg), NUM2LONG(len), empty);
 }
 
 static VALUE
@@ -6119,9 +6154,7 @@ rb_str_aref_m(int argc, VALUE *argv, VALUE str)
             return rb_str_subpat(str, argv[0], argv[1]);
         }
         else {
-            long beg = NUM2LONG(argv[0]);
-            long len = NUM2LONG(argv[1]);
-            return rb_str_substr(str, beg, len);
+            return rb_str_substr_two_fixnums(str, argv[0], argv[1], TRUE);
         }
     }
     rb_check_arity(argc, 1, 2);
@@ -9640,8 +9673,8 @@ literal_split_pattern(VALUE spat, split_type_t default_type)
 
 /*
  *  call-seq:
- *    split(field_sep = $;, limit = nil) -> array
- *    split(field_sep = $;, limit = nil) {|substring| ... } -> self
+ *    split(field_sep = $;, limit = 0) -> array
+ *    split(field_sep = $;, limit = 0) {|substring| ... } -> self
  *
  *  :include: doc/string/split.rdoc
  *
@@ -11367,7 +11400,7 @@ rb_str_justify(int argc, VALUE *argv, VALUE str, char jflag)
        rb_raise(rb_eArgError, "argument too big");
     }
     len += size;
-    res = str_new0(rb_cString, 0, len, termlen);
+    res = str_enc_new(rb_cString, 0, len, enc);
     p = RSTRING_PTR(res);
     if (flen <= 1) {
        memset(p, *f, llen);
@@ -11403,7 +11436,7 @@ rb_str_justify(int argc, VALUE *argv, VALUE str, char jflag)
     }
     TERM_FILL(p, termlen);
     STR_SET_LEN(res, p-RSTRING_PTR(res));
-    rb_enc_associate(res, enc);
+
     if (argc == 2)
         cr = ENC_CODERANGE_AND(cr, ENC_CODERANGE(pad));
     if (cr != ENC_CODERANGE_BROKEN)
@@ -12628,7 +12661,9 @@ sym_inspect(VALUE sym)
 VALUE
 rb_sym_to_s(VALUE sym)
 {
-    return str_new_shared(rb_cString, rb_sym2str(sym));
+    VALUE str = str_new_shared(rb_cString, rb_sym2str(sym));
+    FL_SET_RAW(str, STR_CHILLED_SYMBOL_TO_S);
+    return str;
 }
 
 VALUE
@@ -13220,7 +13255,6 @@ Init_String(void)
     rb_define_method(rb_cSymbol, "==", sym_equal, 1);
     rb_define_method(rb_cSymbol, "===", sym_equal, 1);
     rb_define_method(rb_cSymbol, "inspect", sym_inspect, 0);
-    rb_define_method(rb_cSymbol, "name", rb_sym2str, 0); /* in symbol.c */
     rb_define_method(rb_cSymbol, "to_proc", rb_sym_to_proc, 0); /* in proc.c */
     rb_define_method(rb_cSymbol, "succ", sym_succ, 0);
     rb_define_method(rb_cSymbol, "next", sym_succ, 0);

@@ -291,11 +291,15 @@ rb_yjit_reserve_addr_space(uint32_t mem_size)
 
             // If we succeeded, stop
             if (mem_block != MAP_FAILED) {
+                ruby_annotate_mmap(mem_block, mem_size, "Ruby:rb_yjit_reserve_addr_space");
                 break;
             }
 
-            // +4MB
-            req_addr += 4 * 1024 * 1024;
+            // -4MiB. Downwards to probe away from the heap. (On x86/A64 Linux
+            // main_code_addr < heap_addr, and in case we are in a shared
+            // library mapped higher than the heap, downwards is still better
+            // since it's towards the end of the heap rather than the stack.)
+            req_addr -= 4 * 1024 * 1024;
         } while (req_addr < probe_region_end);
 
     // On MacOS and other platforms
@@ -322,6 +326,10 @@ rb_yjit_reserve_addr_space(uint32_t mem_size)
             -1,
             0
         );
+
+        if (mem_block != MAP_FAILED) {
+            ruby_annotate_mmap(mem_block, mem_size, "Ruby:rb_yjit_reserve_addr_space:fallback");
+        }
     }
 
     // Check that the memory mapping was successful
@@ -1244,6 +1252,14 @@ VALUE rb_yjit_code_gc(rb_execution_context_t *ec, VALUE self);
 VALUE rb_yjit_simulate_oom_bang(rb_execution_context_t *ec, VALUE self);
 VALUE rb_yjit_get_exit_locations(rb_execution_context_t *ec, VALUE self);
 VALUE rb_yjit_enable(rb_execution_context_t *ec, VALUE self, VALUE gen_stats, VALUE print_stats, VALUE gen_compilation_log, VALUE print_compilation_log);
+VALUE rb_yjit_c_builtin_p(rb_execution_context_t *ec, VALUE self);
+
+// Allow YJIT_C_BUILTIN macro to force --yjit-c-builtin
+#ifdef YJIT_C_BUILTIN
+static VALUE yjit_c_builtin_p(rb_execution_context_t *ec, VALUE self) { return Qtrue; }
+#else
+#define yjit_c_builtin_p rb_yjit_c_builtin_p
+#endif
 
 // Preprocessed yjit.rb generated during build
 #include "yjit.rbinc"

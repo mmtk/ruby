@@ -214,6 +214,15 @@ assert_equal 'Sub', %q{
   call(Sub.new('o')).class
 }
 
+# String#dup with FL_EXIVAR
+assert_equal '["str", "ivar"]', %q{
+  def str_dup(str) = str.dup
+  str = "str"
+  str.instance_variable_set(:@ivar, "ivar")
+  str = str_dup(str)
+  [str, str.instance_variable_get(:@ivar)]
+}
+
 # test splat filling required and feeding rest
 assert_equal '[0, 1, 2, [3, 4]]', %q{
   public def lead_rest(a, b, *rest)
@@ -4596,6 +4605,11 @@ assert_equal '[2, 4611686018427387904]', %q{
   [1.succ, 4611686018427387903.succ]
 }
 
+# Integer pred and overflow
+assert_equal '[0, -4611686018427387905]', %q{
+  [1.pred, -4611686018427387904.pred]
+}
+
 # Integer right shift
 assert_equal '[0, 1, -4]', %q{
   [0 >> 1, 2 >> 1, -7 >> 1]
@@ -5230,4 +5244,44 @@ assert_equal '[true, true]', <<~'RUBY'
   end
 
   [pack, with_buffer]
+RUBY
+
+assert_equal 'ok', <<~'RUBY'
+  def error(klass)
+    yield
+  rescue klass
+    true
+  end
+
+  def test
+    str = "こんにちは"
+    substr = "にち"
+    failures = []
+
+    # Use many small statements to keep context for each slice call smaller than MAX_CTX_TEMPS
+
+    str[1] == "ん" && str.slice(4) == "は" || failures << :index
+    str[5].nil? && str.slice(5).nil? || failures << :index_end
+
+    str[1, 2] == "んに" && str.slice(2, 1) == "に" || failures << :beg_len
+    str[5, 1] == "" && str.slice(5, 1) == "" || failures << :beg_len_end
+
+    str[1..2] == "んに" && str.slice(2..2) == "に" || failures << :range
+
+    str[/に./] == "にち" && str.slice(/に./) == "にち" || failures << :regexp
+
+    str[/に./, 0] == "にち" && str.slice(/に./, 0) == "にち" || failures << :regexp_cap0
+
+    str[/に(.)/, 1] == "ち" && str.slice(/に(.)/, 1) == "ち" || failures << :regexp_cap1
+
+    str[substr] == substr && str.slice(substr) == substr || failures << :substr
+
+    error(TypeError) { str[Object.new] } && error(TypeError) { str.slice(Object.new, 1) } || failures << :type_error
+    error(RangeError) { str[Float::INFINITY] } && error(RangeError) { str.slice(Float::INFINITY) } || failures << :range_error
+
+    return "ok" if failures.empty?
+    {failures: failures}
+  end
+
+  test
 RUBY

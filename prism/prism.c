@@ -14190,6 +14190,9 @@ parse_arguments(pm_parser_t *parser, pm_arguments_t *arguments, bool accepts_for
                 if (match4(parser, PM_TOKEN_PARENTHESIS_RIGHT, PM_TOKEN_COMMA, PM_TOKEN_SEMICOLON, PM_TOKEN_BRACKET_RIGHT)) {
                     pm_parser_scope_forwarding_positionals_check(parser, &operator);
                     argument = (pm_node_t *) pm_splat_node_create(parser, &operator, NULL);
+                    if (parsed_bare_hash) {
+                        pm_parser_err_previous(parser, PM_ERR_ARGUMENT_SPLAT_AFTER_ASSOC_SPLAT);
+                    }
                 } else {
                     pm_node_t *expression = parse_value_expression(parser, PM_BINDING_POWER_DEFINED, false, false, PM_ERR_EXPECT_EXPRESSION_AFTER_SPLAT, (uint16_t) (depth + 1));
 
@@ -19212,6 +19215,10 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
             context_push(parser, PM_CONTEXT_DEF_PARAMS);
             parser_lex(parser);
 
+            // This will be false if the method name is not a valid identifier
+            // but could be followed by an operator.
+            bool valid_name = true;
+
             switch (parser->current.type) {
                 case PM_CASE_OPERATOR:
                     pm_parser_scope_push(parser, true);
@@ -19241,10 +19248,12 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
 
                     break;
                 }
-                case PM_TOKEN_CONSTANT:
                 case PM_TOKEN_INSTANCE_VARIABLE:
                 case PM_TOKEN_CLASS_VARIABLE:
                 case PM_TOKEN_GLOBAL_VARIABLE:
+                    valid_name = false;
+                    /* fallthrough */
+                case PM_TOKEN_CONSTANT:
                 case PM_TOKEN_KEYWORD_NIL:
                 case PM_TOKEN_KEYWORD_SELF:
                 case PM_TOKEN_KEYWORD_TRUE:
@@ -19302,6 +19311,10 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
 
                         name = parse_method_definition_name(parser);
                     } else {
+                        if (!valid_name) {
+                            PM_PARSER_ERR_TOKEN_FORMAT(parser, identifier, PM_ERR_DEF_NAME, pm_token_type_human(identifier.type));
+                        }
+
                         name = identifier;
                     }
                     break;

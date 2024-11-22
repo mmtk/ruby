@@ -340,15 +340,36 @@ RSpec.describe "bundle install with gem sources" do
       expect(the_bundle).to include_gems "myrack 1.2", "activesupport 1.2.3"
     end
 
-    it "gives a useful error if no sources are set" do
+    it "gives useful errors if no global sources are set, and gems not installed locally, with and without a lockfile" do
       install_gemfile <<-G, raise_on_error: false
         gem "myrack"
       G
 
-      expect(err).to include("This Gemfile does not include an explicit global source. " \
-        "Not using an explicit global source may result in a different lockfile being generated depending on " \
-        "the gems you have installed locally before bundler is run. " \
-        "Instead, define a global source in your Gemfile like this: source \"https://rubygems.org\".")
+      expect(err).to eq("Could not find gem 'myrack' in locally installed gems.")
+
+      lockfile <<~L
+        GEM
+          specs:
+            myrack (1.0.0)
+
+        PLATFORMS
+          #{lockfile_platforms}
+
+        DEPENDENCIES
+          myrack
+
+        BUNDLED WITH
+           #{Bundler::VERSION}
+      L
+
+      bundle "install", raise_on_error: false
+
+      expect(err).to include(
+        "Because your Gemfile specifies no global remote source, your bundle is locked to " \
+        "myrack (1.0.0) from locally installed gems. However, myrack (1.0.0) is not installed. " \
+        "You'll need to either add a global remote source to your Gemfile or make sure myrack (1.0.0) " \
+        "is available locally before rerunning Bundler."
+      )
     end
 
     it "creates a Gemfile.lock on a blank Gemfile" do
@@ -890,7 +911,7 @@ RSpec.describe "bundle install with gem sources" do
       bundle "config set --local path vendor"
       bundle :install, raise_on_error: false
       expect(err).to include(bundle_path.to_s)
-      expect(err).to include("grant write permissions")
+      expect(err).to include("grant executable permissions")
     end
   end
 
@@ -920,6 +941,36 @@ RSpec.describe "bundle install with gem sources" do
       expect(err).to include(
         "There was an error while trying to create `#{gems_path.join("myrack-1.0.0")}`. " \
         "It is likely that you need to grant executable permissions for all parent directories and write permissions for `#{gems_path}`."
+      )
+    end
+  end
+
+  describe "when there's an empty install folder (like with default gems) without cd permissions", :permissions do
+    let(:full_gem_path) { bundled_app("vendor/#{Bundler.ruby_scope}/gems/myrack-1.0.0") }
+
+    before do
+      FileUtils.mkdir_p(full_gem_path)
+      gemfile <<-G
+        source "https://gem.repo1"
+        gem 'myrack'
+      G
+    end
+
+    it "should display a proper message to explain the problem" do
+      FileUtils.chmod("-x", full_gem_path)
+      bundle "config set --local path vendor"
+
+      begin
+        bundle :install, raise_on_error: false
+      ensure
+        FileUtils.chmod("+x", full_gem_path)
+      end
+
+      expect(err).not_to include("ERROR REPORT TEMPLATE")
+
+      expect(err).to include(
+        "There was an error while trying to write to `#{full_gem_path}`. " \
+        "It is likely that you need to grant write permissions for that path."
       )
     end
   end
@@ -1067,7 +1118,7 @@ RSpec.describe "bundle install with gem sources" do
       G
     end
 
-    it "should display a proper message to explain the problem" do
+    it "should still work" do
       bundle "config set --local path vendor"
       bundle :install
       expect(out).to include("Bundle complete!")
@@ -1185,6 +1236,35 @@ RSpec.describe "bundle install with gem sources" do
       bundle :install, raise_on_error: false
       expect(err).to include(gemspec_path.to_s)
       expect(err).to include("grant read permissions")
+    end
+  end
+
+  describe "when configured path is UTF-8 and a file inside a gem package too" do
+    let(:app_path) do
+      path = tmp("♥")
+      FileUtils.mkdir_p(path)
+      path
+    end
+
+    let(:path) do
+      root.join("vendor/bundle")
+    end
+
+    before do
+      build_repo4 do
+        build_gem "mygem" do |s|
+          s.write "spec/fixtures/_posts/2016-04-01-错误.html"
+        end
+      end
+    end
+
+    it "works" do
+      bundle "config path #{app_path}/vendor/bundle", dir: app_path
+
+      install_gemfile app_path.join("Gemfile"),<<~G, dir: app_path
+        source "https://gem.repo4"
+        gem "mygem", "1.0"
+      G
     end
   end
 
