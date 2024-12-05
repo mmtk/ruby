@@ -777,11 +777,14 @@ rb_mmtk_is_initial_obj_free_candidate(VALUE obj)
         return true;
       case T_IMEMO:
         switch (imemo_type(obj)) {
-          case imemo_ment:
-          case imemo_iseq:
-          case imemo_env:
-          case imemo_tmpbuf:
           case imemo_ast:
+            rb_bug("imemo_ast is obsolete");
+            UNREACHABLE;
+          case imemo_callinfo:
+          case imemo_env:
+          case imemo_iseq:
+          case imemo_ment:
+          case imemo_tmpbuf:
             // These imemos need obj_free.
             return true;
           default:
