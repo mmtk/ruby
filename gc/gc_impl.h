@@ -10,6 +10,9 @@
  */
 #include "ruby/ruby.h"
 
+#ifdef BUILDING_SHARED_GC
+# define GC_IMPL_FN
+#else
 // `GC_IMPL_FN` is an implementation detail of `!USE_SHARED_GC` builds
 // to have the default GC in the same translation unit as gc.c for
 // the sake of optimizer visibility. It expands to nothing unless
@@ -18,17 +21,14 @@
 // For the default GC, do not copy-paste this when implementing
 // these functions. This takes advantage of internal linkage winning
 // when appearing first. See C99 6.2.2p4.
-#ifdef RB_AMALGAMATED_DEFAULT_GC
 # define GC_IMPL_FN static
-#else
-# define GC_IMPL_FN
 #endif
 
 // Bootup
 GC_IMPL_FN void *rb_gc_impl_objspace_alloc(void);
 GC_IMPL_FN void rb_gc_impl_objspace_init(void *objspace_ptr);
 GC_IMPL_FN void rb_gc_impl_objspace_free(void *objspace_ptr);
-GC_IMPL_FN void *rb_gc_impl_ractor_cache_alloc(void *objspace_ptr);
+GC_IMPL_FN void *rb_gc_impl_ractor_cache_alloc(void *objspace_ptr, void *ractor);
 GC_IMPL_FN void rb_gc_impl_ractor_cache_free(void *objspace_ptr, void *cache);
 GC_IMPL_FN void rb_gc_impl_set_params(void *objspace_ptr);
 GC_IMPL_FN void rb_gc_impl_init(void);
@@ -52,6 +52,18 @@ GC_IMPL_FN size_t rb_gc_impl_obj_slot_size(VALUE obj);
 GC_IMPL_FN size_t rb_gc_impl_heap_id_for_size(void *objspace_ptr, size_t size);
 GC_IMPL_FN bool rb_gc_impl_size_allocatable_p(size_t size);
 // Malloc
+/*
+ * BEWARE: These functions may or may not run under GVL.
+ *
+ * You might want to make them thread-safe.
+ * Garbage collecting inside is possible if and only if you
+ * already have GVL.  Also raising exceptions without one is a
+ * total disaster.
+ *
+ * When you absolutely cannot allocate the requested amount of
+ * memory just return NULL (with appropriate errno set).
+ * The caller side takes care of that situation.
+ */
 GC_IMPL_FN void *rb_gc_impl_malloc(void *objspace_ptr, size_t size);
 GC_IMPL_FN void *rb_gc_impl_calloc(void *objspace_ptr, size_t size);
 GC_IMPL_FN void *rb_gc_impl_realloc(void *objspace_ptr, void *ptr, size_t new_size, size_t old_size);
@@ -83,6 +95,9 @@ GC_IMPL_FN void rb_gc_impl_shutdown_call_finalizer(void *objspace_ptr);
 // Object ID
 GC_IMPL_FN VALUE rb_gc_impl_object_id(void *objspace_ptr, VALUE obj);
 GC_IMPL_FN VALUE rb_gc_impl_object_id_to_ref(void *objspace_ptr, VALUE object_id);
+// Forking
+GC_IMPL_FN void rb_gc_impl_before_fork(void *objspace_ptr);
+GC_IMPL_FN void rb_gc_impl_after_fork(void *objspace_ptr, rb_pid_t pid);
 // Statistics
 GC_IMPL_FN void rb_gc_impl_set_measure_total_time(void *objspace_ptr, VALUE flag);
 GC_IMPL_FN bool rb_gc_impl_get_measure_total_time(void *objspace_ptr);

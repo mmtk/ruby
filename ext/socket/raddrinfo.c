@@ -3033,9 +3033,7 @@ free_fast_fallback_getaddrinfo_shared(struct fast_fallback_getaddrinfo_shared **
     (*shared)->node = NULL;
     free((*shared)->service);
     (*shared)->service = NULL;
-    close((*shared)->notify);
-    close((*shared)->wait);
-    rb_nativethread_lock_destroy((*shared)->lock);
+    rb_nativethread_lock_destroy(&(*shared)->lock);
     free(*shared);
     *shared = NULL;
 }
@@ -3047,7 +3045,6 @@ free_fast_fallback_getaddrinfo_entry(struct fast_fallback_getaddrinfo_entry **en
         freeaddrinfo((*entry)->ai);
         (*entry)->ai = NULL;
     }
-    free(*entry);
     *entry = NULL;
 }
 
@@ -3057,6 +3054,11 @@ do_fast_fallback_getaddrinfo(void *ptr)
     struct fast_fallback_getaddrinfo_entry *entry = (struct fast_fallback_getaddrinfo_entry *)ptr;
     struct fast_fallback_getaddrinfo_shared *shared = entry->shared;
     int err = 0, need_free = 0, shared_need_free = 0;
+
+    sigset_t set;
+    sigemptyset(&set);
+    sigaddset(&set, SIGPIPE);
+    pthread_sigmask(SIG_BLOCK, &set, NULL);
 
     err = numeric_getaddrinfo(shared->node, shared->service, &entry->hints, &entry->ai);
 
@@ -3090,7 +3092,7 @@ do_fast_fallback_getaddrinfo(void *ptr)
         }
     }
 
-    rb_nativethread_lock_lock(shared->lock);
+    rb_nativethread_lock_lock(&shared->lock);
     {
         entry->err = err;
         if (shared->cancelled) {
@@ -3102,7 +3104,7 @@ do_fast_fallback_getaddrinfo(void *ptr)
             const char notification = entry->family == AF_INET6 ?
             IPV6_HOSTNAME_RESOLVED : IPV4_HOSTNAME_RESOLVED;
 
-            if ((write(shared->notify, &notification, 1)) < 0) {
+            if (shared->notify != -1 && (write(shared->notify, &notification, 1)) < 0) {
                 entry->err = errno;
                 entry->has_syserr = true;
             }
@@ -3110,7 +3112,7 @@ do_fast_fallback_getaddrinfo(void *ptr)
         if (--(entry->refcount) == 0) need_free = 1;
         if (--(shared->refcount) == 0) shared_need_free = 1;
     }
-    rb_nativethread_lock_unlock(shared->lock);
+    rb_nativethread_lock_unlock(&shared->lock);
 
     if (need_free && entry) {
         free_fast_fallback_getaddrinfo_entry(&entry);

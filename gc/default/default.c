@@ -5,8 +5,7 @@
 #ifndef _WIN32
 # include <sys/mman.h>
 # include <unistd.h>
-# ifdef __linux__
-#  include <linux/prctl.h>
+# ifdef HAVE_SYS_PRCTL_H
 #  include <sys/prctl.h>
 # endif
 #endif
@@ -1936,7 +1935,7 @@ heap_page_body_allocate(void)
         // `default.c` as a shared library, we will not have access to private
         // symbols, and we have to either call prctl directly or make our own
         // wrapper.
-#if defined(__linux__) && defined(PR_SET_VMA) && defined(PR_SET_VMA_ANON_NAME)
+#if defined(HAVE_SYS_PRCTL_H) && defined(PR_SET_VMA) && defined(PR_SET_VMA_ANON_NAME)
         prctl(PR_SET_VMA, PR_SET_VMA_ANON_NAME, ptr, mmap_size, "Ruby:GC:default:heap_page_body_allocate");
         errno = 0;
 #endif
@@ -3470,6 +3469,7 @@ rb_gc_impl_shutdown_free_objects(void *objspace_ptr)
             VALUE vp = (VALUE)p;
             asan_unpoisoning_object(vp) {
                 if (RB_BUILTIN_TYPE(vp) != T_NONE) {
+                    rb_gc_obj_free_vm_weak_references(vp);
                     if (rb_gc_obj_free(objspace, vp)) {
                         RBASIC(vp)->flags = 0;
                     }
@@ -3589,6 +3589,7 @@ rb_gc_impl_shutdown_call_finalizer(void *objspace_ptr)
             VALUE vp = (VALUE)p;
             asan_unpoisoning_object(vp) {
                 if (rb_gc_shutdown_call_finalizer_p(vp)) {
+                    rb_gc_obj_free_vm_weak_references(vp);
                     if (rb_gc_obj_free(objspace, vp)) {
                         RBASIC(vp)->flags = 0;
                     }
@@ -4033,6 +4034,7 @@ gc_sweep_plane(rb_objspace_t *objspace, rb_heap_t *heap, uintptr_t p, bits_t bit
                 rb_gc_event_hook(vp, RUBY_INTERNAL_EVENT_FREEOBJ);
 
                 bool has_object_id = FL_TEST(vp, FL_SEEN_OBJ_ID);
+                rb_gc_obj_free_vm_weak_references(vp);
                 if (rb_gc_obj_free(objspace, vp)) {
                     if (has_object_id) {
                         obj_free_object_id(objspace, vp);
@@ -5135,6 +5137,7 @@ mark_roots(rb_objspace_t *objspace, const char **categoryp)
 
     if (stress_to_class) rb_gc_mark(stress_to_class);
 
+    rb_gc_save_machine_context();
     rb_gc_mark_roots(objspace, categoryp);
 }
 
@@ -6867,7 +6870,7 @@ rb_gc_impl_obj_flags(void *objspace_ptr, VALUE obj, ID* flags, size_t max)
 }
 
 void *
-rb_gc_impl_ractor_cache_alloc(void *objspace_ptr)
+rb_gc_impl_ractor_cache_alloc(void *objspace_ptr, void *ractor)
 {
     rb_objspace_t *objspace = objspace_ptr;
 
@@ -7404,22 +7407,23 @@ int ruby_thread_has_gvl_p(void);
 static int
 garbage_collect_with_gvl(rb_objspace_t *objspace, unsigned int reason)
 {
-    if (dont_gc_val()) return TRUE;
-    if (ruby_thread_has_gvl_p()) {
-        return garbage_collect(objspace, reason);
+    if (dont_gc_val()) {
+        return TRUE;
+    }
+    else if (!ruby_native_thread_p()) {
+        return TRUE;
+    }
+    else if (!ruby_thread_has_gvl_p()) {
+        void *ret;
+        struct objspace_and_reason oar;
+        oar.objspace = objspace;
+        oar.reason = reason;
+        ret = rb_thread_call_with_gvl(gc_with_gvl, (void *)&oar);
+
+        return !!ret;
     }
     else {
-        if (ruby_native_thread_p()) {
-            struct objspace_and_reason oar;
-            oar.objspace = objspace;
-            oar.reason = reason;
-            return (int)(VALUE)rb_thread_call_with_gvl(gc_with_gvl, (void *)&oar);
-        }
-        else {
-            /* no ruby thread */
-            fprintf(stderr, "[FATAL] failed to allocate memory\n");
-            exit(EXIT_FAILURE);
-        }
+        return garbage_collect(objspace, reason);
     }
 }
 
@@ -8874,7 +8878,7 @@ objspace_malloc_fixup(rb_objspace_t *objspace, void *mem, size_t size)
 #endif
 
 #define GC_MEMERROR(...) \
-    ((RB_BUG_INSTEAD_OF_RB_MEMERROR+0) ? rb_bug("" __VA_ARGS__) : rb_memerror())
+    ((RB_BUG_INSTEAD_OF_RB_MEMERROR+0) ? rb_bug("" __VA_ARGS__) : (void)0)
 
 #define TRY_WITH_GC(siz, expr) do {                          \
         const gc_profile_record_flag gpr =                   \
@@ -8948,6 +8952,7 @@ rb_gc_impl_malloc(void *objspace_ptr, size_t size)
     size = objspace_malloc_prepare(objspace, size);
     TRY_WITH_GC(size, mem = malloc(size));
     RB_DEBUG_COUNTER_INC(heap_xmalloc);
+    if (!mem) return mem;
     return objspace_malloc_fixup(objspace, mem, size);
 }
 
@@ -8967,6 +8972,7 @@ rb_gc_impl_calloc(void *objspace_ptr, size_t size)
 
     size = objspace_malloc_prepare(objspace, size);
     TRY_WITH_GC(size, mem = calloc1(size));
+    if (!mem) return mem;
     return objspace_malloc_fixup(objspace, mem, size);
 }
 
@@ -9035,6 +9041,7 @@ rb_gc_impl_realloc(void *objspace_ptr, void *ptr, size_t new_size, size_t old_si
 
     old_size = objspace_malloc_size(objspace, ptr, old_size);
     TRY_WITH_GC(new_size, mem = RB_GNUC_EXTENSION_BLOCK(realloc(ptr, new_size)));
+    if (!mem) return mem;
     new_size = objspace_malloc_size(objspace, mem, new_size);
 
 #if CALC_EXACT_MALLOC_SIZE
@@ -10048,6 +10055,30 @@ gc_malloc_allocations(VALUE self)
     return UINT2NUM(rb_objspace.malloc_params.allocations);
 }
 #endif
+
+void rb_gc_impl_before_fork(void *objspace_ptr) {
+    WHEN_USING_MMTK2({
+        // When using MMTk, we stop GC threads.
+        if (rb_mmtk_enabled_p()) {
+            rb_mmtk_shutdown_gc_threads();
+        }
+    }, {
+        // The default GC does not have dedicated GC threads.
+        /* no-op */
+    })
+}
+
+void rb_gc_impl_after_fork(void *objspace_ptr, rb_pid_t pid) {
+    WHEN_USING_MMTK2({
+        // When using MMTk, we respawn GC worker threads.
+        if (rb_mmtk_enabled_p()) {
+            rb_mmtk_respawn_gc_threads();
+        }
+    }, {
+        // The default GC does not have dedicated GC threads.
+        /* no-op */
+    })
+}
 
 void *
 rb_gc_impl_objspace_alloc(void)

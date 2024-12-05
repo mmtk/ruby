@@ -62,6 +62,7 @@ module Bundler
   autoload :LazySpecification,      File.expand_path("bundler/lazy_specification", __dir__)
   autoload :LockfileParser,         File.expand_path("bundler/lockfile_parser", __dir__)
   autoload :MatchRemoteMetadata,    File.expand_path("bundler/match_remote_metadata", __dir__)
+  autoload :Materialization,        File.expand_path("bundler/materialization", __dir__)
   autoload :NULL,                   File.expand_path("bundler/constants", __dir__)
   autoload :ProcessLock,            File.expand_path("bundler/process_lock", __dir__)
   autoload :RemoteSpecification,    File.expand_path("bundler/remote_specification", __dir__)
@@ -495,16 +496,25 @@ module Bundler
     end
 
     def which(executable)
-      if File.file?(executable) && File.executable?(executable)
-        executable
-      elsif paths = ENV["PATH"]
+      executable_path = find_executable(executable)
+      return executable_path if executable_path
+
+      if (paths = ENV["PATH"])
         quote = '"'
         paths.split(File::PATH_SEPARATOR).find do |path|
           path = path[1..-2] if path.start_with?(quote) && path.end_with?(quote)
-          executable_path = File.expand_path(executable, path)
-          return executable_path if File.file?(executable_path) && File.executable?(executable_path)
+          executable_path = find_executable(File.expand_path(executable, path))
+          return executable_path if executable_path
         end
       end
+    end
+
+    def find_executable(path)
+      extensions = RbConfig::CONFIG["EXECUTABLE_EXTS"]&.split
+      extensions = [RbConfig::CONFIG["EXEEXT"]] unless extensions&.any?
+      candidates = extensions.map {|ext| "#{path}#{ext}" }
+
+      candidates.find {|candidate| File.file?(candidate) && File.executable?(candidate) }
     end
 
     def read_file(file)
@@ -559,7 +569,7 @@ module Bundler
 
     def git_present?
       return @git_present if defined?(@git_present)
-      @git_present = Bundler.which("git#{RbConfig::CONFIG["EXEEXT"]}")
+      @git_present = Bundler.which("git")
     end
 
     def feature_flag
@@ -572,12 +582,12 @@ module Bundler
       Bundler.rubygems.load_plugins
 
       requested_path_gems = definition.requested_specs.select {|s| s.source.is_a?(Source::Path) }
-      path_plugin_files = requested_path_gems.map do |spec|
+      path_plugin_files = requested_path_gems.flat_map do |spec|
         spec.matches_for_glob("rubygems_plugin#{Bundler.rubygems.suffix_pattern}")
       rescue TypeError
         error_message = "#{spec.name} #{spec.version} has an invalid gemspec"
         raise Gem::InvalidSpecificationException, error_message
-      end.flatten
+      end
       Bundler.rubygems.load_plugin_files(path_plugin_files)
       Bundler.rubygems.load_env_plugins
       @load_plugins_ran = true

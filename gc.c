@@ -30,6 +30,16 @@
 
 /* MALLOC_HEADERS_BEGIN */
 #ifndef HAVE_MALLOC_USABLE_SIZE
+# ifdef _WIN32
+#  define HAVE_MALLOC_USABLE_SIZE
+#  define malloc_usable_size(a) _msize(a)
+# elif defined HAVE_MALLOC_SIZE
+#  define HAVE_MALLOC_USABLE_SIZE
+#  define malloc_usable_size(a) malloc_size(a)
+# endif
+#endif
+
+#ifdef HAVE_MALLOC_USABLE_SIZE
 # ifdef RUBY_ALTERNATIVE_MALLOC_HEADER
 /* Alternative malloc header is included in ruby/missing.h */
 # elif defined(HAVE_MALLOC_H)
@@ -39,16 +49,6 @@
 # elif defined(HAVE_MALLOC_MALLOC_H)
 #  include <malloc/malloc.h>
 # endif
-
-# ifdef _WIN32
-#  define HAVE_MALLOC_USABLE_SIZE
-#  define malloc_usable_size(a) _msize(a)
-# elif defined HAVE_MALLOC_SIZE
-#  define HAVE_MALLOC_USABLE_SIZE
-#  define malloc_usable_size(a) malloc_size(a)
-# endif
-#else
-# include <malloc.h>
 #endif
 
 /* MALLOC_HEADERS_END */
@@ -75,8 +75,7 @@
 #endif
 
 /* For ruby_annotate_mmap */
-#ifdef __linux__
-#include <linux/prctl.h>
+#ifdef HAVE_SYS_PRCTL_H
 #include <sys/prctl.h>
 #endif
 
@@ -186,10 +185,59 @@ rb_gc_vm_barrier(void)
     rb_vm_barrier();
 }
 
+#if USE_SHARED_GC
+void *
+rb_gc_get_ractor_newobj_cache(void)
+{
+    return GET_RACTOR()->newobj_cache;
+}
+
+void
+rb_gc_initialize_vm_context(struct rb_gc_vm_context *context)
+{
+    rb_native_mutex_initialize(&context->lock);
+    context->ec = GET_EC();
+}
+
+void
+rb_gc_worker_thread_set_vm_context(struct rb_gc_vm_context *context)
+{
+    rb_native_mutex_lock(&context->lock);
+
+    GC_ASSERT(rb_current_execution_context(false) == NULL);
+
+#ifdef RB_THREAD_LOCAL_SPECIFIER
+    rb_current_ec_set(context->ec);
+#else
+    native_tls_set(ruby_current_ec_key, context->ec);
+#endif
+}
+
+void
+rb_gc_worker_thread_unset_vm_context(struct rb_gc_vm_context *context)
+{
+    rb_native_mutex_unlock(&context->lock);
+
+    GC_ASSERT(rb_current_execution_context(true) == context->ec);
+
+#ifdef RB_THREAD_LOCAL_SPECIFIER
+    rb_current_ec_set(NULL);
+#else
+    native_tls_set(ruby_current_ec_key, NULL);
+#endif
+}
+#endif
+
+bool
+rb_gc_event_hook_required_p(rb_event_flag_t event)
+{
+    return ruby_vm_event_flags & event;
+}
+
 void
 rb_gc_event_hook(VALUE obj, rb_event_flag_t event)
 {
-    if (LIKELY(!(ruby_vm_event_flags & event))) return;
+    if (LIKELY(!rb_gc_event_hook_required_p(event))) return;
 
     rb_execution_context_t *ec = GET_EC();
     if (!ec->cfp) return;
@@ -202,6 +250,7 @@ rb_gc_get_objspace(void)
 {
     return GET_VM()->gc.objspace;
 }
+
 
 void
 rb_gc_ractor_newobj_cache_foreach(void (*func)(void *cache, void *data), void *data)
@@ -583,10 +632,7 @@ rb_gc_guarded_ptr_val(volatile VALUE *ptr, VALUE val)
 #endif
 
 static const char *obj_type_name(VALUE obj);
-#define RB_AMALGAMATED_DEFAULT_GC
-#include "gc/default.c"
-static int external_gc_loaded = FALSE;
-
+#include "gc/default/default.c"
 
 #if USE_SHARED_GC && !defined(HAVE_DLOPEN)
 # error "Shared GC requires dlopen"
@@ -598,7 +644,7 @@ typedef struct gc_function_map {
     void *(*objspace_alloc)(void);
     void (*objspace_init)(void *objspace_ptr);
     void (*objspace_free)(void *objspace_ptr);
-    void *(*ractor_cache_alloc)(void *objspace_ptr);
+    void *(*ractor_cache_alloc)(void *objspace_ptr, void *ractor);
     void (*ractor_cache_free)(void *objspace_ptr, void *cache);
     void (*set_params)(void *objspace_ptr);
     void (*init)(void);
@@ -653,6 +699,9 @@ typedef struct gc_function_map {
     // Object ID
     VALUE (*object_id)(void *objspace_ptr, VALUE obj);
     VALUE (*object_id_to_ref)(void *objspace_ptr, VALUE object_id);
+    // Forking
+    void (*before_fork)(void *objspace_ptr);
+    void (*after_fork)(void *objspace_ptr, rb_pid_t pid);
     // Statistics
     void (*set_measure_total_time)(void *objspace_ptr, VALUE flag);
     bool (*get_measure_total_time)(void *objspace_ptr);
@@ -669,6 +718,8 @@ typedef struct gc_function_map {
     void (*copy_attributes)(void *objspace_ptr, VALUE dest, VALUE obj);
     // GC Identification
     const char *(*active_gc_name)(void);
+
+    bool external_gc_loaded_p;
 } rb_gc_function_map_t;
 
 static rb_gc_function_map_t rb_gc_functions;
@@ -682,6 +733,8 @@ ruby_external_gc_init(void)
     RUBY_ASSERT_ALWAYS(SHARED_GC_DIR[sizeof(SHARED_GC_DIR) - 2] == '/');
 
     char *gc_so_file = getenv(RUBY_GC_LIBRARY);
+
+    rb_gc_function_map_t gc_functions = { 0 };
 
     char *gc_so_path = NULL;
     void *handle = NULL;
@@ -701,7 +754,7 @@ ruby_external_gc_init(void)
             }
         }
 
-        size_t gc_so_path_size = strlen(SHARED_GC_DIR "librubygc." SOEXT) + strlen(gc_so_file) + 1;
+        size_t gc_so_path_size = strlen(SHARED_GC_DIR "librubygc." DLEXT) + strlen(gc_so_file) + 1;
         gc_so_path = alloca(gc_so_path_size);
         {
             size_t gc_so_path_idx = 0;
@@ -711,7 +764,7 @@ ruby_external_gc_init(void)
             GC_SO_PATH_APPEND(SHARED_GC_DIR);
             GC_SO_PATH_APPEND("librubygc.");
             GC_SO_PATH_APPEND(gc_so_file);
-            GC_SO_PATH_APPEND(SOEXT);
+            GC_SO_PATH_APPEND(DLEXT);
             GC_ASSERT(gc_so_path_idx == gc_so_path_size - 1);
 #undef GC_SO_PATH_APPEND
         }
@@ -721,10 +774,9 @@ ruby_external_gc_init(void)
             fprintf(stderr, "ruby_external_gc_init: Shared library %s cannot be opened: %s\n", gc_so_path, dlerror());
             exit(1);
         }
-        external_gc_loaded = TRUE;
-    }
 
-    rb_gc_function_map_t gc_functions;
+        gc_functions.external_gc_loaded_p = true;
+    }
 
 # define load_external_gc_func(name) do { \
     if (handle) { \
@@ -799,6 +851,9 @@ ruby_external_gc_init(void)
     // Object ID
     load_external_gc_func(object_id);
     load_external_gc_func(object_id_to_ref);
+    // Forking
+    load_external_gc_func(before_fork);
+    load_external_gc_func(after_fork);
     // Statistics
     load_external_gc_func(set_measure_total_time);
     load_external_gc_func(get_measure_total_time);
@@ -880,6 +935,9 @@ ruby_external_gc_init(void)
 // Object ID
 # define rb_gc_impl_object_id rb_gc_functions.object_id
 # define rb_gc_impl_object_id_to_ref rb_gc_functions.object_id_to_ref
+// Forking
+# define rb_gc_impl_before_fork rb_gc_functions.before_fork
+# define rb_gc_impl_after_fork rb_gc_functions.after_fork
 // Statistics
 # define rb_gc_impl_set_measure_total_time rb_gc_functions.set_measure_total_time
 # define rb_gc_impl_get_measure_total_time rb_gc_functions.get_measure_total_time
@@ -928,12 +986,26 @@ rb_gc_obj_slot_size(VALUE obj)
     return rb_gc_impl_obj_slot_size(obj);
 }
 
+static inline void
+gc_validate_pc(void) {
+#if RUBY_DEBUG
+    rb_execution_context_t *ec = GET_EC();
+    const rb_control_frame_t *cfp = ec->cfp;
+    if (cfp && VM_FRAME_RUBYFRAME_P(cfp) && cfp->pc) {
+        RUBY_ASSERT(cfp->pc >= ISEQ_BODY(cfp->iseq)->iseq_encoded);
+        RUBY_ASSERT(cfp->pc <= ISEQ_BODY(cfp->iseq)->iseq_encoded + ISEQ_BODY(cfp->iseq)->iseq_size);
+    }
+#endif
+}
+
 static inline VALUE
 newobj_of(rb_ractor_t *cr, VALUE klass, VALUE flags, VALUE v1, VALUE v2, VALUE v3, bool wb_protected, size_t size)
 {
     VALUE obj = rb_gc_impl_new_obj(rb_gc_get_objspace(), cr->newobj_cache, klass, flags, v1, v2, v3, wb_protected, size);
 
-    if (UNLIKELY(ruby_vm_event_flags & RUBY_INTERNAL_EVENT_NEWOBJ)) {
+    gc_validate_pc();
+
+    if (UNLIKELY(rb_gc_event_hook_required_p(RUBY_INTERNAL_EVENT_NEWOBJ))) {
         unsigned int lev;
         RB_VM_LOCK_ENTER_CR_LEV(cr, &lev);
         {
@@ -1141,6 +1213,44 @@ rb_data_free(void *objspace, VALUE obj)
     return true;
 }
 
+void
+rb_gc_obj_free_vm_weak_references(VALUE obj)
+{
+    if (FL_TEST(obj, FL_EXIVAR)) {
+        rb_free_generic_ivar((VALUE)obj);
+        FL_UNSET(obj, FL_EXIVAR);
+    }
+
+    switch (BUILTIN_TYPE(obj)) {
+      case T_STRING:
+        if (FL_TEST(obj, RSTRING_FSTR)) {
+            st_data_t fstr = (st_data_t)obj;
+            st_delete(rb_vm_fstring_table(), &fstr, NULL);
+            RB_DEBUG_COUNTER_INC(obj_str_fstr);
+
+            FL_UNSET(obj, RSTRING_FSTR);
+        }
+        break;
+      case T_SYMBOL:
+        rb_gc_free_dsymbol(obj);
+        break;
+      case T_IMEMO:
+        switch (imemo_type(obj)) {
+          case imemo_callinfo:
+            rb_vm_ci_free((const struct rb_callinfo *)obj);
+            break;
+          case imemo_ment:
+            rb_free_method_entry_vm_weak_references((const rb_method_entry_t *)obj);
+            break;
+          default:
+            break;
+        }
+        break;
+      default:
+        break;
+    }
+}
+
 bool
 rb_gc_obj_free(void *objspace, VALUE obj)
 {
@@ -1156,18 +1266,6 @@ rb_gc_obj_free(void *objspace, VALUE obj)
       default:
         break;
     }
-
-#if USE_MMTK
-    /* If MMTk is enabled, we process generic ivar table and the ID tables in bulk. */
-    if (!rb_mmtk_enabled_p()) {
-#endif
-    if (FL_TEST(obj, FL_EXIVAR)) {
-        rb_free_generic_ivar((VALUE)obj);
-        FL_UNSET(obj, FL_EXIVAR);
-    }
-#if USE_MMTK
-    }
-#endif
 
     switch (BUILTIN_TYPE(obj)) {
       case T_OBJECT:
@@ -1358,10 +1456,7 @@ rb_gc_obj_free(void *objspace, VALUE obj)
         break;
 
       case T_SYMBOL:
-        {
-            rb_gc_free_dsymbol(obj);
-            RB_DEBUG_COUNTER_INC(obj_symbol);
-        }
+        RB_DEBUG_COUNTER_INC(obj_symbol);
         break;
 
       case T_IMEMO:
@@ -2370,10 +2465,16 @@ rb_mark_locations(void *begin, void *end)
     rb_stack_range_tmp[1] = end;
 }
 
+void
+rb_gc_save_machine_context(void)
+{
+    // no-op
+}
+
 # if defined(__EMSCRIPTEN__)
 
 static void
-mark_current_machine_context(rb_execution_context_t *ec)
+mark_current_machine_context(const rb_execution_context_t *ec)
 {
     emscripten_scan_stack(rb_mark_locations);
     each_location_ptr(rb_stack_range_tmp[0], rb_stack_range_tmp[1], gc_mark_maybe_each_location, NULL);
@@ -2384,7 +2485,7 @@ mark_current_machine_context(rb_execution_context_t *ec)
 # else // use Asyncify version
 
 static void
-mark_current_machine_context(rb_execution_context_t *ec)
+mark_current_machine_context(const rb_execution_context_t *ec)
 {
     VALUE *stack_start, *stack_end;
     SET_STACK_END;
@@ -2399,35 +2500,19 @@ mark_current_machine_context(rb_execution_context_t *ec)
 
 #else // !defined(__wasm__)
 
-static void
-mark_current_machine_context(rb_execution_context_t *ec)
+void
+rb_gc_save_machine_context(void)
 {
-    union {
-        rb_jmp_buf j;
-        VALUE v[sizeof(rb_jmp_buf) / (sizeof(VALUE))];
-    } save_regs_gc_mark;
-    VALUE *stack_start, *stack_end;
+    rb_thread_t *thread = GET_THREAD();
 
-    FLUSH_REGISTER_WINDOWS;
-    memset(&save_regs_gc_mark, 0, sizeof(save_regs_gc_mark));
-    /* This assumes that all registers are saved into the jmp_buf (and stack) */
-    rb_setjmp(save_regs_gc_mark.j);
+    RB_VM_SAVE_MACHINE_CONTEXT(thread);
+}
 
-    /* SET_STACK_END must be called in this function because
-     * the stack frame of this function may contain
-     * callee save registers and they should be marked. */
-    SET_STACK_END;
-    GET_STACK_BOUNDS(stack_start, stack_end, 1);
 
-    void *data =
-#ifdef RUBY_ASAN_ENABLED
-        ec;
-#else
-        NULL;
-#endif
-
-    each_location(save_regs_gc_mark.v, numberof(save_regs_gc_mark.v), gc_mark_machine_stack_location_maybe, data);
-    each_location_ptr(stack_start, stack_end, gc_mark_machine_stack_location_maybe, data);
+static void
+mark_current_machine_context(const rb_execution_context_t *ec)
+{
+    rb_gc_mark_machine_context(ec);
 }
 #endif
 
@@ -2544,9 +2629,6 @@ rb_gc_mark_roots(void *objspace, const char **categoryp)
     rb_vm_mark(vm);
     if (vm->self) gc_mark_internal(vm->self);
 
-    MARK_CHECKPOINT("machine_context");
-    mark_current_machine_context(ec);
-
     MARK_CHECKPOINT("end_proc");
     rb_mark_end_proc();
 
@@ -2562,7 +2644,11 @@ rb_gc_mark_roots(void *objspace, const char **categoryp)
     }
 #endif
 
+    MARK_CHECKPOINT("machine_context");
+    mark_current_machine_context(ec);
+
     MARK_CHECKPOINT("finish");
+
 #undef MARK_CHECKPOINT
 }
 
@@ -2909,20 +2995,25 @@ rb_gc_copy_attributes(VALUE dest, VALUE obj)
 int
 rb_gc_external_gc_loaded_p(void)
 {
-    return external_gc_loaded;
+#if USE_SHARED_GC
+    return rb_gc_functions.external_gc_loaded_p;
+#else
+    return false;
+#endif
 }
 
 const char *
 rb_gc_active_gc_name(void)
 {
     const char *gc_name = rb_gc_impl_active_gc_name();
+
     const size_t len = strlen(gc_name);
     if (len > RB_GC_MAX_NAME_LEN) {
         rb_bug("GC should have a name no more than %d chars long. Currently: %zu (%s)",
                RB_GC_MAX_NAME_LEN, len, gc_name);
     }
-    return gc_name;
 
+    return gc_name;
 }
 
 // TODO: rearchitect this function to work for a generic GC
@@ -2935,9 +3026,9 @@ rb_obj_gc_flags(VALUE obj, ID* flags, size_t max)
 /* GC */
 
 void *
-rb_gc_ractor_cache_alloc(void)
+rb_gc_ractor_cache_alloc(rb_ractor_t *ractor)
 {
-    return rb_gc_impl_ractor_cache_alloc(rb_gc_get_objspace());
+    return rb_gc_impl_ractor_cache_alloc(rb_gc_get_objspace(), ractor);
 }
 
 void
@@ -3355,6 +3446,142 @@ update_superclasses(void *objspace, VALUE obj)
 
 extern rb_symbols_t ruby_global_symbols;
 #define global_symbols ruby_global_symbols
+
+#if USE_SHARED_GC
+struct global_vm_table_foreach_data {
+    vm_table_foreach_callback_func callback;
+    vm_table_update_callback_func update_callback;
+    void *data;
+};
+
+static int
+vm_weak_table_foreach_key(st_data_t key, st_data_t value, st_data_t data, int error)
+{
+    struct global_vm_table_foreach_data *iter_data = (struct global_vm_table_foreach_data *)data;
+
+    return iter_data->callback((VALUE)key, iter_data->data);
+}
+
+static int
+vm_weak_table_foreach_update_key(st_data_t *key, st_data_t *value, st_data_t data, int existing)
+{
+    struct global_vm_table_foreach_data *iter_data = (struct global_vm_table_foreach_data *)data;
+
+    return iter_data->update_callback((VALUE *)key, iter_data->data);
+}
+
+static int
+vm_weak_table_str_sym_foreach(st_data_t key, st_data_t value, st_data_t data, int error)
+{
+    struct global_vm_table_foreach_data *iter_data = (struct global_vm_table_foreach_data *)data;
+
+    if (STATIC_SYM_P(value)) {
+        return ST_CONTINUE;
+    }
+    else {
+        return iter_data->callback((VALUE)value, iter_data->data);
+    }
+}
+
+static int
+vm_weak_table_foreach_update_value(st_data_t *key, st_data_t *value, st_data_t data, int existing)
+{
+    struct global_vm_table_foreach_data *iter_data = (struct global_vm_table_foreach_data *)data;
+
+    return iter_data->update_callback((VALUE *)value, iter_data->data);
+}
+
+static int
+vm_weak_table_gen_ivar_foreach(st_data_t key, st_data_t value, st_data_t data, int error)
+{
+    int retval = vm_weak_table_foreach_key(key, value, data, error);
+    if (retval == ST_DELETE) {
+        FL_UNSET((VALUE)key, FL_EXIVAR);
+    }
+    return retval;
+}
+
+static int
+vm_weak_table_frozen_strings_foreach(st_data_t key, st_data_t value, st_data_t data, int error)
+{
+    GC_ASSERT(RB_TYPE_P((VALUE)key, T_STRING));
+
+    int retval = vm_weak_table_foreach_key(key, value, data, error);
+    if (retval == ST_DELETE) {
+        FL_UNSET((VALUE)key, RSTRING_FSTR);
+    }
+    return retval;
+}
+
+struct st_table *rb_generic_ivtbl_get(void);
+
+void
+rb_gc_vm_weak_table_foreach(vm_table_foreach_callback_func callback,
+                            vm_table_update_callback_func update_callback,
+                            void *data,
+                            enum rb_gc_vm_weak_tables table)
+{
+    rb_vm_t *vm = GET_VM();
+
+    struct global_vm_table_foreach_data foreach_data = {
+        .callback = callback,
+        .update_callback = update_callback,
+        .data = data
+    };
+
+    switch (table) {
+      case RB_GC_VM_CI_TABLE: {
+        st_foreach_with_replace(
+            vm->ci_table,
+            vm_weak_table_foreach_key,
+            vm_weak_table_foreach_update_key,
+            (st_data_t)&foreach_data
+        );
+        break;
+      }
+      case RB_GC_VM_OVERLOADED_CME_TABLE: {
+        st_foreach_with_replace(
+            vm->overloaded_cme_table,
+            vm_weak_table_foreach_key,
+            vm_weak_table_foreach_update_key,
+            (st_data_t)&foreach_data
+        );
+        break;
+      }
+      case RB_GC_VM_GLOBAL_SYMBOLS_TABLE: {
+        st_foreach_with_replace(
+            global_symbols.str_sym,
+            vm_weak_table_str_sym_foreach,
+            vm_weak_table_foreach_update_value,
+            (st_data_t)&foreach_data
+        );
+        break;
+      }
+      case RB_GC_VM_GENERIC_IV_TABLE: {
+        st_table *generic_iv_tbl = rb_generic_ivtbl_get();
+        st_foreach_with_replace(
+            generic_iv_tbl,
+            vm_weak_table_gen_ivar_foreach,
+            vm_weak_table_foreach_update_key,
+            (st_data_t)&foreach_data
+        );
+        break;
+      }
+      case RB_GC_VM_FROZEN_STRINGS_TABLE: {
+        st_table *frozen_strings = GET_VM()->frozen_strings;
+        st_foreach_with_replace(
+            frozen_strings,
+            vm_weak_table_frozen_strings_foreach,
+            vm_weak_table_foreach_update_key,
+            (st_data_t)&foreach_data
+        );
+        break;
+      }
+      default:
+        rb_bug("rb_gc_vm_weak_table_foreach: unknown table %d", table);
+    }
+}
+#endif
 
 void
 rb_gc_update_vm_references(void *objspace)
@@ -3924,7 +4151,8 @@ rb_objspace_reachable_objects_from_root(void (func)(const char *category, VALUE,
     };
 
     vm->gc.mark_func_data = &mfd;
-    rb_gc_mark_roots(rb_gc_get_objspace(), &data.category);
+    rb_gc_save_machine_context();
+    rb_gc_mark_roots(vm->gc.objspace, &data.category);
     vm->gc.mark_func_data = prev_mfd;
 }
 
@@ -4435,12 +4663,20 @@ ruby_memerror(void)
             fprintf(stderr, "[FATAL] failed to allocate memory\n");
         }
     }
+
+    /* We have discussions whether we should die here; */
+    /* We might rethink about it later. */
     exit(EXIT_FAILURE);
 }
 
 void
 rb_memerror(void)
 {
+    /* the `GET_VM()->special_exceptions` below assumes that
+     * the VM is reachable from the current thread.  We should
+     * definitely make sure of that. */
+    RUBY_ASSERT_ALWAYS(ruby_thread_has_gvl_p());
+
     rb_execution_context_t *ec = GET_EC();
     VALUE exc = GET_VM()->special_exceptions[ruby_error_nomemory];
 
@@ -4465,8 +4701,28 @@ rb_malloc_info_show_results(void)
 {
 }
 
+static void *
+handle_malloc_failure(void *ptr)
+{
+    if (LIKELY(ptr)) {
+        return ptr;
+    }
+    else {
+        ruby_memerror();
+        UNREACHABLE_RETURN(ptr);
+    }
+}
+
+static void *ruby_xmalloc_body(size_t size);
+
 void *
 ruby_xmalloc(size_t size)
+{
+    return handle_malloc_failure(ruby_xmalloc_body(size));
+}
+
+static void *
+ruby_xmalloc_body(size_t size)
 {
     if ((ssize_t)size < 0) {
         negative_size_allocation_error("too large allocation size");
@@ -4483,23 +4739,47 @@ ruby_malloc_size_overflow(size_t count, size_t elsize)
              count, elsize);
 }
 
+static void *ruby_xmalloc2_body(size_t n, size_t size);
+
 void *
 ruby_xmalloc2(size_t n, size_t size)
+{
+    return handle_malloc_failure(ruby_xmalloc2_body(n, size));
+}
+
+static void *
+ruby_xmalloc2_body(size_t n, size_t size)
 {
     return rb_gc_impl_malloc(rb_gc_get_objspace(), xmalloc2_size(n, size));
 }
 
+static void *ruby_xcalloc_body(size_t n, size_t size);
+
 void *
 ruby_xcalloc(size_t n, size_t size)
 {
+    return handle_malloc_failure(ruby_xcalloc_body(n, size));
+}
+
+static void *
+ruby_xcalloc_body(size_t n, size_t size)
+{
     return rb_gc_impl_calloc(rb_gc_get_objspace(), xmalloc2_size(n, size));
 }
+
+static void *ruby_sized_xrealloc_body(void *ptr, size_t new_size, size_t old_size);
 
 #ifdef ruby_sized_xrealloc
 #undef ruby_sized_xrealloc
 #endif
 void *
 ruby_sized_xrealloc(void *ptr, size_t new_size, size_t old_size)
+{
+    return handle_malloc_failure(ruby_sized_xrealloc_body(ptr, new_size, old_size));
+}
+
+static void *
+ruby_sized_xrealloc_body(void *ptr, size_t new_size, size_t old_size)
 {
     if ((ssize_t)new_size < 0) {
         negative_size_allocation_error("too large allocation size");
@@ -4514,11 +4794,19 @@ ruby_xrealloc(void *ptr, size_t new_size)
     return ruby_sized_xrealloc(ptr, new_size, 0);
 }
 
+static void *ruby_sized_xrealloc2_body(void *ptr, size_t n, size_t size, size_t old_n);
+
 #ifdef ruby_sized_xrealloc2
 #undef ruby_sized_xrealloc2
 #endif
 void *
 ruby_sized_xrealloc2(void *ptr, size_t n, size_t size, size_t old_n)
+{
+    return handle_malloc_failure(ruby_sized_xrealloc2_body(ptr, n, size, old_n));
+}
+
+static void *
+ruby_sized_xrealloc2_body(void *ptr, size_t n, size_t size, size_t old_n)
 {
     size_t len = xmalloc2_size(n, size);
     return rb_gc_impl_realloc(rb_gc_get_objspace(), ptr, len, old_n * size);
@@ -4681,6 +4969,18 @@ rb_obj_info_dump_loc(VALUE obj, const char *file, int line, const char *func)
     fprintf(stderr, "<OBJ_INFO:%s@%s:%d> %s\n", func, file, line, rb_raw_obj_info(buff, 0x100, obj));
 }
 
+void
+rb_gc_before_fork(void)
+{
+    rb_gc_impl_before_fork(rb_gc_get_objspace());
+}
+
+void
+rb_gc_after_fork(rb_pid_t pid)
+{
+    rb_gc_impl_after_fork(rb_gc_get_objspace(), pid);
+}
+
 /*
  * Document-module: ObjectSpace
  *
@@ -4770,7 +5070,7 @@ Init_GC(void)
 void
 ruby_annotate_mmap(const void *addr, unsigned long size, const char *name)
 {
-#if defined(__linux__) && defined(PR_SET_VMA) && defined(PR_SET_VMA_ANON_NAME)
+#if defined(HAVE_SYS_PRCTL_H) && defined(PR_SET_VMA) && defined(PR_SET_VMA_ANON_NAME)
     // The name length cannot exceed 80 (including the '\0').
     RUBY_ASSERT(strlen(name) < 80);
     prctl(PR_SET_VMA, PR_SET_VMA_ANON_NAME, (unsigned long)addr, size, name);

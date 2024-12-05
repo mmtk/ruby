@@ -1077,7 +1077,7 @@ die(void)
 }
 
 RBIMPL_ATTR_FORMAT(RBIMPL_PRINTF_FORMAT, 1, 0)
-void
+static void
 rb_bug_without_die(const char *fmt, va_list args)
 {
     const char *file = NULL;
@@ -3648,12 +3648,13 @@ rb_vraise(VALUE exc, const char *fmt, va_list ap)
 }
 
 void
-rb_raise(VALUE exc, const char *fmt, ...)
+rb_raise(VALUE exc_class, const char *fmt, ...)
 {
     va_list args;
     va_start(args, fmt);
-    rb_vraise(exc, fmt, args);
+    VALUE exc = rb_exc_new3(exc_class, rb_vsprintf(fmt, args));
     va_end(args);
+    rb_exc_raise(exc);
 }
 
 NORETURN(static void raise_loaderror(VALUE path, VALUE mesg));

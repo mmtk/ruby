@@ -38,7 +38,7 @@ module SyncDefaultGems
     irb: 'ruby/irb',
     json: 'ruby/json',
     logger: 'ruby/logger',
-    mmtk: 'ruby/mmtk',
+    mmtk: ['ruby/mmtk', "main"],
     open3: "ruby/open3",
     openssl: "ruby/openssl",
     optparse: "ruby/optparse",
@@ -275,9 +275,13 @@ module SyncDefaultGems
     when "strscan"
       rm_rf(%w[ext/strscan test/strscan])
       cp_r("#{upstream}/ext/strscan", "ext")
+      cp_r("#{upstream}/lib", "ext/strscan")
       cp_r("#{upstream}/test/strscan", "test")
       cp_r("#{upstream}/strscan.gemspec", "ext/strscan")
-      cp_r("#{upstream}/doc/strscan", "doc")
+      begin
+        cp_r("#{upstream}/doc/strscan", "doc")
+      rescue Errno::ENOENT
+      end
       rm_rf(%w["ext/strscan/regenc.h ext/strscan/regint.h"])
       `git checkout ext/strscan/depend`
     when "cgi"

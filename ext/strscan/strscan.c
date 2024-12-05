@@ -32,6 +32,8 @@ static VALUE StringScanner;
 static VALUE ScanError;
 static ID id_byteslice;
 
+static int usascii_encindex, utf8_encindex, binary_encindex;
+
 struct strscanner
 {
     /* multi-purpose flags */
@@ -115,6 +117,7 @@ static VALUE strscan_get_byte _((VALUE self));
 static VALUE strscan_getbyte _((VALUE self));
 static VALUE strscan_peek _((VALUE self, VALUE len));
 static VALUE strscan_peep _((VALUE self, VALUE len));
+static VALUE strscan_scan_base10_integer _((VALUE self));
 static VALUE strscan_unscan _((VALUE self));
 static VALUE strscan_bol_p _((VALUE self));
 static VALUE strscan_eos_p _((VALUE self));
@@ -682,6 +685,14 @@ strscan_search(regex_t *reg, VALUE str, struct re_registers *regs, void *args_pt
                        ONIG_OPTION_NONE);
 }
 
+static void
+strscan_enc_check(VALUE str1, VALUE str2)
+{
+    if (RB_ENCODING_GET(str1) != RB_ENCODING_GET(str2)) {
+        rb_enc_check(str1, str2);
+    }
+}
+
 static VALUE
 strscan_do_scan(VALUE self, VALUE pattern, int succptr, int getstr, int headonly)
 {
@@ -709,18 +720,21 @@ strscan_do_scan(VALUE self, VALUE pattern, int succptr, int getstr, int headonly
     }
     else {
         StringValue(pattern);
-        rb_encoding *enc = rb_enc_check(p->str, pattern);
         if (S_RESTLEN(p) < RSTRING_LEN(pattern)) {
+            strscan_enc_check(p->str, pattern);
             return Qnil;
         }
 
         if (headonly) {
+            strscan_enc_check(p->str, pattern);
+
             if (memcmp(CURPTR(p), RSTRING_PTR(pattern), RSTRING_LEN(pattern)) != 0) {
                 return Qnil;
             }
             set_registers(p, RSTRING_LEN(pattern));
         }
         else {
+            rb_encoding *enc = rb_enc_check(p->str, pattern);
             long pos = rb_memsearch(RSTRING_PTR(pattern), RSTRING_LEN(pattern),
                                     CURPTR(p), S_RESTLEN(p), enc);
             if (pos == -1) {
@@ -1264,6 +1278,119 @@ strscan_peep(VALUE self, VALUE vlen)
 {
     rb_warning("StringScanner#peep is obsolete; use #peek instead");
     return strscan_peek(self, vlen);
+}
+
+static VALUE
+strscan_parse_integer(struct strscanner *p, int base, long len)
+{
+    VALUE buffer_v, integer;
+
+    char *buffer = RB_ALLOCV_N(char, buffer_v, len + 1);
+
+    MEMCPY(buffer, CURPTR(p), char, len);
+    buffer[len] = '\0';
+    integer = rb_cstr2inum(buffer, base);
+    RB_ALLOCV_END(buffer_v);
+    p->curr += len;
+    return integer;
+}
+
+static inline bool
+strscan_ascii_compat_fastpath(VALUE str) {
+    int encindex = ENCODING_GET_INLINED(str);
+    // The overwhelming majority of strings are in one of these 3 encodings.
+    return encindex == utf8_encindex || encindex == binary_encindex || encindex == usascii_encindex;
+}
+
+static inline void
+strscan_must_ascii_compat(VALUE str)
+{
+    // The overwhelming majority of strings are in one of these 3 encodings.
+    if (RB_LIKELY(strscan_ascii_compat_fastpath(str))) {
+        return;
+    }
+
+    rb_must_asciicompat(str);
+}
+
+static VALUE
+strscan_scan_base10_integer(VALUE self)
+{
+    char *ptr;
+    long len = 0;
+    struct strscanner *p;
+
+    GET_SCANNER(self, p);
+    CLEAR_MATCH_STATUS(p);
+
+    strscan_must_ascii_compat(p->str);
+
+    ptr = CURPTR(p);
+
+    long remaining_len = S_RESTLEN(p);
+
+    if (remaining_len <= 0) {
+        return Qnil;
+    }
+
+    if (ptr[len] == '-' || ptr[len] == '+') {
+        len++;
+    }
+
+    if (!rb_isdigit(ptr[len])) {
+        return Qnil;
+    }
+
+    MATCHED(p);
+    p->prev = p->curr;
+
+    while (len < remaining_len && rb_isdigit(ptr[len])) {
+        len++;
+    }
+
+    return strscan_parse_integer(p, 10, len);
+}
+
+static VALUE
+strscan_scan_base16_integer(VALUE self)
+{
+    char *ptr;
+    long len = 0;
+    struct strscanner *p;
+
+    GET_SCANNER(self, p);
+    CLEAR_MATCH_STATUS(p);
+
+    strscan_must_ascii_compat(p->str);
+
+    ptr = CURPTR(p);
+
+    long remaining_len = S_RESTLEN(p);
+
+    if (remaining_len <= 0) {
+        return Qnil;
+    }
+
+    if (ptr[len] == '-' || ptr[len] == '+') {
+        len++;
+    }
+
+    if ((remaining_len >= (len + 2)) && ptr[len] == '0' && ptr[len + 1] == 'x') {
+        len += 2;
+    }
+
+    if (len >= remaining_len || !rb_isxdigit(ptr[len])) {
+        return Qnil;
+    }
+
+    MATCHED(p);
+    p->prev = p->curr;
+
+    while (len < remaining_len && rb_isxdigit(ptr[len])) {
+        len++;
+    }
+
+    return strscan_parse_integer(p, 16, len);
 }
 
 /*
@@ -2155,6 +2282,10 @@ Init_strscan(void)
 
     id_byteslice = rb_intern("byteslice");
 
+    usascii_encindex = rb_usascii_encindex();
+    utf8_encindex = rb_utf8_encindex();
+    binary_encindex = rb_ascii8bit_encindex();
+
     StringScanner = rb_define_class("StringScanner", rb_cObject);
     ScanError = rb_define_class_under(StringScanner, "Error", rb_eStandardError);
     if (!rb_const_defined(rb_cObject, id_scanerr)) {
@@ -2204,6 +2335,9 @@ Init_strscan(void)
     rb_define_method(StringScanner, "peek_byte",   strscan_peek_byte,   0);
     rb_define_method(StringScanner, "peep",        strscan_peep,        1);
 
+    rb_define_private_method(StringScanner, "scan_base10_integer", strscan_scan_base10_integer, 0);
+    rb_define_private_method(StringScanner, "scan_base16_integer", strscan_scan_base16_integer, 0);
+
     rb_define_method(StringScanner, "unscan",      strscan_unscan,      0);
 
     rb_define_method(StringScanner, "beginning_of_line?", strscan_bol_p, 0);
@@ -2231,4 +2365,6 @@ Init_strscan(void)
     rb_define_method(StringScanner, "fixed_anchor?", strscan_fixed_anchor_p, 0);
 
     rb_define_method(StringScanner, "named_captures", strscan_named_captures, 0);
+
+    rb_require("strscan/strscan");
 }

@@ -181,9 +181,7 @@ module Reline
     def output=(val)
       raise TypeError unless val.respond_to?(:write) or val.nil?
       @output = val
-      if io_gate.respond_to?(:output=)
-        io_gate.output = val
-      end
+      io_gate.output = val
     end
 
     def vi_editing_mode
@@ -307,6 +305,7 @@ module Reline
       otio = io_gate.prep
 
       may_req_ambiguous_char_width
+      key_stroke.encoding = encoding
       line_editor.reset(prompt)
       if multiline
         line_editor.multiline_on
@@ -316,7 +315,6 @@ module Reline
       else
         line_editor.multiline_off
       end
-      line_editor.output = output
       line_editor.completion_proc = completion_proc
       line_editor.completion_append_character = completion_append_character
       line_editor.output_modifier_proc = output_modifier_proc
@@ -485,7 +483,7 @@ module Reline
   def self.core
     @core ||= Core.new { |core|
       core.config = Reline::Config.new
-      core.key_stroke = Reline::KeyStroke.new(core.config)
+      core.key_stroke = Reline::KeyStroke.new(core.config, core.encoding)
       core.line_editor = Reline::LineEditor.new(core.config)
 
       core.basic_word_break_characters = " \t\n`><=;|&{("

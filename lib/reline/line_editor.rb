@@ -13,7 +13,6 @@ class Reline::LineEditor
   attr_accessor :prompt_proc
   attr_accessor :auto_indent_proc
   attr_accessor :dig_perfect_match_proc
-  attr_writer :output
 
   VI_MOTIONS = %i{
     ed_prev_char
@@ -265,7 +264,6 @@ class Reline::LineEditor
     @line_index = 0
     @cache.clear
     @line_backup_in_history = nil
-    @multibyte_buffer = String.new(encoding: 'ASCII-8BIT')
   end
 
   def multiline_on
@@ -415,7 +413,7 @@ class Reline::LineEditor
         # do nothing
       elsif level == :blank
         Reline::IOGate.move_cursor_column base_x
-        @output.write "#{Reline::IOGate.reset_color_sequence}#{' ' * width}"
+        Reline::IOGate.write "#{Reline::IOGate.reset_color_sequence}#{' ' * width}"
       else
         x, w, content = new_items[level]
         cover_begin = base_x != 0 && new_levels[base_x - 1] == level
@@ -425,7 +423,7 @@ class Reline::LineEditor
           content, pos = Reline::Unicode.take_mbchar_range(content, base_x - x, width, cover_begin: cover_begin, cover_end: cover_end, padding: true)
         end
         Reline::IOGate.move_cursor_column x + pos
-        @output.write "#{Reline::IOGate.reset_color_sequence}#{content}#{Reline::IOGate.reset_color_sequence}"
+        Reline::IOGate.write "#{Reline::IOGate.reset_color_sequence}#{content}#{Reline::IOGate.reset_color_sequence}"
       end
       base_x += width
     end
@@ -461,19 +459,21 @@ class Reline::LineEditor
   end
 
   def render_finished
-    render_differential([], 0, 0)
-    lines = @buffer_of_lines.size.times.map do |i|
-      line = Reline::Unicode.strip_non_printing_start_end(prompt_list[i]) + modified_lines[i]
-      wrapped_lines = split_line_by_width(line, screen_width)
-      wrapped_lines.last.empty? ? "#{line} " : line
+    Reline::IOGate.buffered_output do
+      render_differential([], 0, 0)
+      lines = @buffer_of_lines.size.times.map do |i|
+        line = Reline::Unicode.strip_non_printing_start_end(prompt_list[i]) + modified_lines[i]
+        wrapped_lines = split_line_by_width(line, screen_width)
+        wrapped_lines.last.empty? ? "#{line} " : line
+      end
+      Reline::IOGate.write lines.map { |l| "#{l}\r\n" }.join
     end
-    @output.puts lines.map { |l| "#{l}\r\n" }.join
   end
 
   def print_nomultiline_prompt
     Reline::IOGate.disable_auto_linewrap(true) if Reline::IOGate.win?
     # Readline's test `TestRelineAsReadline#test_readline` requires first output to be prompt, not cursor reset escape sequence.
-    @output.write Reline::Unicode.strip_non_printing_start_end(@prompt) if @prompt && !@is_multiline
+    Reline::IOGate.write Reline::Unicode.strip_non_printing_start_end(@prompt) if @prompt && !@is_multiline
   ensure
     Reline::IOGate.disable_auto_linewrap(false) if Reline::IOGate.win?
   end
@@ -504,7 +504,9 @@ class Reline::LineEditor
       end
     end
 
-    render_differential new_lines, wrapped_cursor_x, wrapped_cursor_y - screen_scroll_top
+    Reline::IOGate.buffered_output do
+      render_differential new_lines, wrapped_cursor_x, wrapped_cursor_y - screen_scroll_top
+    end
   end
 
   # Reflects lines to be rendered and new cursor position to the screen
@@ -578,8 +580,9 @@ class Reline::LineEditor
       @context
     end
 
-    def retrieve_completion_block(set_completion_quote_character = false)
-      @line_editor.retrieve_completion_block(set_completion_quote_character)
+    def retrieve_completion_block(_unused = false)
+      preposing, target, postposing, _quote = @line_editor.retrieve_completion_block
+      [preposing, target, postposing]
     end
 
     def call_completion_proc_with_checking_args(pre, target, post)
@@ -807,11 +810,11 @@ class Reline::LineEditor
     target = target.downcase if @config.completion_ignore_case
     list.select do |item|
       next unless item
-
       unless Encoding.compatible?(target.encoding, item.encoding)
-        # Crash with Encoding::CompatibilityError is required by readline-ext/test/readline/test_readline.rb
-        # TODO: fix the test
-        raise Encoding::CompatibilityError, "#{target.encoding.name} is not compatible with #{item.encoding.name}"
+        # Workaround for Readline test
+        if defined?(::Readline) && ::Readline == ::Reline
+          raise Encoding::CompatibilityError, "incompatible character encodings: #{target.encoding} and #{item.encoding}"
+        end
       end
 
       if @config.completion_ignore_case
@@ -826,8 +829,7 @@ class Reline::LineEditor
     end.uniq
   end
 
-  private def perform_completion(list)
-    preposing, target, postposing = retrieve_completion_block
+  private def perform_completion(preposing, target, postposing, quote, list)
     candidates = filter_normalize_candidates(target, list)
 
     case @completion_state
@@ -851,7 +853,7 @@ class Reline::LineEditor
     append_character = ''
     if candidates.include?(completed)
       if candidates.one?
-        append_character = completion_append_character.to_s
+        append_character = quote || completion_append_character.to_s
         @completion_state = CompletionState::PERFECT_MATCH
       elsif @config.show_all_if_ambiguous
         menu(candidates)
@@ -895,8 +897,8 @@ class Reline::LineEditor
   end
 
   private def retrieve_completion_journey_state
-    preposing, target, postposing = retrieve_completion_block
-    list = call_completion_proc
+    preposing, target, postposing, quote = retrieve_completion_block
+    list = call_completion_proc(preposing, target, postposing, quote)
     return unless list.is_a?(Array)
 
     candidates = list.select{ |item| item.start_with?(target) }
@@ -1036,20 +1038,11 @@ class Reline::LineEditor
   end
 
   private def normal_char(key)
-    @multibyte_buffer << key.combined_char
-    if @multibyte_buffer.size > 1
-      if @multibyte_buffer.dup.force_encoding(encoding).valid_encoding?
-        process_key(@multibyte_buffer.dup.force_encoding(encoding), nil)
-        @multibyte_buffer.clear
-      else
-        # invalid
-        return
-      end
-    else # single byte
-      return if key.char >= 128 # maybe, first byte of multi byte
+    if key.char < 0x80
       method_symbol = @config.editing_mode.get_method(key.combined_char)
       process_key(key.combined_char, method_symbol)
-      @multibyte_buffer.clear
+    else
+      process_key(key.char.chr(encoding), nil)
     end
     if @config.editing_mode_is?(:vi_command) and @byte_pointer > 0 and @byte_pointer == current_line.bytesize
       byte_size = Reline::Unicode.get_prev_mbchar_size(@buffer_of_lines[@line_index], @byte_pointer)
@@ -1146,9 +1139,8 @@ class Reline::LineEditor
     end
   end
 
-  def call_completion_proc
-    result = retrieve_completion_block(true)
-    pre, target, post = result
+  def call_completion_proc(pre, target, post, quote)
+    Reline.core.instance_variable_set(:@completion_quote_character, quote)
     result = call_completion_proc_with_checking_args(pre, target, post)
     Reline.core.instance_variable_set(:@completion_quote_character, nil)
     result
@@ -1224,72 +1216,32 @@ class Reline::LineEditor
     process_auto_indent
   end
 
-  def retrieve_completion_block(set_completion_quote_character = false)
-    if Reline.completer_word_break_characters.empty?
-      word_break_regexp = nil
-    else
-      word_break_regexp = /\A[#{Regexp.escape(Reline.completer_word_break_characters)}]/
-    end
-    if Reline.completer_quote_characters.empty?
-      quote_characters_regexp = nil
-    else
-      quote_characters_regexp = /\A[#{Regexp.escape(Reline.completer_quote_characters)}]/
-    end
-    before = current_line.byteslice(0, @byte_pointer)
-    rest = nil
-    break_pointer = nil
+  def retrieve_completion_block
+    quote_characters = Reline.completer_quote_characters
+    before = current_line.byteslice(0, @byte_pointer).grapheme_clusters
     quote = nil
-    closing_quote = nil
-    escaped_quote = nil
-    i = 0
-    while i < @byte_pointer do
-      slice = current_line.byteslice(i, @byte_pointer - i)
-      unless slice.valid_encoding?
-        i += 1
-        next
-      end
-      if quote and slice.start_with?(closing_quote)
-        quote = nil
-        i += 1
-        rest = nil
-      elsif quote and slice.start_with?(escaped_quote)
-        # skip
-        i += 2
-      elsif quote_characters_regexp and slice =~ quote_characters_regexp # find new "
-        rest = $'
-        quote = $&
-        closing_quote = /(?!\\)#{Regexp.escape(quote)}/
-        escaped_quote = /\\#{Regexp.escape(quote)}/
-        i += 1
-        break_pointer = i - 1
-      elsif word_break_regexp and not quote and slice =~ word_break_regexp
-        rest = $'
-        i += 1
-        before = current_line.byteslice(i, @byte_pointer - i)
-        break_pointer = i
-      else
-        i += 1
-      end
-    end
-    postposing = current_line.byteslice(@byte_pointer, current_line.bytesize - @byte_pointer)
-    if rest
-      preposing = current_line.byteslice(0, break_pointer)
-      target = rest
-      if set_completion_quote_character and quote
-        Reline.core.instance_variable_set(:@completion_quote_character, quote)
-        if postposing !~ /(?!\\)#{Regexp.escape(quote)}/ # closing quote
-          insert_text(quote)
+    # Calcualte closing quote when cursor is at the end of the line
+    if current_line.bytesize == @byte_pointer && !quote_characters.empty?
+      escaped = false
+      before.each do |c|
+        if escaped
+          escaped = false
+          next
+        elsif c == '\\'
+          escaped = true
+        elsif quote
+          quote = nil if c == quote
+        elsif quote_characters.include?(c)
+          quote = c
         end
       end
-    else
-      preposing = ''
-      if break_pointer
-        preposing = current_line.byteslice(0, break_pointer)
-      else
-        preposing = ''
-      end
-      target = before
     end
+
+    word_break_characters = quote_characters + Reline.completer_word_break_characters
+    break_index = before.rindex { |c| word_break_characters.include?(c) || quote_characters.include?(c) } || -1
+    preposing = before.take(break_index + 1).join
+    target = before.drop(break_index + 1).join
+    postposing = current_line.byteslice(@byte_pointer, current_line.bytesize - @byte_pointer)
     lines = whole_lines
     if @line_index > 0
       preposing = lines[0..(@line_index - 1)].join("\n") + "\n" + preposing
@@ -1297,7 +1249,7 @@ class Reline::LineEditor
     if (lines.size - 1) > @line_index
       postposing = postposing + "\n" + lines[(@line_index + 1)..-1].join("\n")
     end
-    [preposing.encode(encoding), target.encode(encoding), postposing.encode(encoding)]
+    [preposing.encode(encoding), target.encode(encoding), postposing.encode(encoding), quote&.encode(encoding)]
   end
 
   def confirm_multiline_termination
@@ -1428,10 +1380,11 @@ class Reline::LineEditor
       @completion_occurs = move_completed_list(:down)
     else
       @completion_journey_state = nil
-      result = call_completion_proc
+      pre, target, post, quote = retrieve_completion_block
+      result = call_completion_proc(pre, target, post, quote)
       if result.is_a?(Array)
         @completion_occurs = true
-        perform_completion(result)
+        perform_completion(pre, target, post, quote, result)
       end
     end
   end
@@ -1566,7 +1519,6 @@ class Reline::LineEditor
 
   private def generate_searcher(search_key)
     search_word = String.new(encoding: encoding)
-    multibyte_buf = String.new(encoding: 'ASCII-8BIT')
     hit_pointer = nil
     lambda do |key|
       search_again = false
@@ -1581,11 +1533,7 @@ class Reline::LineEditor
         search_again = true if search_key == key
         search_key = key
       else
-        multibyte_buf << key
-        if multibyte_buf.dup.force_encoding(encoding).valid_encoding?
-          search_word << multibyte_buf.dup.force_encoding(encoding)
-          multibyte_buf.clear
-        end
+        search_word << key
       end
       hit = nil
       if not search_word.empty? and @line_backup_in_history&.include?(search_word)
@@ -1895,9 +1843,9 @@ class Reline::LineEditor
     if current_line.empty? or @byte_pointer < current_line.bytesize
       em_delete(key)
     elsif !@config.autocompletion # show completed list
-      result = call_completion_proc
+      pre, target, post, quote = retrieve_completion_block
+      result = call_completion_proc(pre, target, post, quote)
       if result.is_a?(Array)
-        _preposing, target = retrieve_completion_block
         candidates = filter_normalize_candidates(target, result)
         menu(candidates)
       end

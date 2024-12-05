@@ -142,13 +142,15 @@ class TestSocket_TCPSocket < Test::Unit::TestCase
   end
 
   def test_initialize_v6_hostname_resolved_earlier
-    pend "to suppress the output of test failure logs in CI temporarily"
+    # pend "to suppress the output of test failure logs in CI temporarily"
     return if RUBY_PLATFORM =~ /mswin|mingw|cygwin/
 
     begin
+      # Verify that "localhost" can be resolved to an IPv6 address
+      Socket.getaddrinfo("localhost", 0, Socket::AF_INET6)
       server = TCPServer.new("::1", 0)
-    rescue Errno::EADDRNOTAVAIL # IPv6 is not supported
-      exit
+    rescue Socket::ResolutionError, Errno::EADDRNOTAVAIL # IPv6 is not supported
+      return
     end
 
     server_thread = Thread.new { server.accept }
@@ -167,7 +169,7 @@ class TestSocket_TCPSocket < Test::Unit::TestCase
   end
 
   def test_initialize_v4_hostname_resolved_earlier
-    pend "to suppress the output of test failure logs in CI temporarily"
+    # pend "to suppress the output of test failure logs in CI temporarily"
     return if RUBY_PLATFORM =~ /mswin|mingw|cygwin/
 
     server = TCPServer.new("127.0.0.1", 0)
@@ -188,13 +190,15 @@ class TestSocket_TCPSocket < Test::Unit::TestCase
   end
 
   def test_initialize_v6_hostname_resolved_in_resolution_delay
-    pend "to suppress the output of test failure logs in CI temporarily"
+    # pend "to suppress the output of test failure logs in CI temporarily"
     return if RUBY_PLATFORM =~ /mswin|mingw|cygwin/
 
     begin
+      # Verify that "localhost" can be resolved to an IPv6 address
+      Socket.getaddrinfo("localhost", 0, Socket::AF_INET6)
       server = TCPServer.new("::1", 0)
-    rescue Errno::EADDRNOTAVAIL # IPv6 is not supported
-      exit
+    rescue Socket::ResolutionError, Errno::EADDRNOTAVAIL # IPv6 is not supported
+      return
     end
 
     port = server.addr[1]
@@ -214,7 +218,7 @@ class TestSocket_TCPSocket < Test::Unit::TestCase
   end
 
   def test_initialize_v6_hostname_resolved_earlier_and_v6_server_is_not_listening
-    pend "to suppress the output of test failure logs in CI temporarily"
+    # pend "to suppress the output of test failure logs in CI temporarily"
     return if RUBY_PLATFORM =~ /mswin|mingw|cygwin/
 
     ipv4_address = "127.0.0.1"
@@ -237,7 +241,7 @@ class TestSocket_TCPSocket < Test::Unit::TestCase
   end
 
   def test_initialize_v6_hostname_resolved_later_and_v6_server_is_not_listening
-    pend "to suppress the output of test failure logs in CI temporarily"
+    # pend "to suppress the output of test failure logs in CI temporarily"
     return if RUBY_PLATFORM =~ /mswin|mingw|cygwin/
 
     ipv4_server = Socket.new(Socket::AF_INET, :STREAM)
@@ -263,7 +267,7 @@ class TestSocket_TCPSocket < Test::Unit::TestCase
   end
 
   def test_initialize_v6_hostname_resolution_failed_and_v4_hostname_resolution_is_success
-    pend "to suppress the output of test failure logs in CI temporarily"
+    # pend "to suppress the output of test failure logs in CI temporarily"
     return if RUBY_PLATFORM =~ /mswin|mingw|cygwin/
 
     server = TCPServer.new("127.0.0.1", 0)
@@ -284,10 +288,15 @@ class TestSocket_TCPSocket < Test::Unit::TestCase
   end
 
   def test_initialize_resolv_timeout_with_connection_failure
-    pend "to suppress the output of test failure logs in CI temporarily"
+    # pend "to suppress the output of test failure logs in CI temporarily"
     return if RUBY_PLATFORM =~ /mswin|mingw|cygwin/
 
-    server = TCPServer.new("::1", 0)
+    begin
+      server = TCPServer.new("::1", 0)
+    rescue Errno::EADDRNOTAVAIL # IPv6 is not supported
+      return
+    end
+
     port = server.connect_address.ip_port
     server.close
 
@@ -303,14 +312,15 @@ class TestSocket_TCPSocket < Test::Unit::TestCase
   end
 
   def test_initialize_with_hostname_resolution_failure_after_connection_failure
-    pend "to suppress the output of test failure logs in CI temporarily"
+    # pend "to suppress the output of test failure logs in CI temporarily"
     return if RUBY_PLATFORM =~ /mswin|mingw|cygwin/
 
     begin
       server = TCPServer.new("::1", 0)
     rescue Errno::EADDRNOTAVAIL # IPv6 is not supported
-      exit
+      return
     end
+
     port = server.connect_address.ip_port
     server.close
 
@@ -325,7 +335,7 @@ class TestSocket_TCPSocket < Test::Unit::TestCase
   end
 
   def test_initialize_with_connection_failure_after_hostname_resolution_failure
-    pend "to suppress the output of test failure logs in CI temporarily"
+    # pend "to suppress the output of test failure logs in CI temporarily"
     return if RUBY_PLATFORM =~ /mswin|mingw|cygwin/
 
     server = TCPServer.new("127.0.0.1", 0)
@@ -348,7 +358,7 @@ class TestSocket_TCPSocket < Test::Unit::TestCase
     begin
       server = TCPServer.new("::1", 0)
     rescue Errno::EADDRNOTAVAIL # IPv6 is not supported
-      exit
+      return
     end
 
     server_thread = Thread.new { server.accept }
