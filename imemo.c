@@ -172,6 +172,16 @@ rb_imemo_memsize(VALUE obj)
         size += ((rb_imemo_tmpbuf_t *)obj)->cnt * sizeof(VALUE);
 
         break;
+#if USE_MMTK
+      case imemo_mmtk_strbuf:
+      case imemo_mmtk_objbuf:
+        // Neither strbuf nor objbuf have associated malloc allocations.
+        // They are in fact designed to eliminate such allocations.
+        // We don't add extra sizes.
+        // rb_obj_memsize_of will add the slot size into the total size,
+        // and it is already handled by the MMTk binding.
+        break;
+#endif
       default:
         rb_bug("unreachable");
     }

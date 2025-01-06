@@ -2065,6 +2065,11 @@ rb_str_free(VALUE str)
 size_t
 rb_str_memsize(VALUE str)
 {
+    WHEN_USING_MMTK({
+        // Strings don't have malloc allocations when using MMTk.
+        return 0;
+    })
+
     if (FL_TEST(str, STR_NOEMBED|STR_SHARED|STR_NOFREE) == STR_NOEMBED) {
         return STR_HEAP_SIZE(str);
     }

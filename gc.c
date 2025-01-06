@@ -2018,6 +2018,11 @@ rb_obj_memsize_of(VALUE obj)
         break;
       case T_MATCH:
         {
+            WHEN_USING_MMTK({
+                // MatchData don't have malloc allocations when using MMTk.
+                return 0;
+            })
+
             rb_matchext_t *rm = RMATCH_EXT(obj);
             size += onig_region_memsize(&rm->regs);
             size += sizeof(struct rmatch_offset) * rm->char_offset_num_allocated;

@@ -1146,6 +1146,11 @@ rb_setup_fake_ary(struct RArray *fake_ary, const VALUE *list, long len)
 size_t
 rb_ary_memsize(VALUE ary)
 {
+    WHEN_USING_MMTK({
+        // Arrays don't have malloc allocations when using MMTk.
+        return 0;
+    })
+
     if (ARY_OWNS_HEAP_P(ary)) {
         return ARY_CAPA(ary) * sizeof(VALUE);
     }
