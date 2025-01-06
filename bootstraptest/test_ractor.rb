@@ -217,7 +217,8 @@ assert_equal '[:a, :b, :c, :d, :e, :f, :g]', %q{
 ###
 # Ractor still has several memory corruption so skip huge number of tests
 if ENV['GITHUB_WORKFLOW'] &&
-   ENV['GITHUB_WORKFLOW'] == 'Compilations'
+   (ENV['GITHUB_WORKFLOW'] == 'Compilations' ||
+   ENV['GITHUB_WORKFLOW'] == 'ModGC')
    # ignore the follow
 else
 
@@ -751,6 +752,17 @@ assert_equal '[0, 1]', %q{
   rescue Ractor::MovedError
     a2.inspect
   end
+}
+
+# unshareable frozen objects should still be frozen in new ractor after move
+assert_equal 'true', %q{
+r = Ractor.new do
+  obj = receive
+  { frozen: obj.frozen? }
+end
+obj = [Object.new].freeze
+r.send(obj, move: true)
+r.take[:frozen]
 }
 
 # move with yield
@@ -1502,6 +1514,21 @@ assert_equal '[nil, "b", "a"]', %q{
   ans << r.take
   ans << r.take
   ans << Ractor.current[:key]
+}
+
+assert_equal '1', %q{
+  N = 1_000
+  Ractor.new{
+    a = []
+    1_000.times.map{|i|
+      Thread.new(i){|i|
+        Thread.pass if i < N
+        a << Ractor.store_if_absent(:i){ i }
+        a << Ractor.current[:i]
+      }
+    }.each(&:join)
+    a.uniq.size
+  }.take
 }
 
 ###

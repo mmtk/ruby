@@ -1199,21 +1199,30 @@ class Gem::Specification < Gem::BasicSpecification
     Gem.pre_reset_hooks.each(&:call)
     @specification_record = nil
     clear_load_cache
-    unresolved = unresolved_deps
-    unless unresolved.empty?
-      warn "WARN: Unresolved or ambiguous specs during Gem::Specification.reset:"
-      unresolved.values.each do |dep|
-        warn "      #{dep}"
 
-        versions = find_all_by_name(dep.name).uniq(&:full_name)
-        unless versions.empty?
-          warn "      Available/installed versions of this gem:"
-          versions.each {|s| warn "      - #{s.version}" }
+    unless unresolved_deps.empty?
+      unresolved = unresolved_deps.filter_map do |name, dep|
+        matching_versions = find_all_by_name(name)
+        next if dep.latest_version? && matching_versions.any?(&:default_gem?)
+
+        [dep, matching_versions.uniq(&:full_name)]
+      end.to_h
+
+      unless unresolved.empty?
+        warn "WARN: Unresolved or ambiguous specs during Gem::Specification.reset:"
+        unresolved.each do |dep, versions|
+          warn "      #{dep}"
+
+          unless versions.empty?
+            warn "      Available/installed versions of this gem:"
+            versions.each {|s| warn "      - #{s.version}" }
+          end
         end
+        warn "WARN: Clearing out unresolved specs. Try 'gem cleanup <gem>'"
+        warn "Please report a bug if this causes problems."
       end
-      warn "WARN: Clearing out unresolved specs. Try 'gem cleanup <gem>'"
-      warn "Please report a bug if this causes problems."
-      unresolved.clear
+
+      unresolved_deps.clear
     end
     Gem.post_reset_hooks.each(&:call)
   end
@@ -1808,16 +1817,8 @@ class Gem::Specification < Gem::BasicSpecification
   def encode_with(coder) # :nodoc:
     coder.add "name", @name
     coder.add "version", @version
-    platform = case @new_platform
-               when nil, "" then
-                 "ruby"
-               when String then
-                 @new_platform
-               else
-                 @new_platform.to_s
-    end
-    coder.add "platform", platform
-    coder.add "original_platform", @original_platform.to_s if platform != @original_platform.to_s
+    coder.add "platform", platform.to_s
+    coder.add "original_platform", original_platform.to_s if platform.to_s != original_platform.to_s
 
     attributes = @@attributes.map(&:to_s) - %w[name version platform]
     attributes.each do |name|

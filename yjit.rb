@@ -36,15 +36,14 @@ module RubyVM::YJIT
   # Enable \YJIT compilation. `stats` option decides whether to enable \YJIT stats or not. `compilation_log` decides
   # whether to enable \YJIT compilation logging or not.
   #
-  # `stats`:
-  # * `false`: Don't enable stats.
-  # * `true`: Enable stats. Print stats at exit.
-  # * `:quiet`: Enable stats. Do not print stats at exit.
-  #
-  # `log`:
-  # * `false`: Don't enable the log.
-  # * `true`: Enable the log. Print log at exit.
-  # * `:quiet`: Enable the log. Do not print log at exit.
+  # * `stats`:
+  #     * `false`: Don't enable stats.
+  #     * `true`: Enable stats. Print stats at exit.
+  #     * `:quiet`: Enable stats. Do not print stats at exit.
+  # * `log`:
+  #     * `false`: Don't enable the log.
+  #     * `true`: Enable the log. Print log at exit.
+  #     * `:quiet`: Enable the log. Do not print log at exit.
   def self.enable(stats: false, log: false)
     return false if enabled?
     at_exit { print_and_dump_stats } if stats
@@ -521,9 +520,14 @@ module RubyVM::YJIT
     # Format a number along with a percentage over a total value
     def format_number_pct(pad, number, total) # :nodoc:
       padded_count = format_number(pad, number)
-      percentage = number.fdiv(total) * 100
-      formatted_pct = "%4.1f%%" % percentage
-      "#{padded_count} (#{formatted_pct})"
+
+      if total != 0
+        percentage = number.fdiv(total) * 100
+        formatted_pct = "%4.1f%%" % percentage
+        "#{padded_count} (#{formatted_pct})"
+      else
+        "#{padded_count}"
+      end
     end
 
     # :startdoc:

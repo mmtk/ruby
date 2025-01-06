@@ -185,7 +185,7 @@ rb_gc_vm_barrier(void)
     rb_vm_barrier();
 }
 
-#if USE_SHARED_GC
+#if USE_MODULAR_GC
 void *
 rb_gc_get_ractor_newobj_cache(void)
 {
@@ -415,7 +415,7 @@ void rb_vm_update_references(void *ptr);
 #else
 #define TYPED_UPDATE_IF_MOVED(_objspace, _type, _thing) do { \
     if (rb_gc_impl_object_moved_p((_objspace), (VALUE)(_thing))) {    \
-        *(_type *)&(_thing) = (_type)rb_gc_impl_location(_objspace, (VALUE)_thing); \
+        *(_type *)&(_thing) = (_type)gc_location_internal(_objspace, (VALUE)_thing); \
     } \
 } while (0)
 #endif
@@ -498,38 +498,10 @@ rb_malloc_grow_capa(size_t current, size_t type_size)
 }
 
 static inline struct rbimpl_size_mul_overflow_tag
-size_add_overflow(size_t x, size_t y)
-{
-    size_t z;
-    bool p;
-#if 0
-
-#elif defined(ckd_add)
-    p = ckd_add(&z, x, y);
-
-#elif __has_builtin(__builtin_add_overflow)
-    p = __builtin_add_overflow(x, y, &z);
-
-#elif defined(DSIZE_T)
-    RB_GNUC_EXTENSION DSIZE_T dx = x;
-    RB_GNUC_EXTENSION DSIZE_T dy = y;
-    RB_GNUC_EXTENSION DSIZE_T dz = dx + dy;
-    p = dz > SIZE_MAX;
-    z = (size_t)dz;
-
-#else
-    z = x + y;
-    p = z < y;
-
-#endif
-    return (struct rbimpl_size_mul_overflow_tag) { p, z, };
-}
-
-static inline struct rbimpl_size_mul_overflow_tag
 size_mul_add_overflow(size_t x, size_t y, size_t z) /* x * y + z */
 {
     struct rbimpl_size_mul_overflow_tag t = rbimpl_size_mul_overflow(x, y);
-    struct rbimpl_size_mul_overflow_tag u = size_add_overflow(t.right, z);
+    struct rbimpl_size_mul_overflow_tag u = rbimpl_size_add_overflow(t.right, z);
     return (struct rbimpl_size_mul_overflow_tag) { t.left || u.left, u.right };
 }
 
@@ -538,7 +510,7 @@ size_mul_add_mul_overflow(size_t x, size_t y, size_t z, size_t w) /* x * y + z *
 {
     struct rbimpl_size_mul_overflow_tag t = rbimpl_size_mul_overflow(x, y);
     struct rbimpl_size_mul_overflow_tag u = rbimpl_size_mul_overflow(z, w);
-    struct rbimpl_size_mul_overflow_tag v = size_add_overflow(t.right, u.right);
+    struct rbimpl_size_mul_overflow_tag v = rbimpl_size_add_overflow(t.right, u.right);
     return (struct rbimpl_size_mul_overflow_tag) { t.left || u.left || v.left, v.right };
 }
 
@@ -634,9 +606,9 @@ rb_gc_guarded_ptr_val(volatile VALUE *ptr, VALUE val)
 static const char *obj_type_name(VALUE obj);
 #include "gc/default/default.c"
 
-#if USE_SHARED_GC && !defined(HAVE_DLOPEN)
-# error "Shared GC requires dlopen"
-#elif USE_SHARED_GC
+#if USE_MODULAR_GC && !defined(HAVE_DLOPEN)
+# error "Modular GC requires dlopen"
+#elif USE_MODULAR_GC
 #include <dlfcn.h>
 
 typedef struct gc_function_map {
@@ -710,29 +682,29 @@ typedef struct gc_function_map {
     VALUE (*latest_gc_info)(void *objspace_ptr, VALUE key);
     VALUE (*stat)(void *objspace_ptr, VALUE hash_or_sym);
     VALUE (*stat_heap)(void *objspace_ptr, VALUE heap_name, VALUE hash_or_sym);
+    const char *(*active_gc_name)(void);
     // Miscellaneous
     size_t (*obj_flags)(void *objspace_ptr, VALUE obj, ID* flags, size_t max);
     bool (*pointer_to_heap_p)(void *objspace_ptr, const void *ptr);
     bool (*garbage_object_p)(void *objspace_ptr, VALUE obj);
     void (*set_event_hook)(void *objspace_ptr, const rb_event_flag_t event);
     void (*copy_attributes)(void *objspace_ptr, VALUE dest, VALUE obj);
-    // GC Identification
-    const char *(*active_gc_name)(void);
 
-    bool external_gc_loaded_p;
+    bool modular_gc_loaded_p;
 } rb_gc_function_map_t;
 
 static rb_gc_function_map_t rb_gc_functions;
 
 # define RUBY_GC_LIBRARY "RUBY_GC_LIBRARY"
+# define MODULAR_GC_DIR STRINGIZE(modular_gc_dir)
 
 static void
-ruby_external_gc_init(void)
+ruby_modular_gc_init(void)
 {
     // Assert that the directory path ends with a /
-    RUBY_ASSERT_ALWAYS(SHARED_GC_DIR[sizeof(SHARED_GC_DIR) - 2] == '/');
+    RUBY_ASSERT_ALWAYS(MODULAR_GC_DIR[sizeof(MODULAR_GC_DIR) - 2] == '/');
 
-    char *gc_so_file = getenv(RUBY_GC_LIBRARY);
+    const char *gc_so_file = getenv(RUBY_GC_LIBRARY);
 
     rb_gc_function_map_t gc_functions = { 0 };
 
@@ -754,15 +726,40 @@ ruby_external_gc_init(void)
             }
         }
 
-        size_t gc_so_path_size = strlen(SHARED_GC_DIR "librubygc." DLEXT) + strlen(gc_so_file) + 1;
+        size_t gc_so_path_size = strlen(MODULAR_GC_DIR "librubygc." DLEXT) + strlen(gc_so_file) + 1;
+#ifdef LOAD_RELATIVE
+        Dl_info dli;
+        size_t prefix_len = 0;
+        if (dladdr((void *)(uintptr_t)ruby_modular_gc_init, &dli)) {
+            const char *base = strrchr(dli.dli_fname, '/');
+            if (base) {
+                size_t tail = 0;
+# define end_with_p(lit) \
+                (prefix_len >= (tail = rb_strlen_lit(lit)) && \
+                 memcmp(base - tail, lit, tail) == 0)
+
+                prefix_len = base - dli.dli_fname;
+                if (end_with_p("/bin") || end_with_p("/lib")) {
+                    prefix_len -= tail;
+                }
+                prefix_len += MODULAR_GC_DIR[0] != '/';
+                gc_so_path_size += prefix_len;
+            }
+        }
+#endif
         gc_so_path = alloca(gc_so_path_size);
         {
             size_t gc_so_path_idx = 0;
 #define GC_SO_PATH_APPEND(str) do { \
     gc_so_path_idx += strlcpy(gc_so_path + gc_so_path_idx, str, gc_so_path_size - gc_so_path_idx); \
 } while (0)
-            GC_SO_PATH_APPEND(SHARED_GC_DIR);
-            GC_SO_PATH_APPEND("librubygc.");
+#ifdef LOAD_RELATIVE
+            if (prefix_len > 0) {
+                memcpy(gc_so_path, dli.dli_fname, prefix_len);
+                gc_so_path_idx = prefix_len;
+            }
+#endif
+            GC_SO_PATH_APPEND(MODULAR_GC_DIR "librubygc.");
             GC_SO_PATH_APPEND(gc_so_file);
             GC_SO_PATH_APPEND(DLEXT);
             GC_ASSERT(gc_so_path_idx == gc_so_path_size - 1);
@@ -771,19 +768,19 @@ ruby_external_gc_init(void)
 
         handle = dlopen(gc_so_path, RTLD_LAZY | RTLD_GLOBAL);
         if (!handle) {
-            fprintf(stderr, "ruby_external_gc_init: Shared library %s cannot be opened: %s\n", gc_so_path, dlerror());
+            fprintf(stderr, "ruby_modular_gc_init: Shared library %s cannot be opened: %s\n", gc_so_path, dlerror());
             exit(1);
         }
 
-        gc_functions.external_gc_loaded_p = true;
+        gc_functions.modular_gc_loaded_p = true;
     }
 
-# define load_external_gc_func(name) do { \
+# define load_modular_gc_func(name) do { \
     if (handle) { \
         const char *func_name = "rb_gc_impl_" #name; \
         gc_functions.name = dlsym(handle, func_name); \
         if (!gc_functions.name) { \
-            fprintf(stderr, "ruby_external_gc_init: %s function not exported by library %s\n", func_name, gc_so_path); \
+            fprintf(stderr, "ruby_modular_gc_init: %s function not exported by library %s\n", func_name, gc_so_path); \
             exit(1); \
         } \
     } \
@@ -793,85 +790,84 @@ ruby_external_gc_init(void)
 } while (0)
 
     // Bootup
-    load_external_gc_func(objspace_alloc);
-    load_external_gc_func(objspace_init);
-    load_external_gc_func(objspace_free);
-    load_external_gc_func(ractor_cache_alloc);
-    load_external_gc_func(ractor_cache_free);
-    load_external_gc_func(set_params);
-    load_external_gc_func(init);
-    load_external_gc_func(heap_sizes);
+    load_modular_gc_func(objspace_alloc);
+    load_modular_gc_func(objspace_init);
+    load_modular_gc_func(objspace_free);
+    load_modular_gc_func(ractor_cache_alloc);
+    load_modular_gc_func(ractor_cache_free);
+    load_modular_gc_func(set_params);
+    load_modular_gc_func(init);
+    load_modular_gc_func(heap_sizes);
     // Shutdown
-    load_external_gc_func(shutdown_free_objects);
+    load_modular_gc_func(shutdown_free_objects);
     // GC
-    load_external_gc_func(start);
-    load_external_gc_func(during_gc_p);
-    load_external_gc_func(prepare_heap);
-    load_external_gc_func(gc_enable);
-    load_external_gc_func(gc_disable);
-    load_external_gc_func(gc_enabled_p);
-    load_external_gc_func(config_set);
-    load_external_gc_func(config_get);
-    load_external_gc_func(stress_set);
-    load_external_gc_func(stress_get);
+    load_modular_gc_func(start);
+    load_modular_gc_func(during_gc_p);
+    load_modular_gc_func(prepare_heap);
+    load_modular_gc_func(gc_enable);
+    load_modular_gc_func(gc_disable);
+    load_modular_gc_func(gc_enabled_p);
+    load_modular_gc_func(config_set);
+    load_modular_gc_func(config_get);
+    load_modular_gc_func(stress_set);
+    load_modular_gc_func(stress_get);
     // Object allocation
-    load_external_gc_func(new_obj);
-    load_external_gc_func(obj_slot_size);
-    load_external_gc_func(heap_id_for_size);
-    load_external_gc_func(size_allocatable_p);
+    load_modular_gc_func(new_obj);
+    load_modular_gc_func(obj_slot_size);
+    load_modular_gc_func(heap_id_for_size);
+    load_modular_gc_func(size_allocatable_p);
     // Malloc
-    load_external_gc_func(malloc);
-    load_external_gc_func(calloc);
-    load_external_gc_func(realloc);
-    load_external_gc_func(free);
-    load_external_gc_func(adjust_memory_usage);
+    load_modular_gc_func(malloc);
+    load_modular_gc_func(calloc);
+    load_modular_gc_func(realloc);
+    load_modular_gc_func(free);
+    load_modular_gc_func(adjust_memory_usage);
     // Marking
-    load_external_gc_func(mark);
-    load_external_gc_func(mark_and_move);
-    load_external_gc_func(mark_and_pin);
-    load_external_gc_func(mark_maybe);
-    load_external_gc_func(mark_weak);
-    load_external_gc_func(remove_weak);
+    load_modular_gc_func(mark);
+    load_modular_gc_func(mark_and_move);
+    load_modular_gc_func(mark_and_pin);
+    load_modular_gc_func(mark_maybe);
+    load_modular_gc_func(mark_weak);
+    load_modular_gc_func(remove_weak);
     // Compaction
-    load_external_gc_func(object_moved_p);
-    load_external_gc_func(location);
+    load_modular_gc_func(object_moved_p);
+    load_modular_gc_func(location);
     // Write barriers
-    load_external_gc_func(writebarrier);
-    load_external_gc_func(writebarrier_unprotect);
-    load_external_gc_func(writebarrier_remember);
+    load_modular_gc_func(writebarrier);
+    load_modular_gc_func(writebarrier_unprotect);
+    load_modular_gc_func(writebarrier_remember);
     // Heap walking
-    load_external_gc_func(each_objects);
-    load_external_gc_func(each_object);
+    load_modular_gc_func(each_objects);
+    load_modular_gc_func(each_object);
     // Finalizers
-    load_external_gc_func(make_zombie);
-    load_external_gc_func(define_finalizer);
-    load_external_gc_func(undefine_finalizer);
-    load_external_gc_func(copy_finalizer);
-    load_external_gc_func(shutdown_call_finalizer);
+    load_modular_gc_func(make_zombie);
+    load_modular_gc_func(define_finalizer);
+    load_modular_gc_func(undefine_finalizer);
+    load_modular_gc_func(copy_finalizer);
+    load_modular_gc_func(shutdown_call_finalizer);
     // Object ID
-    load_external_gc_func(object_id);
-    load_external_gc_func(object_id_to_ref);
+    load_modular_gc_func(object_id);
+    load_modular_gc_func(object_id_to_ref);
     // Forking
-    load_external_gc_func(before_fork);
-    load_external_gc_func(after_fork);
+    load_modular_gc_func(before_fork);
+    load_modular_gc_func(after_fork);
     // Statistics
-    load_external_gc_func(set_measure_total_time);
-    load_external_gc_func(get_measure_total_time);
-    load_external_gc_func(get_total_time);
-    load_external_gc_func(gc_count);
-    load_external_gc_func(latest_gc_info);
-    load_external_gc_func(stat);
-    load_external_gc_func(stat_heap);
+    load_modular_gc_func(set_measure_total_time);
+    load_modular_gc_func(get_measure_total_time);
+    load_modular_gc_func(get_total_time);
+    load_modular_gc_func(gc_count);
+    load_modular_gc_func(latest_gc_info);
+    load_modular_gc_func(stat);
+    load_modular_gc_func(stat_heap);
+    load_modular_gc_func(active_gc_name);
     // Miscellaneous
-    load_external_gc_func(obj_flags);
-    load_external_gc_func(pointer_to_heap_p);
-    load_external_gc_func(garbage_object_p);
-    load_external_gc_func(set_event_hook);
-    load_external_gc_func(copy_attributes);
-    //GC Identification
-    load_external_gc_func(active_gc_name);
+    load_modular_gc_func(obj_flags);
+    load_modular_gc_func(pointer_to_heap_p);
+    load_modular_gc_func(garbage_object_p);
+    load_modular_gc_func(set_event_hook);
+    load_modular_gc_func(copy_attributes);
 
-# undef load_external_gc_func
+# undef load_modular_gc_func
 
     rb_gc_functions = gc_functions;
 }
@@ -946,14 +942,23 @@ ruby_external_gc_init(void)
 # define rb_gc_impl_latest_gc_info rb_gc_functions.latest_gc_info
 # define rb_gc_impl_stat rb_gc_functions.stat
 # define rb_gc_impl_stat_heap rb_gc_functions.stat_heap
+# define rb_gc_impl_active_gc_name rb_gc_functions.active_gc_name
 // Miscellaneous
 # define rb_gc_impl_obj_flags rb_gc_functions.obj_flags
 # define rb_gc_impl_pointer_to_heap_p rb_gc_functions.pointer_to_heap_p
 # define rb_gc_impl_garbage_object_p rb_gc_functions.garbage_object_p
 # define rb_gc_impl_set_event_hook rb_gc_functions.set_event_hook
 # define rb_gc_impl_copy_attributes rb_gc_functions.copy_attributes
-// GC Identification
-# define rb_gc_impl_active_gc_name rb_gc_functions.active_gc_name
+#endif
+
+#ifdef RUBY_ASAN_ENABLED
+static void
+asan_death_callback(void)
+{
+    if (GET_VM()) {
+        rb_bug_without_die("ASAN error");
+    }
+}
 #endif
 
 static VALUE initial_stress = Qfalse;
@@ -961,8 +966,8 @@ static VALUE initial_stress = Qfalse;
 void *
 rb_objspace_alloc(void)
 {
-#if USE_SHARED_GC
-    ruby_external_gc_init();
+#if USE_MODULAR_GC
+    ruby_modular_gc_init();
 #endif
 
     void *objspace = rb_gc_impl_objspace_alloc();
@@ -970,6 +975,10 @@ rb_objspace_alloc(void)
 
     rb_gc_impl_objspace_init(objspace);
     rb_gc_impl_stress_set(objspace, initial_stress);
+
+#ifdef RUBY_ASAN_ENABLED
+    __sanitizer_set_death_callback(asan_death_callback);
+#endif
 
     return objspace;
 }
@@ -1011,7 +1020,16 @@ newobj_of(rb_ractor_t *cr, VALUE klass, VALUE flags, VALUE v1, VALUE v2, VALUE v
         {
             memset((char *)obj + RVALUE_SIZE, 0, rb_gc_obj_slot_size(obj) - RVALUE_SIZE);
 
-            rb_gc_event_hook(obj, RUBY_INTERNAL_EVENT_NEWOBJ);
+            /* We must disable GC here because the callback could call xmalloc
+             * which could potentially trigger a GC, and a lot of code is unsafe
+             * to trigger a GC right after an object has been allocated because
+             * they perform initialization for the object and assume that the
+             * GC does not trigger before then. */
+            bool gc_disabled = RTEST(rb_gc_disable_no_rest());
+            {
+                rb_gc_event_hook(obj, RUBY_INTERNAL_EVENT_NEWOBJ);
+            }
+            if (!gc_disabled) rb_gc_enable();
         }
         RB_VM_LOCK_LEAVE_CR_LEV(cr, &lev);
     }
@@ -1517,7 +1535,7 @@ internal_object_p(VALUE obj)
         }
     }
     if (ptr || !RBASIC(obj)->flags) {
-        asan_poison_object(obj);
+        rb_asan_poison_object(obj);
     }
     return 1;
 }
@@ -1620,6 +1638,12 @@ os_each_obj(int argc, VALUE *argv, VALUE os)
 
 static VALUE
 undefine_final(VALUE os, VALUE obj)
+{
+    return rb_undefine_finalizer(obj);
+}
+
+VALUE
+rb_undefine_finalizer(VALUE obj)
 {
     rb_check_frozen(obj);
 
@@ -1761,6 +1785,12 @@ int
 rb_objspace_garbage_object_p(VALUE obj)
 {
     return rb_gc_impl_garbage_object_p(rb_gc_get_objspace(), obj);
+}
+
+bool
+rb_gc_pointer_to_heap_p(VALUE obj)
+{
+    return rb_gc_impl_pointer_to_heap_p(rb_gc_get_objspace(), (void *)obj);
 }
 
 /*
@@ -2453,6 +2483,24 @@ gc_mark_machine_stack_location_maybe(VALUE obj, void *data)
 #endif
 }
 
+static VALUE
+gc_location_internal(void *objspace, VALUE value)
+{
+    if (SPECIAL_CONST_P(value)) {
+        return value;
+    }
+
+    GC_ASSERT(rb_gc_impl_pointer_to_heap_p(objspace, (void *)value));
+
+    return rb_gc_impl_location(objspace, value);
+}
+
+VALUE
+rb_gc_location(VALUE value)
+{
+    return gc_location_internal(rb_gc_get_objspace(), value);
+}
+
 #if defined(__wasm__)
 
 
@@ -2993,10 +3041,10 @@ rb_gc_copy_attributes(VALUE dest, VALUE obj)
 }
 
 int
-rb_gc_external_gc_loaded_p(void)
+rb_gc_modular_gc_loaded_p(void)
 {
-#if USE_SHARED_GC
-    return rb_gc_functions.external_gc_loaded_p;
+#if USE_MODULAR_GC
+    return rb_gc_functions.modular_gc_loaded_p;
 #else
     return false;
 #endif
@@ -3281,12 +3329,6 @@ check_id_table_move(VALUE value, void *data)
     return ID_TABLE_CONTINUE;
 }
 
-VALUE
-rb_gc_location(VALUE value)
-{
-    return rb_gc_impl_location(rb_gc_get_objspace(), value);
-}
-
 void
 rb_gc_prepare_heap_process_object(VALUE obj)
 {
@@ -3325,7 +3367,7 @@ update_id_table(VALUE *value, void *data, int existing)
     void *objspace = (void *)data;
 
     if (rb_gc_impl_object_moved_p(objspace, (VALUE)*value)) {
-        *value = rb_gc_impl_location(objspace, (VALUE)*value);
+        *value = gc_location_internal(objspace, (VALUE)*value);
     }
 
     return ID_TABLE_CONTINUE;
@@ -3346,12 +3388,12 @@ update_cc_tbl_i(VALUE ccs_ptr, void *objspace)
     VM_ASSERT(vm_ccs_p(ccs));
 
     if (rb_gc_impl_object_moved_p(objspace, (VALUE)ccs->cme)) {
-        ccs->cme = (const rb_callable_method_entry_t *)rb_gc_impl_location(objspace, (VALUE)ccs->cme);
+        ccs->cme = (const rb_callable_method_entry_t *)gc_location_internal(objspace, (VALUE)ccs->cme);
     }
 
     for (int i=0; i<ccs->len; i++) {
         if (rb_gc_impl_object_moved_p(objspace, (VALUE)ccs->entries[i].cc)) {
-            ccs->entries[i].cc = (struct rb_callcache *)rb_gc_location((VALUE)ccs->entries[i].cc);
+            ccs->entries[i].cc = (struct rb_callcache *)gc_location_internal(objspace, (VALUE)ccs->entries[i].cc);
         }
     }
 
@@ -3379,7 +3421,7 @@ update_cvc_tbl_i(VALUE cvc_entry, void *objspace)
         TYPED_UPDATE_IF_MOVED(objspace, rb_cref_t *, entry->cref);
     }
 
-    entry->class_value = rb_gc_impl_location(objspace, entry->class_value);
+    entry->class_value = gc_location_internal(objspace, entry->class_value);
 
     return ID_TABLE_CONTINUE;
 }
@@ -3399,11 +3441,11 @@ update_const_table(VALUE value, void *objspace)
     rb_const_entry_t *ce = (rb_const_entry_t *)value;
 
     if (rb_gc_impl_object_moved_p(objspace, ce->value)) {
-        ce->value = rb_gc_impl_location(objspace, ce->value);
+        ce->value = gc_location_internal(objspace, ce->value);
     }
 
     if (rb_gc_impl_object_moved_p(objspace, ce->file)) {
-        ce->file = rb_gc_impl_location(objspace, ce->file);
+        ce->file = gc_location_internal(objspace, ce->file);
     }
 
     return ID_TABLE_CONTINUE;
@@ -3447,7 +3489,7 @@ update_superclasses(void *objspace, VALUE obj)
 extern rb_symbols_t ruby_global_symbols;
 #define global_symbols ruby_global_symbols
 
-#if USE_SHARED_GC
+#if USE_MODULAR_GC
 struct global_vm_table_foreach_data {
     vm_table_foreach_callback_func callback;
     vm_table_update_callback_func update_callback;
@@ -3591,8 +3633,8 @@ rb_gc_update_vm_references(void *objspace)
 
     rb_vm_update_references(vm);
     rb_gc_update_global_tbl();
-    global_symbols.ids = rb_gc_impl_location(objspace, global_symbols.ids);
-    global_symbols.dsymbol_fstr_hash = rb_gc_impl_location(objspace, global_symbols.dsymbol_fstr_hash);
+    global_symbols.ids = gc_location_internal(objspace, global_symbols.ids);
+    global_symbols.dsymbol_fstr_hash = gc_location_internal(objspace, global_symbols.dsymbol_fstr_hash);
     gc_update_table_refs(global_symbols.str_sym);
 
 #if USE_YJIT
@@ -3776,8 +3818,7 @@ rb_gc_update_object_references(void *objspace, VALUE obj)
 
                     for (size_t offset = *offset_list; offset != RUBY_REF_END; offset = *offset_list++) {
                         VALUE *ref = (VALUE *)((char *)ptr + offset);
-                        if (SPECIAL_CONST_P(*ref)) continue;
-                        *ref = rb_gc_impl_location(objspace, *ref);
+                        *ref = gc_location_internal(objspace, *ref);
                     }
                 }
                 else if (RTYPEDDATA_P(obj)) {
@@ -4381,7 +4422,7 @@ rb_raw_obj_info_buitin_type(char *const buff, const size_t buff_size, const VALU
             break;
           }
           case T_MOVED: {
-            APPEND_F("-> %p", (void*)rb_gc_impl_location(rb_gc_get_objspace(), obj));
+            APPEND_F("-> %p", (void*)gc_location_internal(rb_gc_get_objspace(), obj));
             break;
           }
           case T_HASH: {
@@ -4529,6 +4570,27 @@ rb_raw_obj_info_buitin_type(char *const buff, const size_t buff_size, const VALU
 }
 
 #undef C
+
+void
+rb_asan_poison_object(VALUE obj)
+{
+    MAYBE_UNUSED(struct RVALUE *) ptr = (void *)obj;
+    asan_poison_memory_region(ptr, rb_gc_obj_slot_size(obj));
+}
+
+void
+rb_asan_unpoison_object(VALUE obj, bool newobj_p)
+{
+    MAYBE_UNUSED(struct RVALUE *) ptr = (void *)obj;
+    asan_unpoison_memory_region(ptr, rb_gc_obj_slot_size(obj), newobj_p);
+}
+
+void *
+rb_asan_poisoned_object_p(VALUE obj)
+{
+    MAYBE_UNUSED(struct RVALUE *) ptr = (void *)obj;
+    return __asan_region_is_poisoned(ptr, rb_gc_obj_slot_size(obj));
+}
 
 #define asan_unpoisoning_object(obj) \
     for (void *poisoned = asan_unpoison_object_temporary(obj), \
@@ -4681,7 +4743,8 @@ rb_memerror(void)
     VALUE exc = GET_VM()->special_exceptions[ruby_error_nomemory];
 
     if (!exc ||
-        rb_ec_raised_p(ec, RAISED_NOMEMORY)) {
+        rb_ec_raised_p(ec, RAISED_NOMEMORY) ||
+        rb_ec_vm_lock_rec(ec) != ec->tag->lock_rec) {
         fprintf(stderr, "[FATAL] failed to allocate memory\n");
         exit(EXIT_FAILURE);
     }
@@ -4694,6 +4757,13 @@ rb_memerror(void)
     }
     ec->errinfo = exc;
     EC_JUMP_TAG(ec, TAG_RAISE);
+}
+
+bool
+rb_memerror_reentered(void)
+{
+    rb_execution_context_t *ec = GET_EC();
+    return (ec && rb_ec_raised_p(ec, RAISED_NOMEMORY));
 }
 
 void
@@ -4737,6 +4807,14 @@ ruby_malloc_size_overflow(size_t count, size_t elsize)
     rb_raise(rb_eArgError,
              "malloc: possible integer overflow (%"PRIuSIZE"*%"PRIuSIZE")",
              count, elsize);
+}
+
+void
+ruby_malloc_add_size_overflow(size_t x, size_t y)
+{
+    rb_raise(rb_eArgError,
+             "malloc: possible integer overflow (%"PRIuSIZE"+%"PRIuSIZE")",
+             x, y);
 }
 
 static void *ruby_xmalloc2_body(size_t n, size_t size);

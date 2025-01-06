@@ -207,6 +207,9 @@ module Prism
       assert_prism_eval("defined?(a(itself))")
       assert_prism_eval("defined?(itself(itself))")
 
+      # method chain with a block on the inside
+      assert_prism_eval("defined?(itself { 1 }.itself)")
+
       # Method chain on a constant
       assert_prism_eval(<<~RUBY)
         class PrismDefinedNode
@@ -1993,6 +1996,10 @@ end
         end
         test_prism_call_node
       CODE
+
+      # Specialized instructions
+      assert_prism_eval(%{-"literal"})
+      assert_prism_eval(%{"literal".freeze})
     end
 
     def test_CallAndWriteNode
@@ -2485,6 +2492,9 @@ end
       assert_prism_eval("5 in foo")
 
       assert_prism_eval("1 in 2")
+
+      # Bug: https://bugs.ruby-lang.org/issues/20956
+      assert_prism_eval("1 in [1 | [1]]")
     end
 
     def test_MatchRequiredNode
@@ -2523,6 +2533,7 @@ end
       assert_prism_eval("module Prism; @prism = 1; 1 in ^@prism; end")
       assert_prism_eval("$prism = 1; 1 in ^$prism")
       assert_prism_eval("prism = 1; 1 in ^prism")
+      assert_prism_eval("[1].each { 1 => ^it }")
     end
 
     ############################################################################

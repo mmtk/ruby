@@ -86,53 +86,29 @@ module Reline
 end
 
 class Reline::TestCase < Test::Unit::TestCase
-  private def convert_str(input, options = {}, normalized = nil)
-    return nil if input.nil?
-    input = input.chars.map { |c|
-      if Reline::Unicode::EscapedChars.include?(c.ord)
-        c
-      else
-        c.encode(@line_editor.encoding, Encoding::UTF_8, **options)
-      end
-    }.join
-  rescue Encoding::UndefinedConversionError, Encoding::InvalidByteSequenceError
-    if unicode?(input.encoding)
-      input = input.unicode_normalize(:nfc)
-      if normalized
-        options[:undef] = :replace
-        options[:replace] = '?'
-      end
-      normalized = true
-      retry
-    end
-    input
+  private def convert_str(input)
+    input.encode(@line_editor.encoding, Encoding::UTF_8)
   end
 
-  def input_key_by_symbol(input)
-    @line_editor.input_key(Reline::Key.new(input, input, false))
+  def omit_unless_utf8
+    omit "This test is for UTF-8 but the locale is #{Reline.core.encoding}" if Reline.core.encoding != Encoding::UTF_8
   end
 
-  def input_keys(input, convert = true)
-    input = convert_str(input) if convert
-    input.chars.each do |c|
-      if c.bytesize == 1
-        eighth_bit = 0b10000000
-        byte = c.bytes.first
-        if byte.allbits?(eighth_bit)
-          @line_editor.input_key(Reline::Key.new(byte ^ eighth_bit, byte, true))
-        else
-          @line_editor.input_key(Reline::Key.new(byte, byte, false))
-        end
-      else
-        @line_editor.input_key(Reline::Key.new(c.ord, c.ord, false))
+  def input_key_by_symbol(method_symbol, char: nil, csi: false)
+    char ||= csi ? "\e[A" : "\C-a"
+    @line_editor.input_key(Reline::Key.new(char, method_symbol, false))
+  end
+
+  def input_keys(input)
+    input = convert_str(input)
+
+    key_stroke = Reline::KeyStroke.new(@config, @encoding)
+    input_bytes = input.bytes
+    until input_bytes.empty?
+      expanded, input_bytes = key_stroke.expand(input_bytes)
+      expanded.each do |key|
+        @line_editor.input_key(key)
       end
-    end
-  end
-
-  def input_raw_keys(input, convert = true)
-    input = convert_str(input) if convert
-    input.chars.each do |c|
-      @line_editor.input_key(Reline::Key.new(c.ord, c.ord, false))
     end
   end
 
@@ -178,9 +154,5 @@ class Reline::TestCase < Test::Unit::TestCase
       @config.editing_mode = editing_mode
       assert_equal(method_symbol, @config.editing_mode.get(input.bytes))
     end
-  end
-
-  private def unicode?(encoding)
-    [Encoding::UTF_8, Encoding::UTF_16BE, Encoding::UTF_16LE, Encoding::UTF_32BE, Encoding::UTF_32LE].include?(encoding)
   end
 end

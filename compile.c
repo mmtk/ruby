@@ -52,7 +52,6 @@
 #include "internal/mmtk_macros.h"
 
 #define FIXNUM_INC(n, i) ((n)+(INT2FIX(i)&~FIXNUM_FLAG))
-#define FIXNUM_OR(n, i) ((n)|INT2FIX(i))
 
 typedef struct iseq_link_element {
     enum {
@@ -3823,6 +3822,24 @@ iseq_peephole_optimize(rb_iseq_t *iseq, LINK_ELEMENT *list, const int do_tailcal
             }
             ELEM_REMOVE(&iobj->link);
         }
+        if (IS_NEXT_INSN_ID(&iobj->link, toregexp)) {
+            INSN *next = (INSN *)iobj->link.next;
+            if (OPERAND_AT(next, 1) == INT2FIX(1)) {
+                VALUE src = OPERAND_AT(iobj, 0);
+                int opt = (int)FIX2LONG(OPERAND_AT(next, 0));
+                VALUE path = rb_iseq_path(iseq);
+                int line = iobj->insn_info.line_no;
+                VALUE errinfo = rb_errinfo();
+                VALUE re = rb_reg_compile(src, opt, RSTRING_PTR(path), line);
+                if (NIL_P(re)) {
+                    VALUE message = rb_attr_get(rb_errinfo(), idMesg);
+                    rb_set_errinfo(errinfo);
+                    COMPILE_ERROR(iseq, line, "%" PRIsVALUE, message);
+                }
+                RB_OBJ_WRITE(iseq, &OPERAND_AT(iobj, 0), re);
+                ELEM_REMOVE(iobj->link.next);
+            }
+        }
     }
 
     if (IS_INSN_ID(iobj, concatstrings)) {
@@ -4505,47 +4522,91 @@ all_string_result_p(const NODE *node)
     }
 }
 
-static int
-compile_dstr_fragments(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const node, int *cntp)
-{
-    const struct RNode_LIST *list = RNODE_DSTR(node)->nd_next;
-    VALUE lit = rb_node_dstr_string_val(node);
-    LINK_ELEMENT *first_lit = 0;
-    int cnt = 0;
+struct dstr_ctxt {
+    rb_iseq_t *const iseq;
+    LINK_ANCHOR *const ret;
+    VALUE lit;
+    const NODE *lit_node;
+    int cnt;
+    int dregx;
+};
 
-    debugp_param("nd_lit", lit);
-    if (!NIL_P(lit)) {
-        cnt++;
-        if (!RB_TYPE_P(lit, T_STRING)) {
-            COMPILE_ERROR(ERROR_ARGS "dstr: must be string: %s",
-                          rb_builtin_type_name(TYPE(lit)));
+static int
+append_dstr_fragment(struct dstr_ctxt *args, const NODE *const node, rb_parser_string_t *str)
+{
+    VALUE s = rb_str_new_mutable_parser_string(str);
+    if (args->dregx) {
+        VALUE error = rb_reg_check_preprocess(s);
+        if (!NIL_P(error)) {
+            COMPILE_ERROR(args->iseq, nd_line(node), "%" PRIsVALUE, error);
             return COMPILE_NG;
         }
+    }
+    if (NIL_P(args->lit)) {
+        args->lit = s;
+        args->lit_node = node;
+    }
+    else {
+        rb_str_buf_append(args->lit, s);
+    }
+    return COMPILE_OK;
+}
+
+static void
+flush_dstr_fragment(struct dstr_ctxt *args)
+{
+    if (!NIL_P(args->lit)) {
+        rb_iseq_t *iseq = args->iseq;
+        VALUE lit = args->lit;
+        args->lit = Qnil;
         lit = rb_fstring(lit);
-        ADD_INSN1(ret, node, putobject, lit);
-        RB_OBJ_WRITTEN(iseq, Qundef, lit);
-        if (RSTRING_LEN(lit) == 0) first_lit = LAST_ELEMENT(ret);
+        ADD_INSN1(args->ret, args->lit_node, putobject, lit);
+        RB_OBJ_WRITTEN(args->iseq, Qundef, lit);
+        args->cnt++;
+    }
+}
+
+static int
+compile_dstr_fragments_0(struct dstr_ctxt *args, const NODE *const node)
+{
+    const struct RNode_LIST *list = RNODE_DSTR(node)->nd_next;
+    rb_parser_string_t *str = RNODE_DSTR(node)->string;
+
+    if (str) {
+        CHECK(append_dstr_fragment(args, node, str));
     }
 
     while (list) {
         const NODE *const head = list->nd_head;
         if (nd_type_p(head, NODE_STR)) {
-            lit = rb_node_str_string_val(head);
-            ADD_INSN1(ret, head, putobject, lit);
-            RB_OBJ_WRITTEN(iseq, Qundef, lit);
-            lit = Qnil;
+            CHECK(append_dstr_fragment(args, node, RNODE_STR(head)->string));
+        }
+        else if (nd_type_p(head, NODE_DSTR)) {
+            CHECK(compile_dstr_fragments_0(args, head));
         }
         else {
-            CHECK(COMPILE(ret, "each string", head));
+            flush_dstr_fragment(args);
+            rb_iseq_t *iseq = args->iseq;
+            CHECK(COMPILE(args->ret, "each string", head));
+            args->cnt++;
         }
-        cnt++;
         list = (struct RNode_LIST *)list->nd_next;
     }
-    if (NIL_P(lit) && first_lit) {
-        ELEM_REMOVE(first_lit);
-        --cnt;
-    }
-    *cntp = cnt;
+    return COMPILE_OK;
+}
+
+static int
+compile_dstr_fragments(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const node, int *cntp, int dregx)
+{
+    struct dstr_ctxt args = {
+        .iseq = iseq, .ret = ret,
+        .lit = Qnil, .lit_node = NULL,
+        .cnt = 0, .dregx = dregx,
+    };
+    CHECK(compile_dstr_fragments_0(&args, node));
+    flush_dstr_fragment(&args);
+
+    *cntp = args.cnt;
 
     return COMPILE_OK;
 }
@@ -4574,7 +4635,7 @@ compile_dstr(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const node)
         RB_OBJ_WRITTEN(iseq, Qundef, lit);
     }
     else {
-        CHECK(compile_dstr_fragments(iseq, ret, node, &cnt));
+        CHECK(compile_dstr_fragments(iseq, ret, node, &cnt, FALSE));
         ADD_INSN1(ret, node, concatstrings, INT2FIX(cnt));
     }
     return COMPILE_OK;
@@ -4596,7 +4657,7 @@ compile_dregx(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const node, i
         return COMPILE_OK;
     }
 
-    CHECK(compile_dstr_fragments(iseq, ret, node, &cnt));
+    CHECK(compile_dstr_fragments(iseq, ret, node, &cnt, TRUE));
     ADD_INSN2(ret, node, toregexp, INT2FIX(cflag), INT2FIX(cnt));
 
     if (popped) {
@@ -10482,34 +10543,36 @@ compile_shareable_literal_constant(rb_iseq_t *iseq, LINK_ANCHOR *ret, enum rb_pa
             *shareable_literal_p = 0;
             return COMPILE_OK;
         }
+        for (NODE *n = RNODE_HASH(node)->nd_head; n; n = RNODE_LIST(RNODE_LIST(n)->nd_next)->nd_next) {
+            if (!RNODE_LIST(n)->nd_head) {
+                // If the hash node have a keyword splat, fall back to the default case.
+                goto compile_shareable;
+            }
+        }
 
         INIT_ANCHOR(anchor);
         lit = rb_hash_new();
         for (NODE *n = RNODE_HASH(node)->nd_head; n; n = RNODE_LIST(RNODE_LIST(n)->nd_next)->nd_next) {
-            VALUE key_val;
-            VALUE value_val;
+            VALUE key_val = 0;
+            VALUE value_val = 0;
             int shareable_literal_p2;
             NODE *key = RNODE_LIST(n)->nd_head;
             NODE *val = RNODE_LIST(RNODE_LIST(n)->nd_next)->nd_head;
-            if (key) {
-                CHECK(compile_shareable_literal_constant_next(key, anchor, &key_val, &shareable_literal_p2));
-                if (shareable_literal_p2) {
-                    /* noop */
-                }
-                else if (RTEST(lit)) {
-                    rb_hash_clear(lit);
-                    lit = Qfalse;
-                }
+            CHECK(compile_shareable_literal_constant_next(key, anchor, &key_val, &shareable_literal_p2));
+            if (shareable_literal_p2) {
+                /* noop */
             }
-            if (val) {
-                CHECK(compile_shareable_literal_constant_next(val, anchor, &value_val, &shareable_literal_p2));
-                if (shareable_literal_p2) {
-                    /* noop */
-                }
-                else if (RTEST(lit)) {
-                    rb_hash_clear(lit);
-                    lit = Qfalse;
-                }
+            else if (RTEST(lit)) {
+                rb_hash_clear(lit);
+                lit = Qfalse;
+            }
+            CHECK(compile_shareable_literal_constant_next(val, anchor, &value_val, &shareable_literal_p2));
+            if (shareable_literal_p2) {
+                /* noop */
+            }
+            else if (RTEST(lit)) {
+                rb_hash_clear(lit);
+                lit = Qfalse;
             }
             if (RTEST(lit)) {
                 if (!UNDEF_P(key_val) && !UNDEF_P(value_val)) {
@@ -10525,6 +10588,8 @@ compile_shareable_literal_constant(rb_iseq_t *iseq, LINK_ANCHOR *ret, enum rb_pa
       }
 
       default:
+
+      compile_shareable:
         if (shareable == rb_parser_shareable_literal &&
             (SHAREABLE_BARE_EXPRESSION || level > 0)) {
             CHECK(compile_ensure_shareable_node(iseq, ret, dest, node));
@@ -10538,7 +10603,7 @@ compile_shareable_literal_constant(rb_iseq_t *iseq, LINK_ANCHOR *ret, enum rb_pa
         return COMPILE_OK;
     }
 
-    /* Array or Hash */
+    /* Array or Hash that does not have keyword splat */
     if (!lit) {
         if (nd_type(node) == NODE_LIST) {
             ADD_INSN1(anchor, node, newarray, INT2FIX(RNODE_LIST(node)->as.nd_alen));

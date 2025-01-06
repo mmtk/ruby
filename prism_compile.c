@@ -1357,13 +1357,15 @@ pm_compile_call_and_or_write_node(rb_iseq_t *iseq, bool and_node, const pm_node_
     if (lskip && !popped) PUSH_LABEL(ret, lskip);
 }
 
+static void pm_compile_shareable_constant_value(rb_iseq_t *iseq, const pm_node_t *node, const pm_node_flags_t shareability, VALUE path, LINK_ANCHOR *const ret, pm_scope_node_t *scope_node, bool top);
+
 /**
  * This function compiles a hash onto the stack. It is used to compile hash
  * literals and keyword arguments. It is assumed that if we get here that the
  * contents of the hash are not popped.
  */
 static void
-pm_compile_hash_elements(rb_iseq_t *iseq, const pm_node_t *node, const pm_node_list_t *elements, bool argument, LINK_ANCHOR *const ret, pm_scope_node_t *scope_node)
+pm_compile_hash_elements(rb_iseq_t *iseq, const pm_node_t *node, const pm_node_list_t *elements, const pm_node_flags_t shareability, VALUE path, bool argument, LINK_ANCHOR *const ret, pm_scope_node_t *scope_node)
 {
     const pm_node_location_t location = PM_NODE_START_LOCATION(scope_node->parser, node);
 
@@ -1406,11 +1408,11 @@ pm_compile_hash_elements(rb_iseq_t *iseq, const pm_node_t *node, const pm_node_l
     for (size_t index = 0; index < elements->size; index++) {
         const pm_node_t *element = elements->nodes[index];
 
-
         switch (PM_NODE_TYPE(element)) {
           case PM_ASSOC_NODE: {
             // Pre-allocation check (this branch can be omitted).
             if (
+                (shareability == 0) &&
                 PM_NODE_FLAG_P(element, PM_NODE_FLAG_STATIC_LITERAL) && (
                     (!static_literal && ((index + min_tmp_hash_length) < elements->size)) ||
                     (first_chunk && stack_length == 0)
@@ -1468,7 +1470,15 @@ pm_compile_hash_elements(rb_iseq_t *iseq, const pm_node_t *node, const pm_node_l
 
             // If this is a plain assoc node, then we can compile it directly
             // and then add the total number of values on the stack.
-            pm_compile_node(iseq, element, anchor, false, scope_node);
+            if (shareability == 0) {
+                pm_compile_node(iseq, element, anchor, false, scope_node);
+            }
+            else {
+                const pm_assoc_node_t *assoc = (const pm_assoc_node_t *) element;
+                pm_compile_shareable_constant_value(iseq, assoc->key, shareability, path, ret, scope_node, false);
+                pm_compile_shareable_constant_value(iseq, assoc->value, shareability, path, ret, scope_node, false);
+            }
+
             if ((stack_length += 2) >= max_stack_length) FLUSH_CHUNK;
             break;
           }
@@ -1511,7 +1521,12 @@ pm_compile_hash_elements(rb_iseq_t *iseq, const pm_node_t *node, const pm_node_l
                     // only done for method calls and not for literal hashes,
                     // because literal hashes should always result in a new
                     // hash.
-                    PM_COMPILE_NOT_POPPED(element);
+                    if (shareability == 0) {
+                        PM_COMPILE_NOT_POPPED(element);
+                    }
+                    else {
+                        pm_compile_shareable_constant_value(iseq, element, shareability, path, ret, scope_node, false);
+                    }
                 }
                 else {
                     // There is more than one keyword argument, or this is not a
@@ -1527,7 +1542,13 @@ pm_compile_hash_elements(rb_iseq_t *iseq, const pm_node_t *node, const pm_node_l
                         PUSH_INSN(ret, location, swap);
                     }
 
-                    PM_COMPILE_NOT_POPPED(element);
+                    if (shareability == 0) {
+                        PM_COMPILE_NOT_POPPED(element);
+                    }
+                    else {
+                        pm_compile_shareable_constant_value(iseq, element, shareability, path, ret, scope_node, false);
+                    }
+
                     PUSH_SEND(ret, location, id_core_hash_merge_kwd, INT2FIX(2));
                 }
             }
@@ -1590,17 +1611,17 @@ pm_setup_args_core(const pm_arguments_node_t *arguments_node, const pm_node_t *b
                         // in this case, so mark the method as passing mutable
                         // keyword splat.
                         *flags |= VM_CALL_KW_SPLAT_MUT;
-                        pm_compile_hash_elements(iseq, argument, elements, true, ret, scope_node);
+                        pm_compile_hash_elements(iseq, argument, elements, 0, Qundef, true, ret, scope_node);
                     }
                     else if (*dup_rest & DUP_SINGLE_KW_SPLAT) {
                         *flags |= VM_CALL_KW_SPLAT_MUT;
                         PUSH_INSN1(ret, location, putspecialobject, INT2FIX(VM_SPECIAL_OBJECT_VMCORE));
                         PUSH_INSN1(ret, location, newhash, INT2FIX(0));
-                        pm_compile_hash_elements(iseq, argument, elements, true, ret, scope_node);
+                        pm_compile_hash_elements(iseq, argument, elements, 0, Qundef, true, ret, scope_node);
                         PUSH_SEND(ret, location, id_core_hash_merge_kwd, INT2FIX(2));
                     }
                     else {
-                        pm_compile_hash_elements(iseq, argument, elements, true, ret, scope_node);
+                        pm_compile_hash_elements(iseq, argument, elements, 0, Qundef, true, ret, scope_node);
                     }
                 }
                 else {
@@ -1735,6 +1756,8 @@ pm_setup_args_core(const pm_arguments_node_t *arguments_node, const pm_node_t *b
                 break;
               }
               case PM_FORWARDING_ARGUMENTS_NODE: { // not counted in argc return value
+                iseq_set_use_block(ISEQ_BODY(iseq)->local_iseq);
+
                 if (ISEQ_BODY(ISEQ_BODY(iseq)->local_iseq)->param.flags.forwardable) {
                     *flags |= VM_CALL_FORWARDING;
 
@@ -2991,7 +3014,7 @@ pm_compile_pattern(rb_iseq_t *iseq, pm_scope_node_t *scope_node, const pm_node_t
         // First, we're going to attempt to match against the left pattern. If
         // that pattern matches, then we'll skip matching the right pattern.
         PUSH_INSN(ret, location, dup);
-        CHECK(pm_compile_pattern(iseq, scope_node, cast->left, ret, matched_left_label, unmatched_left_label, in_single_pattern, true, true, base_index + 1));
+        CHECK(pm_compile_pattern(iseq, scope_node, cast->left, ret, matched_left_label, unmatched_left_label, in_single_pattern, true, use_deconstructed_cache, base_index + 1));
 
         // If we get here, then we matched on the left pattern. In this case we
         // should pop out the duplicate value that we preemptively added to
@@ -3004,7 +3027,7 @@ pm_compile_pattern(rb_iseq_t *iseq, pm_scope_node_t *scope_node, const pm_node_t
         // If we get here, then we didn't match on the left pattern. In this
         // case we attempt to match against the right pattern.
         PUSH_LABEL(ret, unmatched_left_label);
-        CHECK(pm_compile_pattern(iseq, scope_node, cast->right, ret, matched_label, unmatched_label, in_single_pattern, true, true, base_index));
+        CHECK(pm_compile_pattern(iseq, scope_node, cast->right, ret, matched_label, unmatched_label, in_single_pattern, true, use_deconstructed_cache, base_index));
         break;
       }
       case PM_PARENTHESES_NODE:
@@ -3029,6 +3052,7 @@ pm_compile_pattern(rb_iseq_t *iseq, pm_scope_node_t *scope_node, const pm_node_t
       case PM_GLOBAL_VARIABLE_READ_NODE:
       case PM_IMAGINARY_NODE:
       case PM_INSTANCE_VARIABLE_READ_NODE:
+      case PM_IT_LOCAL_VARIABLE_READ_NODE:
       case PM_INTEGER_NODE:
       case PM_INTERPOLATED_REGULAR_EXPRESSION_NODE:
       case PM_INTERPOLATED_STRING_NODE:
@@ -3972,9 +3996,11 @@ pm_compile_defined_expr0(rb_iseq_t *iseq, const pm_node_t *node, const pm_node_l
         return;
       }
       case PM_CALL_NODE: {
+#define BLOCK_P(cast) ((cast)->block != NULL && PM_NODE_TYPE_P((cast)->block, PM_BLOCK_NODE))
+
         const pm_call_node_t *cast = ((const pm_call_node_t *) node);
 
-        if (cast->block != NULL && PM_NODE_TYPE_P(cast->block, PM_BLOCK_NODE)) {
+        if (BLOCK_P(cast)) {
             dtype = DEFINED_EXPR;
             break;
         }
@@ -3994,7 +4020,7 @@ pm_compile_defined_expr0(rb_iseq_t *iseq, const pm_node_t *node, const pm_node_l
         if (cast->receiver) {
             pm_compile_defined_expr0(iseq, cast->receiver, node_location, ret, popped, scope_node, true, lfinish, true);
 
-            if (PM_NODE_TYPE_P(cast->receiver, PM_CALL_NODE)) {
+            if (PM_NODE_TYPE_P(cast->receiver, PM_CALL_NODE) && !BLOCK_P((const pm_call_node_t *) cast->receiver)) {
                 PUSH_INSNL(ret, location, branchunless, lfinish[2]);
 
                 const pm_call_node_t *receiver = (const pm_call_node_t *) cast->receiver;
@@ -4016,6 +4042,8 @@ pm_compile_defined_expr0(rb_iseq_t *iseq, const pm_node_t *node, const pm_node_l
         }
 
         return;
+
+#undef BLOCK_P
       }
       case PM_YIELD_NODE:
         PUSH_INSN(ret, location, putnil);
@@ -5288,19 +5316,7 @@ pm_compile_shareable_constant_value(rb_iseq_t *iseq, const pm_node_t *node, cons
             PUSH_INSN1(ret, location, putspecialobject, INT2FIX(VM_SPECIAL_OBJECT_VMCORE));
         }
 
-        for (size_t index = 0; index < cast->elements.size; index++) {
-            const pm_node_t *element = cast->elements.nodes[index];
-
-            if (!PM_NODE_TYPE_P(element, PM_ASSOC_NODE)) {
-                COMPILE_ERROR(iseq, location.line, "Ractor constant writes do not support **");
-            }
-
-            const pm_assoc_node_t *assoc = (const pm_assoc_node_t *) element;
-            pm_compile_shareable_constant_value(iseq, assoc->key, shareability, path, ret, scope_node, false);
-            pm_compile_shareable_constant_value(iseq, assoc->value, shareability, path, ret, scope_node, false);
-        }
-
-        PUSH_INSN1(ret, location, newhash, INT2FIX(cast->elements.size * 2));
+        pm_compile_hash_elements(iseq, (const pm_node_t *) cast, &cast->elements, shareability, path, false, ret, scope_node);
 
         if (top) {
             ID method_id = (shareability & PM_SHAREABLE_CONSTANT_NODE_FLAGS_EXPERIMENTAL_COPY) ? rb_intern("make_shareable_copy") : rb_intern("make_shareable");
@@ -6751,7 +6767,7 @@ pm_compile_array_node(rb_iseq_t *iseq, const pm_node_t *node, const pm_node_list
             //                ^^^^^
             //
             const pm_keyword_hash_node_t *keyword_hash = (const pm_keyword_hash_node_t *) element;
-            pm_compile_hash_elements(iseq, element, &keyword_hash->elements, false, ret, scope_node);
+            pm_compile_hash_elements(iseq, element, &keyword_hash->elements, 0, Qundef, false, ret, scope_node);
 
             // This boolean controls the manner in which we push the
             // hash onto the array. If it's all keyword splats, then we
@@ -6913,6 +6929,7 @@ pm_compile_call_node(rb_iseq_t *iseq, const pm_call_node_t *node, LINK_ANCHOR *c
             VALUE value = parse_static_literal_string(iseq, scope_node, node->receiver, &((const pm_string_node_t * ) node->receiver)->unescaped);
             const struct rb_callinfo *callinfo = new_callinfo(iseq, idUMinus, 0, 0, NULL, FALSE);
             PUSH_INSN2(ret, location, opt_str_uminus, value, callinfo);
+            if (popped) PUSH_INSN(ret, location, pop);
             return;
         }
         break;
@@ -6922,6 +6939,7 @@ pm_compile_call_node(rb_iseq_t *iseq, const pm_call_node_t *node, LINK_ANCHOR *c
             VALUE value = parse_static_literal_string(iseq, scope_node, node->receiver, &((const pm_string_node_t * ) node->receiver)->unescaped);
             const struct rb_callinfo *callinfo = new_callinfo(iseq, idFreeze, 0, 0, NULL, FALSE);
             PUSH_INSN2(ret, location, opt_str_freeze, value, callinfo);
+            if (popped) PUSH_INSN(ret, location, pop);
             return;
         }
         break;
@@ -8937,7 +8955,7 @@ pm_compile_node(rb_iseq_t *iseq, const pm_node_t *node, LINK_ANCHOR *const ret, 
                 }
             }
             else {
-                pm_compile_hash_elements(iseq, node, elements, false, ret, scope_node);
+                pm_compile_hash_elements(iseq, node, elements, 0, Qundef, false, ret, scope_node);
             }
         }
 
@@ -10137,7 +10155,8 @@ typedef struct {
     size_t divider_length;
 } pm_parse_error_format_t;
 
-#define PM_COLOR_GRAY "\033[38;5;102m"
+#define PM_COLOR_BOLD "\033[1m"
+#define PM_COLOR_GRAY "\033[2m"
 #define PM_COLOR_RED "\033[1;31m"
 #define PM_COLOR_RESET "\033[m"
 #define PM_ERROR_TRUNCATE 30
@@ -10194,6 +10213,9 @@ pm_parse_errors_format_sort(const pm_parser_t *parser, const pm_list_t *error_li
     return errors;
 }
 
+/* Append a literal string to the buffer. */
+#define pm_buffer_append_literal(buffer, str) pm_buffer_append_string(buffer, str, rb_strlen_lit(str))
+
 static inline void
 pm_parse_errors_format_line(const pm_parser_t *parser, const pm_newline_list_t *newline_list, const char *number_prefix, int32_t line, uint32_t column_start, uint32_t column_end, pm_buffer_t *buffer) {
     int32_t line_delta = line - parser->start_line;
@@ -10239,7 +10261,7 @@ pm_parse_errors_format_line(const pm_parser_t *parser, const pm_newline_list_t *
  * Format the errors on the parser into the given buffer.
  */
 static void
-pm_parse_errors_format(const pm_parser_t *parser, const pm_list_t *error_list, pm_buffer_t *buffer, bool colorize, bool inline_messages) {
+pm_parse_errors_format(const pm_parser_t *parser, const pm_list_t *error_list, pm_buffer_t *buffer, int highlight, bool inline_messages) {
     assert(error_list->size != 0);
 
     // First, we're going to sort all of the errors by line number using an
@@ -10265,7 +10287,7 @@ pm_parse_errors_format(const pm_parser_t *parser, const pm_list_t *error_list, p
     int32_t max_line_number = first_line_number > last_line_number ? first_line_number : last_line_number;
 
     if (max_line_number < 10) {
-        if (colorize) {
+        if (highlight > 0) {
             error_format = (pm_parse_error_format_t) {
                 .number_prefix = PM_COLOR_GRAY "%1" PRIi32 " | " PM_COLOR_RESET,
                 .blank_prefix = PM_COLOR_GRAY "  | " PM_COLOR_RESET,
@@ -10279,7 +10301,7 @@ pm_parse_errors_format(const pm_parser_t *parser, const pm_list_t *error_list, p
             };
         }
     } else if (max_line_number < 100) {
-        if (colorize) {
+        if (highlight > 0) {
             error_format = (pm_parse_error_format_t) {
                 .number_prefix = PM_COLOR_GRAY "%2" PRIi32 " | " PM_COLOR_RESET,
                 .blank_prefix = PM_COLOR_GRAY "   | " PM_COLOR_RESET,
@@ -10293,7 +10315,7 @@ pm_parse_errors_format(const pm_parser_t *parser, const pm_list_t *error_list, p
             };
         }
     } else if (max_line_number < 1000) {
-        if (colorize) {
+        if (highlight > 0) {
             error_format = (pm_parse_error_format_t) {
                 .number_prefix = PM_COLOR_GRAY "%3" PRIi32 " | " PM_COLOR_RESET,
                 .blank_prefix = PM_COLOR_GRAY "    | " PM_COLOR_RESET,
@@ -10307,7 +10329,7 @@ pm_parse_errors_format(const pm_parser_t *parser, const pm_list_t *error_list, p
             };
         }
     } else if (max_line_number < 10000) {
-        if (colorize) {
+        if (highlight > 0) {
             error_format = (pm_parse_error_format_t) {
                 .number_prefix = PM_COLOR_GRAY "%4" PRIi32 " | " PM_COLOR_RESET,
                 .blank_prefix = PM_COLOR_GRAY "     | " PM_COLOR_RESET,
@@ -10321,7 +10343,7 @@ pm_parse_errors_format(const pm_parser_t *parser, const pm_list_t *error_list, p
             };
         }
     } else {
-        if (colorize) {
+        if (highlight > 0) {
             error_format = (pm_parse_error_format_t) {
                 .number_prefix = PM_COLOR_GRAY "%5" PRIi32 " | " PM_COLOR_RESET,
                 .blank_prefix = PM_COLOR_GRAY "      | " PM_COLOR_RESET,
@@ -10370,10 +10392,12 @@ pm_parse_errors_format(const pm_parser_t *parser, const pm_list_t *error_list, p
         // If this is the first error or we're on a new line, then we'll display
         // the line that has the error in it.
         if ((index == 0) || (error->line != last_line)) {
-            if (colorize) {
-                pm_buffer_append_string(buffer, PM_COLOR_RED "> " PM_COLOR_RESET, 12);
+            if (highlight > 1) {
+                pm_buffer_append_literal(buffer, PM_COLOR_RED "> " PM_COLOR_RESET);
+            } else if (highlight > 0) {
+                pm_buffer_append_literal(buffer, PM_COLOR_BOLD "> " PM_COLOR_RESET);
             } else {
-                pm_buffer_append_string(buffer, "> ", 2);
+                pm_buffer_append_literal(buffer, "> ");
             }
 
             last_column_start = error->column_start;
@@ -10416,7 +10440,8 @@ pm_parse_errors_format(const pm_parser_t *parser, const pm_list_t *error_list, p
             column += (char_width == 0 ? 1 : char_width);
         }
 
-        if (colorize) pm_buffer_append_string(buffer, PM_COLOR_RED, 7);
+        if (highlight > 1) pm_buffer_append_literal(buffer, PM_COLOR_RED);
+        else if (highlight > 0) pm_buffer_append_literal(buffer, PM_COLOR_BOLD);
         pm_buffer_append_byte(buffer, '^');
 
         size_t char_width = encoding->char_width(start + column, parser->end - (start + column));
@@ -10429,7 +10454,7 @@ pm_parse_errors_format(const pm_parser_t *parser, const pm_list_t *error_list, p
             column += (char_width == 0 ? 1 : char_width);
         }
 
-        if (colorize) pm_buffer_append_string(buffer, PM_COLOR_RESET, 3);
+        if (highlight > 0) pm_buffer_append_literal(buffer, PM_COLOR_RESET);
 
         if (inline_messages) {
             pm_buffer_append_byte(buffer, ' ');
@@ -10444,7 +10469,20 @@ pm_parse_errors_format(const pm_parser_t *parser, const pm_list_t *error_list, p
         // Here we determine how many lines of padding to display after the
         // error, depending on where the next error is in source.
         last_line = error->line;
-        int32_t next_line = (index == error_list->size - 1) ? (((int32_t) newline_list->size) + parser->start_line) : errors[index + 1].line;
+        int32_t next_line;
+
+        if (index == error_list->size - 1) {
+            next_line = (((int32_t) newline_list->size) + parser->start_line);
+
+            // If the file ends with a newline, subtract one from our "next_line"
+            // so that we don't output an extra line at the end of the file
+            if ((parser->start + newline_list->offsets[newline_list->size - 1]) == parser->end) {
+                next_line--;
+            }
+        }
+        else {
+            next_line = errors[index + 1].line;
+        }
 
         if (next_line - last_line > 1) {
             pm_buffer_append_string(buffer, "  ", 2);
@@ -10504,6 +10542,12 @@ pm_parse_process_error(const pm_parse_result_t *result)
     pm_buffer_t buffer = { 0 };
     const pm_string_t *filepath = &parser->filepath;
 
+    int highlight = rb_stderr_tty_p();
+    if (highlight) {
+        const char *no_color = getenv("NO_COLOR");
+        highlight = (no_color == NULL || no_color[0] == '\0') ? 2 : 1;
+    }
+
     for (const pm_diagnostic_t *error = head; error != NULL; error = (const pm_diagnostic_t *) error->node.next) {
         switch (error->level) {
           case PM_ERROR_LEVEL_SYNTAX:
@@ -10537,7 +10581,7 @@ pm_parse_process_error(const pm_parse_result_t *result)
                 pm_list_node_t *list_node = (pm_list_node_t *) error;
                 pm_list_t error_list = { .size = 1, .head = list_node, .tail = list_node };
 
-                pm_parse_errors_format(parser, &error_list, &buffer, rb_stderr_tty_p(), false);
+                pm_parse_errors_format(parser, &error_list, &buffer, highlight, false);
             }
 
             VALUE value = rb_exc_new(rb_eArgError, pm_buffer_value(&buffer), pm_buffer_length(&buffer));
@@ -10567,7 +10611,7 @@ pm_parse_process_error(const pm_parse_result_t *result)
     );
 
     if (valid_utf8) {
-        pm_parse_errors_format(parser, &parser->error_list, &buffer, rb_stderr_tty_p(), true);
+        pm_parse_errors_format(parser, &parser->error_list, &buffer, highlight, true);
     }
     else {
         for (const pm_diagnostic_t *error = head; error != NULL; error = (const pm_diagnostic_t *) error->node.next) {
@@ -10840,7 +10884,7 @@ pm_read_file(pm_string_t *string, const char *filepath)
         }
 
         size_t length = (size_t) len;
-        uint8_t *source = xmalloc(length);
+        uint8_t *source = malloc(length);
         memcpy(source, RSTRING_PTR(contents), length);
         *string = (pm_string_t) { .type = PM_STRING_OWNED, .source = source, .length = length };
 

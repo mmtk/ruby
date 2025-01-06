@@ -120,6 +120,8 @@ static VALUE sym_immediate;
 static VALUE sym_on_blocking;
 static VALUE sym_never;
 
+static uint32_t thread_default_quantum_ms = 100;
+
 #define THREAD_LOCAL_STORAGE_INITIALISED FL_USER13
 #define THREAD_LOCAL_STORAGE_INITIALISED_P(th) RB_FL_TEST_RAW((th), THREAD_LOCAL_STORAGE_INITIALISED)
 
@@ -2576,7 +2578,7 @@ rb_threadptr_execute_interrupts(rb_thread_t *th, int blocking_timing)
         }
 
         if (timer_interrupt) {
-            uint32_t limits_us = TIME_QUANTUM_USEC;
+            uint32_t limits_us = thread_default_quantum_ms * 1000;
 
             if (th->priority > 0)
                 limits_us <<= th->priority;
@@ -5543,6 +5545,18 @@ Init_Thread(void)
     rb_define_method(cThGroup, "enclose", thgroup_enclose, 0);
     rb_define_method(cThGroup, "enclosed?", thgroup_enclosed_p, 0);
     rb_define_method(cThGroup, "add", thgroup_add, 1);
+
+    const char * ptr = getenv("RUBY_THREAD_TIMESLICE");
+
+    if (ptr) {
+        long quantum = strtol(ptr, NULL, 0);
+        if (quantum > 0 && !(SIZEOF_LONG > 4 && quantum > UINT32_MAX)) {
+            thread_default_quantum_ms = (uint32_t)quantum;
+        }
+        else if (0) {
+            fprintf(stderr, "Ignored RUBY_THREAD_TIMESLICE=%s\n", ptr);
+        }
+    }
 
     {
         th->thgroup = th->ractor->thgroup_default = rb_obj_alloc(cThGroup);

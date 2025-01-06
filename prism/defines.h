@@ -23,6 +23,9 @@
  * some platforms they aren't included unless this is already defined.
  */
 #define __STDC_FORMAT_MACROS
+// Include sys/types.h before inttypes.h to work around issue with
+// certain versions of GCC and newlib which causes omission of PRIx64
+#include <sys/types.h>
 #include <inttypes.h>
 
 /**
@@ -138,10 +141,14 @@
 
 /**
  * isinf on POSIX systems it accepts a float, a double, or a long double.
- * But Windows didn't provide isinf, so we need to use _finite instead.
+ * But mingw didn't provide an isinf macro, only an isinf function that only
+ * accepts floats, so we need to use _finite instead.
  */
-#ifdef _WIN32
-#   include <float.h>
+#ifdef __MINGW64__
+    #include <float.h>
+    #define PRISM_ISINF(x) (!_finite(x))
+#else
+    #define PRISM_ISINF(x) isinf(x)
 #endif
 
 /**

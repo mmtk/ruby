@@ -311,7 +311,7 @@ class TestRubyOptions < Test::Unit::TestCase
   def test_enabled_gc
     omit unless /linux|darwin/ =~ RUBY_PLATFORM
 
-    if RbConfig::CONFIG['shared_gc_dir'].length > 0
+    if RbConfig::CONFIG['modular_gc_dir'].length > 0
       assert_match(/\+GC/, RUBY_DESCRIPTION)
     else
       assert_no_match(/\+GC/, RUBY_DESCRIPTION)
@@ -1326,5 +1326,9 @@ class TestRubyOptions < Test::Unit::TestCase
     env = {"RUBY_FREE_AT_EXIT"=>"1"}
     assert_ruby_status([env, "-e;"])
     assert_in_out_err([env, "-W"], "", [], /Free at exit is experimental and may be unstable/)
+  end
+
+  def test_toplevel_ruby
+    assert_instance_of Module, ::Ruby
   end
 end

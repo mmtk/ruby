@@ -694,7 +694,7 @@ undocumented: PHONY main srcs-doc
 	$(Q) $(RDOC) --quiet -C $(RDOCFLAGS) "$(srcdir)" | \
 	sed -n \
 	-e '/^ *# in file /{' -e 's///;N;s/\n/: /p' -e '}' \
-	-e 's/^ *\(.*[^ ]\) *# in file \(.*\)/\2: \1/p'
+	-e 's/^ *\(.*[^ ]\) *# in file \(.*\)/\2: \1/p' | sort
 
 RDOCBENCHOUT=/tmp/rdocbench
 
@@ -723,7 +723,7 @@ install-prereq: $(CLEAR_INSTALLED_LIST) yes-fake sudo-precheck PHONY
 clear-installed-list: PHONY
 	@> $(INSTALLED_LIST) set MAKE="$(MAKE)"
 
-clean: clean-ext clean-enc clean-golf clean-docs clean-extout clean-gc clean-local clean-platform clean-spec
+clean: clean-ext clean-enc clean-golf clean-docs clean-extout clean-modular-gc clean-local clean-platform clean-spec
 clean-local:: clean-runnable
 	$(Q)$(RM) $(ALLOBJS) $(LIBRUBY_A) $(LIBRUBY_SO) $(LIBRUBY) $(LIBRUBY_ALIASES)
 	$(Q)$(RM) $(PROGRAM) $(WPROGRAM) miniruby$(EXEEXT) dmyext.$(OBJEXT) dmyenc.$(OBJEXT) $(ARCHFILE) .*.time
@@ -753,13 +753,11 @@ clean-capi: PHONY
 clean-platform: PHONY
 clean-extout: PHONY
 	-$(Q)$(RMDIR) $(EXTOUT)/$(arch) $(RUBYCOMMONDIR) $(EXTOUT) 2> $(NULL) || $(NULLCMD)
-clean-gc: PHONY
-	$(Q) $(RMALL) .gc
 clean-docs: clean-rdoc clean-html clean-capi
 clean-spec: PHONY
 clean-rubyspec: clean-spec
 
-distclean: distclean-ext distclean-enc distclean-golf distclean-docs distclean-extout distclean-gc distclean-local distclean-platform distclean-spec
+distclean: distclean-ext distclean-enc distclean-golf distclean-docs distclean-extout distclean-modular-gc distclean-local distclean-platform distclean-spec
 distclean-local:: clean-local
 	$(Q)$(RM) $(MKFILES) *.inc $(PRELUDES) *.rbinc *.rbbin
 	$(Q)$(RM) config.cache config.status config.status.lineno
@@ -772,7 +770,6 @@ distclean-html: clean-html
 distclean-capi: clean-capi
 distclean-docs: clean-docs
 distclean-extout: clean-extout
-distclean-gc: clean-gc
 distclean-platform: clean-platform
 distclean-spec: clean-spec
 distclean-rubyspec: distclean-spec
@@ -1024,9 +1021,17 @@ no-test-spec:
 check: $(DOT_WAIT) test-spec
 
 RUNNABLE = $(LIBRUBY_RELATIVE:no=un)-runnable
-runnable: $(RUNNABLE) prog $(tooldir)/mkrunnable.rb PHONY
+runnable: $(RUNNABLE)
+runnable-golf: golf
+runnable $(enable_shared:yes=runnable-golf): prog $(tooldir)/mkrunnable.rb PHONY
 	$(Q) $(MINIRUBY) $(tooldir)/mkrunnable.rb -v $(EXTOUT)
 yes-runnable: PHONY
+
+hello: $(TEST_RUNNABLE)-hello
+yes-hello: runnable-golf
+	./$(enable_shared:yes=bin/)$(GORUBY) -veh
+no-hello: runnable-golf
+	$(ECHO) Run ./$(enable_shared:yes=bin/)$(GORUBY) -veh
 
 encs: enc trans
 libencs: libenc libtrans
@@ -1677,7 +1682,7 @@ yes-test-bundler-prepare: yes-test-bundler-precheck
 		-e 'load "spec/bundler/support/bundle.rb"' -- install --quiet --gemfile=tool/bundler/dev_gems.rb
 	$(ACTIONS_ENDGROUP)
 
-RSPECOPTS = --require spec_helper --require formatter_overrides
+RSPECOPTS = -r formatter_overrides
 BUNDLER_SPECS =
 PREPARE_BUNDLER = $(TEST_RUNNABLE)-test-bundler-prepare
 test-bundler: $(TEST_RUNNABLE)-test-bundler
@@ -1685,8 +1690,8 @@ yes-test-bundler: $(PREPARE_BUNDLER)
 	$(gnumake_recursive)$(XRUBY) \
 		-r./$(arch)-fake \
 		-e "exec(*ARGV)" -- \
-		$(XRUBY) -C $(srcdir) -Ispec/bundler:spec/lib .bundle/bin/rspec \
-		$(RSPECOPTS) spec/bundler/$(BUNDLER_SPECS)
+		$(XRUBY) -C $(srcdir) -Ispec/bundler -Ispec/lib .bundle/bin/rspec \
+		-r spec_helper $(RSPECOPTS) spec/bundler/$(BUNDLER_SPECS)
 no-test-bundler:
 
 PARALLELRSPECOPTS = --runtime-log $(srcdir)/tmp/parallel_runtime_rspec.log
@@ -1699,8 +1704,8 @@ yes-test-bundler-parallel: $(PREPARE_BUNDLER)
 		-e "ARGV[-1] = File.expand_path(ARGV[-1])" \
 		-e "ENV['PARALLEL_TESTS_EXECUTABLE'] = ruby + ARGV.shift" \
 		-e "load ARGV.shift" \
-		" -C $(srcdir) -Ispec/bundler:spec/lib .bundle/bin/rspec $(RSPECOPTS)" \
-		$(srcdir)/.bundle/bin/parallel_rspec \
+		" -C $(srcdir) -Ispec/bundler -Ispec/lib .bundle/bin/rspec -r spec_helper" \
+		$(srcdir)/spec/bin/parallel_rspec $(RSPECOPTS) \
 		$(PARALLELRSPECOPTS) $(srcdir)/spec/bundler/$(BUNDLER_SPECS)
 no-test-bundler-parallel:
 
@@ -1946,23 +1951,34 @@ rewindable:
 
 HELP_EXTRA_TASKS = ""
 
-shared-gc-precheck:
-shared-gc: probes.h shared-gc-precheck
-	$(Q) $(MAKEDIRS) $(shared_gc_dir)
+gc/Makefile:
+	$(MAKEDIRS) $(@D)
+	$(MESSAGE_BEGIN) \
+	"all:" \
+	"	@echo You must specify MODULAR_GC with the GC to build" \
+	"	@exit 1" \
+	$(MESSAGE_END) > $@
+gc/distclean gc/realclean::
+	-$(Q) $(RM) gc/Makefile
+
+modular-gc-precheck:
+modular-gc: probes.h gc/Makefile
 	$(Q) $(RUNRUBY) $(srcdir)/ext/extmk.rb \
 		$(SCRIPT_ARGS) \
 		--make='$(MAKE)' --make-flags="V=$(V) MINIRUBY='$(MINIRUBY)'" \
 		--gnumake=$(gnumake) --extflags="$(EXTLDFLAGS)" \
-		--ext-build-dir=gc --command-output=gc/$(SHARED_GC)/exts.mk -- \
-		configure gc/$(SHARED_GC)
-	$(CHDIR) gc/$(SHARED_GC) && $(exec) $(MAKE) TARGET_SO_DIR=./
-	$(CP) gc/$(SHARED_GC)/librubygc.$(SHARED_GC).$(DLEXT) $(shared_gc_dir)
+		--ext-build-dir=gc --command-output=gc/$(MODULAR_GC)/exts.mk -- \
+		configure gc/$(MODULAR_GC)
+	$(CHDIR) gc/$(MODULAR_GC) && $(exec) $(MAKE) TARGET_SO_DIR=./
+install-modular-gc: modular-gc modular-gc-precheck
+	$(Q) $(MAKEDIRS) $(modular_gc_dir)
+	$(CP) gc/$(MODULAR_GC)/librubygc.$(MODULAR_GC).$(DLEXT) $(modular_gc_dir)
 
-clean-shared-gc:
-	- $(CHDIR) gc/$(SHARED_GC) && $(exec) $(MAKE) TARGET_SO_DIR=./ clean || $(NULLCMD)
-distclean-shared-gc: clean-shared-gc
-	- $(CHDIR) gc/$(SHARED_GC) && $(exec) $(MAKE) TARGET_SO_DIR=./ distclean || $(NULLCMD)
-	$(RMDIRS) gc/$(SHARED_GC)
+clean-modular-gc: gc/clean
+distclean-modular-gc: gc/distclean
+realclean-modular-gc: gc/realclean
+distclean-modular-gc realclean-modular-gc:
+	-$(Q) $(RMDIR) gc
 
 help: PHONY
 	$(MESSAGE_BEGIN) \
@@ -20295,6 +20311,7 @@ vm.$(OBJEXT): {$(VPATH)}rubyparser.h
 vm.$(OBJEXT): {$(VPATH)}shape.h
 vm.$(OBJEXT): {$(VPATH)}st.h
 vm.$(OBJEXT): {$(VPATH)}subst.h
+vm.$(OBJEXT): {$(VPATH)}symbol.h
 vm.$(OBJEXT): {$(VPATH)}thread_$(THREAD_MODEL).h
 vm.$(OBJEXT): {$(VPATH)}thread_native.h
 vm.$(OBJEXT): {$(VPATH)}variable.h

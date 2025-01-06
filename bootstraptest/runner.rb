@@ -354,6 +354,7 @@ def concurrent_exec_test
   begin
     while BT.wn != term_wn
       if r = rq.pop
+        BT_STATE.count += 1
         case
         when BT.quiet
         when BT.tty
@@ -411,7 +412,7 @@ module Launchable
           }
         )
         @@duration = 0
-        @@failure_log.clear
+        @@failure_log = ''
       end
       @@last_test_name = relative_path
       @@duration += t

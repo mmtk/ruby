@@ -317,13 +317,6 @@ static void threadptr_trap_interrupt(rb_thread_t *);
 #define native_thread_yield() ((void)0)
 #endif
 
-/* 100ms.  10ms is too small for user level thread scheduling
- * on recent Linux (tested on 2.6.35)
- */
-#define TIME_QUANTUM_MSEC (100)
-#define TIME_QUANTUM_USEC (TIME_QUANTUM_MSEC * 1000)
-#define TIME_QUANTUM_NSEC (TIME_QUANTUM_USEC * 1000)
-
 static void native_thread_dedicated_inc(rb_vm_t *vm, rb_ractor_t *cr, struct rb_native_thread *nt);
 static void native_thread_dedicated_dec(rb_vm_t *vm, rb_ractor_t *cr, struct rb_native_thread *nt);
 static void native_thread_assign(struct rb_native_thread *nt, rb_thread_t *th);
@@ -2158,10 +2151,13 @@ native_thread_create_dedicated(rb_thread_t *th)
     rb_ec_initialize_vm_stack(th->ec, vm_stack, vm_stack_word_size);
     th->sched.context_stack = vm_stack;
 
-    // setup
-    thread_sched_to_ready(TH_SCHED(th), th);
 
-    return native_thread_create0(th->nt);
+    int err = native_thread_create0(th->nt);
+    if (!err) {
+        // setup
+        thread_sched_to_ready(TH_SCHED(th), th);
+    }
+    return err;
 }
 
 static void

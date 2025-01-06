@@ -21,6 +21,7 @@
 #include "internal/mmtk_support.h"
 #endif
 
+#include "internal/bits.h"
 #include "internal/hash.h"
 
 #include "ruby/ruby.h"
@@ -38,7 +39,7 @@
 #include "gc/gc.h"
 #include "gc/gc_impl.h"
 
-#ifndef BUILDING_SHARED_GC
+#ifndef BUILDING_MODULAR_GC
 # include "probes.h"
 #endif
 
@@ -1027,7 +1028,6 @@ struct MMTk_FinalJob {
 };
 #endif
 
-int ruby_disable_gc = 0;
 int ruby_enable_autocompact = 0;
 #if RGENGC_CHECK_MODE
 gc_compact_compare_func ruby_autocompact_compare_func;
@@ -1682,7 +1682,7 @@ static void heap_page_free(rb_objspace_t *objspace, struct heap_page *page);
 static inline void
 heap_page_add_freeobj(rb_objspace_t *objspace, struct heap_page *page, VALUE obj)
 {
-    asan_unpoison_object(obj, false);
+    rb_asan_unpoison_object(obj, false);
 
     asan_unlock_freelist(page);
 
@@ -1702,7 +1702,7 @@ heap_page_add_freeobj(rb_objspace_t *objspace, struct heap_page *page, VALUE obj
         rb_bug("heap_page_add_freeobj: %p is not rvalue.", (void *)obj);
     }
 
-    asan_poison_object(obj);
+    rb_asan_poison_object(obj);
     gc_report(3, objspace, "heap_page_add_freeobj: add %p to freelist\n", (void *)obj);
 }
 
@@ -2022,7 +2022,7 @@ heap_page_allocate(rb_objspace_t *objspace)
         }
     }
 
-    rb_darray_insert(&objspace->heap_pages.sorted, hi, page);
+    rb_darray_insert_without_gc(&objspace->heap_pages.sorted, hi, page);
 
     if (heap_pages_lomem == 0 || heap_pages_lomem > start) heap_pages_lomem = start;
     if (heap_pages_himem < end) heap_pages_himem = end;
@@ -2396,13 +2396,12 @@ ractor_cache_allocate_slot(rb_objspace_t *objspace, rb_ractor_newobj_cache_t *ca
 
     if (RB_LIKELY(p)) {
         VALUE obj = (VALUE)p;
-        MAYBE_UNUSED(const size_t) stride = heap_slot_size(heap_idx);
+        rb_asan_unpoison_object(obj, true);
         heap_cache->freelist = p->next;
-        asan_unpoison_memory_region(p, stride, true);
 #if RGENGC_CHECK_MODE
-        GC_ASSERT(rb_gc_impl_obj_slot_size(obj) == stride);
+        GC_ASSERT(rb_gc_impl_obj_slot_size(obj) == heap_slot_size(heap_idx));
         // zero clear
-        MEMZERO((char *)obj, char, stride);
+        MEMZERO((char *)obj, char, heap_slot_size(heap_idx));
 #endif
         return obj;
     }
@@ -2447,9 +2446,9 @@ ractor_cache_set_page(rb_objspace_t *objspace, rb_ractor_newobj_cache_t *cache, 
     page->free_slots = 0;
     page->freelist = NULL;
 
-    asan_unpoison_object((VALUE)heap_cache->freelist, false);
+    rb_asan_unpoison_object((VALUE)heap_cache->freelist, false);
     GC_ASSERT(RB_TYPE_P((VALUE)heap_cache->freelist, T_NONE));
-    asan_poison_object((VALUE)heap_cache->freelist);
+    rb_asan_poison_object((VALUE)heap_cache->freelist);
 }
 
 static inline size_t
@@ -2575,6 +2574,9 @@ newobj_slowpath(VALUE klass, VALUE flags, rb_objspace_t *objspace, rb_ractor_new
             if (during_gc) {
                 dont_gc_on();
                 during_gc = 0;
+                if (rb_memerror_reentered()) {
+                    rb_memerror();
+                }
                 rb_bug("object allocation during garbage collection phase");
             }
 
@@ -3272,7 +3274,7 @@ finalize_list(rb_objspace_t *objspace, VALUE zombie)
     while (zombie) {
         VALUE next_zombie;
         struct heap_page *page;
-        asan_unpoison_object(zombie, false);
+        rb_asan_unpoison_object(zombie, false);
         next_zombie = RZOMBIE(zombie)->next;
         page = GET_HEAP_PAGE(zombie);
 
@@ -3736,8 +3738,10 @@ try_move(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *free_page, 
     asan_unlock_freelist(free_page);
     VALUE dest = (VALUE)free_page->freelist;
     asan_lock_freelist(free_page);
-    asan_unpoison_object(dest, false);
-    if (!dest) {
+    if (dest) {
+        rb_asan_unpoison_object(dest, false);
+    }
+    else {
         /* if we can't get something from the freelist then the page must be
          * full */
         return false;
@@ -3790,22 +3794,16 @@ static void invalidate_moved_page(rb_objspace_t *objspace, struct heap_page *pag
 
 #if GC_CAN_COMPILE_COMPACTION
 static void
-read_barrier_handler(uintptr_t original_address)
+read_barrier_handler(uintptr_t address)
 {
-    VALUE obj;
     rb_objspace_t *objspace = (rb_objspace_t *)rb_gc_get_objspace();
 
-    /* Calculate address aligned to slots. */
-    uintptr_t address = original_address - (original_address % BASE_SLOT_SIZE);
-
-    obj = (VALUE)address;
-
-    struct heap_page_body *page_body = GET_PAGE_BODY(obj);
+    struct heap_page_body *page_body = GET_PAGE_BODY(address);
 
     /* If the page_body is NULL, then mprotect cannot handle it and will crash
      * with "Cannot allocate memory". */
     if (page_body == NULL) {
-        rb_bug("read_barrier_handler: segmentation fault at %p", (void *)original_address);
+        rb_bug("read_barrier_handler: segmentation fault at %p", (void *)address);
     }
 
     int lev = rb_gc_vm_lock();
@@ -3814,7 +3812,7 @@ read_barrier_handler(uintptr_t original_address)
 
         objspace->profile.read_barrier_faults++;
 
-        invalidate_moved_page(objspace, GET_HEAP_PAGE(obj));
+        invalidate_moved_page(objspace, GET_HEAP_PAGE(address));
     }
     rb_gc_vm_unlock(lev);
 }
@@ -4008,7 +4006,7 @@ gc_sweep_plane(rb_objspace_t *objspace, rb_heap_t *heap, uintptr_t p, bits_t bit
         VALUE vp = (VALUE)p;
         GC_ASSERT(vp % BASE_SLOT_SIZE == 0);
 
-        asan_unpoison_object(vp, false);
+        rb_asan_unpoison_object(vp, false);
         if (bitset & 1) {
             switch (BUILTIN_TYPE(vp)) {
               default: /* majority case */
@@ -4157,7 +4155,10 @@ gc_sweep_page(rb_objspace_t *objspace, rb_heap_t *heap, struct gc_sweep_context 
     struct free_slot *ptr = sweep_page->freelist;
     while (ptr) {
         freelist_len++;
-        ptr = ptr->next;
+        rb_asan_unpoison_object((VALUE)ptr, false);
+        struct free_slot *next = ptr->next;
+        rb_asan_poison_object((VALUE)ptr);
+        ptr = next;
     }
     asan_lock_freelist(sweep_page);
     if (freelist_len != sweep_page->free_slots) {
@@ -4203,15 +4204,15 @@ heap_page_freelist_append(struct heap_page *page, struct free_slot *freelist)
         asan_unlock_freelist(page);
         if (page->freelist) {
             struct free_slot *p = page->freelist;
-            asan_unpoison_object((VALUE)p, false);
+            rb_asan_unpoison_object((VALUE)p, false);
             while (p->next) {
                 struct free_slot *prev = p;
                 p = p->next;
-                asan_poison_object((VALUE)prev);
-                asan_unpoison_object((VALUE)p, false);
+                rb_asan_poison_object((VALUE)prev);
+                rb_asan_unpoison_object((VALUE)p, false);
             }
             p->next = freelist;
-            asan_poison_object((VALUE)p);
+            rb_asan_poison_object((VALUE)p);
         }
         else {
             page->freelist = freelist;
@@ -4507,19 +4508,14 @@ rb_gc_impl_location(void *objspace_ptr, VALUE value)
 
     VALUE destination;
 
-    if (!SPECIAL_CONST_P(value)) {
-        asan_unpoisoning_object(value) {
-            if (BUILTIN_TYPE(value) == T_MOVED) {
-                destination = (VALUE)RMOVED(value)->destination;
-                GC_ASSERT(BUILTIN_TYPE(destination) != T_NONE);
-            }
-            else {
-                destination = value;
-            }
+    asan_unpoisoning_object(value) {
+        if (BUILTIN_TYPE(value) == T_MOVED) {
+            destination = (VALUE)RMOVED(value)->destination;
+            GC_ASSERT(BUILTIN_TYPE(destination) != T_NONE);
         }
-    }
-    else {
-        destination = value;
+        else {
+            destination = value;
+        }
     }
 
     return destination;
@@ -5081,11 +5077,7 @@ rb_gc_impl_mark_weak(void *objspace_ptr, VALUE *ptr)
 
     rgengc_check_relation(objspace, obj);
 
-    DURING_GC_COULD_MALLOC_REGION_START();
-    {
-        rb_darray_append(&objspace->weak_references, ptr);
-    }
-    DURING_GC_COULD_MALLOC_REGION_END();
+    rb_darray_append_without_gc(&objspace->weak_references, ptr);
 
     objspace->profile.weak_references_count++;
 }
@@ -5714,12 +5706,12 @@ gc_verify_heap_pages_(rb_objspace_t *objspace, struct ccan_list_head *head)
         while (p) {
             VALUE vp = (VALUE)p;
             VALUE prev = vp;
-            asan_unpoison_object(vp, false);
+            rb_asan_unpoison_object(vp, false);
             if (BUILTIN_TYPE(vp) != T_NONE) {
                 fprintf(stderr, "freelist slot expected to be T_NONE but was: %s\n", rb_obj_info(vp));
             }
             p = p->next;
-            asan_poison_object(prev);
+            rb_asan_poison_object(prev);
         }
         asan_lock_freelist(page);
 
@@ -5965,11 +5957,7 @@ gc_update_weak_references(rb_objspace_t *objspace)
     objspace->profile.retained_weak_references_count = retained_weak_references_count;
 
     rb_darray_clear(objspace->weak_references);
-    DURING_GC_COULD_MALLOC_REGION_START();
-    {
-        rb_darray_resize_capa(&objspace->weak_references, retained_weak_references_count);
-    }
-    DURING_GC_COULD_MALLOC_REGION_END();
+    rb_darray_resize_capa_without_gc(&objspace->weak_references, retained_weak_references_count);
 }
 
 static void
@@ -6904,7 +6892,7 @@ heap_ready_to_gc(rb_objspace_t *objspace, rb_heap_t *heap)
 static int
 ready_to_gc(rb_objspace_t *objspace)
 {
-    if (dont_gc_val() || during_gc || ruby_disable_gc) {
+    if (dont_gc_val() || during_gc) {
         for (int i = 0; i < HEAP_COUNT; i++) {
             rb_heap_t *heap = &heaps[i];
             heap_ready_to_gc(objspace, heap);
@@ -8670,10 +8658,11 @@ static inline size_t
 objspace_malloc_size(rb_objspace_t *objspace, void *ptr, size_t hint)
 {
 #ifdef HAVE_MALLOC_USABLE_SIZE
-    return malloc_usable_size(ptr);
-#else
-    return hint;
+    if (!hint) {
+        hint = malloc_usable_size(ptr);
+    }
 #endif
+    return hint;
 }
 
 enum memop_type {
@@ -8788,9 +8777,9 @@ objspace_malloc_increase_body(rb_objspace_t *objspace, void *mem, size_t new_siz
     }
     else {
         size_t dec_size = old_size - new_size;
-        size_t allocated_size = objspace->malloc_params.allocated_size;
 
 #if MALLOC_ALLOCATED_SIZE_CHECK
+        size_t allocated_size = objspace->malloc_params.allocated_size;
         if (allocated_size < dec_size) {
             rb_bug("objspace_malloc_increase: underflow malloc_params.allocated_size.");
         }
@@ -9220,7 +9209,7 @@ gc_prof_timer_stop(rb_objspace_t *objspace)
     }
 }
 
-#ifdef BUILDING_SHARED_GC
+#ifdef BUILDING_MODULAR_GC
 # define RUBY_DTRACE_GC_HOOK(name)
 #else
 # define RUBY_DTRACE_GC_HOOK(name) \
@@ -10003,7 +9992,7 @@ rb_gc_impl_objspace_free(void *objspace_ptr)
     for (size_t i = 0; i < rb_darray_size(objspace->heap_pages.sorted); i++) {
         heap_page_free(objspace, rb_darray_get(objspace->heap_pages.sorted, i));
     }
-    rb_darray_free(objspace->heap_pages.sorted);
+    rb_darray_free_without_gc(objspace->heap_pages.sorted);
     heap_pages_lomem = 0;
     heap_pages_himem = 0;
 
@@ -10019,7 +10008,7 @@ rb_gc_impl_objspace_free(void *objspace_ptr)
     free_stack_chunks(&objspace->mark_stack);
     mark_stack_free_cache(&objspace->mark_stack);
 
-    rb_darray_free(objspace->weak_references);
+    rb_darray_free_without_gc(objspace->weak_references);
 
     free(objspace);
 }
@@ -10037,7 +10026,8 @@ rb_gc_impl_objspace_free(void *objspace_ptr)
 static VALUE
 gc_malloc_allocated_size(VALUE self)
 {
-    return UINT2NUM(rb_objspace.malloc_params.allocated_size);
+    rb_objspace_t *objspace = (rb_objspace_t *)rb_gc_get_objspace();
+    return ULL2NUM(objspace->malloc_params.allocated_size);
 }
 
 /*
@@ -10052,7 +10042,8 @@ gc_malloc_allocated_size(VALUE self)
 static VALUE
 gc_malloc_allocations(VALUE self)
 {
-    return UINT2NUM(rb_objspace.malloc_params.allocations);
+    rb_objspace_t *objspace = (rb_objspace_t *)rb_gc_get_objspace();
+    return ULL2NUM(objspace->malloc_params.allocations);
 }
 #endif
 
@@ -10110,8 +10101,8 @@ rb_gc_impl_objspace_init(void *objspace_ptr)
         ccan_list_head_init(&heap->pages);
     }
 
-    rb_darray_make(&objspace->heap_pages.sorted, 0);
-    rb_darray_make(&objspace->weak_references, 0);
+    rb_darray_make_without_gc(&objspace->heap_pages.sorted, 0);
+    rb_darray_make_without_gc(&objspace->weak_references, 0);
 
     // TODO: debug why on Windows Ruby crashes on boot when GC is on.
 #ifdef _WIN32

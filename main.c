@@ -24,7 +24,7 @@
 #ifdef HAVE_LOCALE_H
 #include <locale.h>
 #endif
-#if USE_SHARED_GC
+#if USE_MODULAR_GC
 #include "internal/gc.h"
 #endif
 
@@ -84,9 +84,11 @@ main(int argc, char **argv)
 /* Compile in the ASAN options Ruby needs, rather than relying on environment variables, so
  * that even tests which fork ruby with a clean environment will run ASAN with the right
  * settings */
+RUBY_SYMBOL_EXPORT_BEGIN
 const char *
 __asan_default_options(void)
 {
     return "use_sigaltstack=0:detect_leaks=0";
 }
+RUBY_SYMBOL_EXPORT_END
 #endif

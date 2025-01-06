@@ -17,10 +17,12 @@ module Reline
 
   class ConfigEncodingConversionError < StandardError; end
 
-  Key = Struct.new(:char, :combined_char, :with_meta) do
+  # EOF key: { char: nil, method_symbol: nil }
+  # Other key: { char: String, method_symbol: Symbol }
+  Key = Struct.new(:char, :method_symbol, :unused_boolean) do
     # For dialog_proc `key.match?(dialog.name)`
     def match?(sym)
-      combined_char.is_a?(Symbol) && combined_char == sym
+      method_symbol && method_symbol == sym
     end
   end
   CursorPos = Struct.new(:x, :y)
@@ -339,22 +341,22 @@ module Reline
         line_editor.set_signal_handlers
         loop do
           read_io(config.keyseq_timeout) { |inputs|
-            line_editor.set_pasting_state(io_gate.in_pasting?)
             inputs.each do |key|
-              if key.char == :bracketed_paste_start
-                text = io_gate.read_bracketed_paste
-                line_editor.insert_multiline_text(text)
-                line_editor.scroll_into_view
-              else
-                line_editor.update(key)
+              case key.method_symbol
+              when :bracketed_paste_start
+                # io_gate is Reline::ANSI because the key :bracketed_paste_start is only assigned in Reline::ANSI
+                key = Reline::Key.new(io_gate.read_bracketed_paste, :insert_multiline_text)
+              when :quoted_insert, :ed_quoted_insert
+                key = Reline::Key.new(io_gate.read_single_char(config.keyseq_timeout), :insert_raw_char)
               end
+              line_editor.set_pasting_state(io_gate.in_pasting?)
+              line_editor.update(key)
             end
           }
           if line_editor.finished?
             line_editor.render_finished
             break
           else
-            line_editor.set_pasting_state(io_gate.in_pasting?)
             line_editor.rerender
           end
         end

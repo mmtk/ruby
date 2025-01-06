@@ -1,1 +1,1 @@
-exclude(/test_/, "tracepoints does not supported GC stats yet")
+exclude(:test_tracks_objspace_count, "testing behaviour specific to default GC")

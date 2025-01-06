@@ -332,6 +332,8 @@ v2w(VALUE v)
     return WIDEVAL_WRAP(v);
 }
 
+#define NUM2WV(v) v2w(rb_Integer(v))
+
 static int
 weq(wideval_t wx, wideval_t wy)
 {
@@ -2256,7 +2258,7 @@ extract_time(VALUE time)
     const ID id_to_i = idTo_i;
 
 #define EXTRACT_TIME() do { \
-        t = v2w(rb_Integer(AREF(to_i))); \
+        t = NUM2WV(AREF(to_i)); \
     } while (0)
 
     if (rb_typeddata_is_kind_of(time, &time_data_type)) {
@@ -2299,7 +2301,7 @@ extract_vtm(VALUE time, VALUE orig_time, struct time_object *orig_tobj, VALUE su
         vtm->sec = obj2subsecx(AREF(sec), &subsecx); \
         vtm->isdst = RTEST(AREF(isdst));             \
         vtm->utc_offset = Qnil; \
-        t = v2w(rb_Integer(AREF(to_i))); \
+        t = NUM2WV(AREF(to_i)); \
     } while (0)
 
     if (rb_typeddata_is_kind_of(time, &time_data_type)) {
@@ -5217,6 +5219,27 @@ time_strftime(VALUE time, VALUE format)
         return str;
     }
 }
+
+/*
+ *  call-seq:
+ *    xmlschema(fraction_digits=0) -> string
+ *
+ *  Returns a string which represents the time as a dateTime defined by XML
+ *  Schema:
+ *
+ *    CCYY-MM-DDThh:mm:ssTZD
+ *    CCYY-MM-DDThh:mm:ss.sssTZD
+ *
+ *  where TZD is Z or [+-]hh:mm.
+ *
+ *  If self is a UTC time, Z is used as TZD.  [+-]hh:mm is used otherwise.
+ *
+ *  +fraction_digits+ specifies a number of digits to use for fractional
+ *  seconds.  Its default value is 0.
+ *
+ *      t = Time.now
+ *      t.xmlschema  # => "2011-10-05T22:26:12-04:00"
+ */
 
 static VALUE
 time_xmlschema(int argc, VALUE *argv, VALUE time)

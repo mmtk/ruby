@@ -33,6 +33,7 @@
 #include "internal/variable.h"
 #include "iseq.h"
 #include "rjit.h"
+#include "symbol.h" // This includes a macro for a more performant rb_id2sym.
 #include "yjit.h"
 #include "ruby/st.h"
 #include "ruby/vm.h"
@@ -1197,7 +1198,16 @@ rb_proc_dup(VALUE self)
     rb_proc_t *src;
 
     GetProcPtr(self, src);
-    procval = proc_create(rb_obj_class(self), &src->block, src->is_from_method, src->is_lambda);
+
+    switch (vm_block_type(&src->block)) {
+      case block_type_ifunc:
+        procval = rb_func_proc_dup(self);
+        break;
+      default:
+        procval = proc_create(rb_obj_class(self), &src->block, src->is_from_method, src->is_lambda);
+        break;
+    }
+
     if (RB_OBJ_SHAREABLE_P(self)) FL_SET_RAW(procval, RUBY_FL_SHAREABLE);
     RB_GC_GUARD(self); /* for: body = rb_proc_dup(body) */
     return procval;
@@ -3365,31 +3375,24 @@ rb_execution_context_update(rb_execution_context_t *ec)
         }
 
         while (cfp != limit_cfp) {
-            const VALUE *ep = cfp->ep;
+            if (VM_FRAME_TYPE(cfp) != VM_FRAME_MAGIC_DUMMY) {
+                const VALUE *ep = cfp->ep;
+                cfp->self = rb_gc_location(cfp->self);
+                cfp->iseq = (rb_iseq_t *)rb_gc_location((VALUE)cfp->iseq);
+                cfp->block_code = (void *)rb_gc_location((VALUE)cfp->block_code);
 
-#if USE_MMTK
-            if (!rb_mmtk_enabled_p() || VM_FRAME_TYPE(cfp) != VM_FRAME_MAGIC_DUMMY) {
-#endif
+                if (!VM_ENV_LOCAL_P(ep)) {
+                    const VALUE *prev_ep = VM_ENV_PREV_EP(ep);
+                    if (VM_ENV_FLAGS(prev_ep, VM_ENV_FLAG_ESCAPED)) {
+                        VM_FORCE_WRITE(&prev_ep[VM_ENV_DATA_INDEX_ENV], rb_gc_location(prev_ep[VM_ENV_DATA_INDEX_ENV]));
+                    }
 
-            cfp->self = rb_gc_location(cfp->self);
-            cfp->iseq = (rb_iseq_t *)rb_gc_location((VALUE)cfp->iseq);
-            cfp->block_code = (void *)rb_gc_location((VALUE)cfp->block_code);
-
-            if (!VM_ENV_LOCAL_P(ep)) {
-                const VALUE *prev_ep = VM_ENV_PREV_EP(ep);
-                if (VM_ENV_FLAGS(prev_ep, VM_ENV_FLAG_ESCAPED)) {
-                    VM_FORCE_WRITE(&prev_ep[VM_ENV_DATA_INDEX_ENV], rb_gc_location(prev_ep[VM_ENV_DATA_INDEX_ENV]));
-                }
-
-                if (VM_ENV_FLAGS(ep, VM_ENV_FLAG_ESCAPED)) {
-                    VM_FORCE_WRITE(&ep[VM_ENV_DATA_INDEX_ENV], rb_gc_location(ep[VM_ENV_DATA_INDEX_ENV]));
-                    VM_FORCE_WRITE(&ep[VM_ENV_DATA_INDEX_ME_CREF], rb_gc_location(ep[VM_ENV_DATA_INDEX_ME_CREF]));
+                    if (VM_ENV_FLAGS(ep, VM_ENV_FLAG_ESCAPED)) {
+                        VM_FORCE_WRITE(&ep[VM_ENV_DATA_INDEX_ENV], rb_gc_location(ep[VM_ENV_DATA_INDEX_ENV]));
+                        VM_FORCE_WRITE(&ep[VM_ENV_DATA_INDEX_ME_CREF], rb_gc_location(ep[VM_ENV_DATA_INDEX_ME_CREF]));
+                    }
                 }
             }
-
-#if USE_MMTK
-            }
-#endif
 
             cfp = RUBY_VM_PREVIOUS_CONTROL_FRAME(cfp);
         }

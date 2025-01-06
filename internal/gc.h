@@ -16,8 +16,8 @@
 #include "ruby/ruby.h"          /* for rb_event_flag_t */
 #include "vm_core.h"            /* for GET_EC() */
 
-#ifndef USE_SHARED_GC
-# define USE_SHARED_GC 0
+#ifndef USE_MODULAR_GC
+# define USE_MODULAR_GC 0
 #endif
 
 #if defined(__x86_64__) && !defined(_ILP32) && defined(__GNUC__)
@@ -175,7 +175,6 @@ struct rb_objspace; /* in vm_core.h */
     if (_already_disabled == Qfalse) rb_gc_enable()
 
 /* gc.c */
-extern int ruby_disable_gc;
 RUBY_ATTR_MALLOC void *ruby_mimmalloc(size_t size);
 RUBY_ATTR_MALLOC void *ruby_mimcalloc(size_t num, size_t size);
 void ruby_mimfree(void *ptr);
@@ -248,6 +247,7 @@ void rb_objspace_reachable_objects_from(VALUE obj, void (func)(VALUE, void *), v
 void rb_objspace_reachable_objects_from_root(void (func)(const char *category, VALUE, void *), void *data);
 int rb_objspace_internal_object_p(VALUE obj);
 int rb_objspace_garbage_object_p(VALUE obj);
+bool rb_gc_pointer_to_heap_p(VALUE obj);
 
 void rb_objspace_each_objects(
     int (*callback)(void *start, void *end, size_t stride, void *data),
@@ -272,11 +272,11 @@ void *ruby_sized_xrealloc(void *ptr, size_t new_size, size_t old_size) RUBY_ATTR
 void *ruby_sized_xrealloc2(void *ptr, size_t new_count, size_t element_size, size_t old_count) RUBY_ATTR_RETURNS_NONNULL RUBY_ATTR_ALLOC_SIZE((2, 3));
 void ruby_sized_xfree(void *x, size_t size);
 
-const char * rb_gc_active_gc_name(void);
-int rb_gc_external_gc_loaded_p(void);
+const char *rb_gc_active_gc_name(void);
+int rb_gc_modular_gc_loaded_p(void);
 
-#if USE_SHARED_GC
-void ruby_load_external_gc_from_argv(int argc, char **argv);
+#if USE_MODULAR_GC
+void ruby_load_modular_gc_from_argv(int argc, char **argv);
 #endif
 RUBY_SYMBOL_EXPORT_END
 

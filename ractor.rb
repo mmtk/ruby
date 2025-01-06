@@ -155,7 +155,7 @@
 # Notice that even +inspect+ (and more basic methods like <tt>__id__</tt>) is inaccessible
 # on a moved object.
 #
-# Class and Module objects are shareable so the class/module definitions are shared between ractors.
+# +Class+ and +Module+ objects are shareable so the class/module definitions are shared between ractors.
 # \Ractor objects are also shareable. All operations on shareable objects are thread-safe, so the thread-safety property
 # will be kept. We can not define mutable shareable objects in Ruby, but C extensions can introduce them.
 #
@@ -731,6 +731,7 @@ class Ractor
   end
 
   class RemoteError
+    # The Ractor an uncaught exception is raised in.
     attr_reader :ractor
   end
 
@@ -856,6 +857,24 @@ class Ractor
     Primitive.ractor_local_value_set(sym, val)
   end
 
+  # call-seq:
+  #   Ractor.store_if_absent(key){ init_block }
+  #
+  # If the correponding value is not set, yield a value with
+  # init_block and store the value in thread-safe manner.
+  # This method returns corresponding stored value.
+  #
+  #   (1..10).map{
+  #     Thread.new(it){|i|
+  #       Ractor.store_if_absent(:s){ f(); i }
+  #       #=> return stored value of key :s
+  #     }
+  #   }.map(&:value).uniq.size #=> 1 and f() is called only once
+  #
+  def self.store_if_absent(sym)
+    Primitive.ractor_local_value_store_if_absent(sym)
+  end
+
   # returns main ractor
   def self.main
     __builtin_cexpr! %q{
@@ -866,12 +885,12 @@ class Ractor
   # return true if the current ractor is main ractor
   def self.main?
     __builtin_cexpr! %q{
-      GET_VM()->ractor.main_ractor == rb_ec_ractor_ptr(ec)
+      RBOOL(GET_VM()->ractor.main_ractor == rb_ec_ractor_ptr(ec))
     }
   end
 
   # internal method
-  def self._require feature
+  def self._require feature # :nodoc:
     if main?
       super feature
     else
@@ -883,11 +902,11 @@ class Ractor
     private
 
     # internal method that is called when the first "Ractor.new" is called
-    def _activated
+    def _activated # :nodoc:
       Kernel.prepend Module.new{|m|
         m.set_temporary_name '<RactorRequire>'
 
-        def require feature
+        def require feature # :nodoc: -- otherwise RDoc outputs it as a class method
           if Ractor.main?
             super
           else

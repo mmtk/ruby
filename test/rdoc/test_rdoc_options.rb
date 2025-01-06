@@ -63,27 +63,30 @@ class TestRDocOptions < RDoc::TestCase
     encoding = 'UTF-8'
 
     expected = {
-      'charset'              => 'UTF-8',
-      'encoding'             => encoding,
-      'embed_mixins'         => false,
-      'exclude'              => %w[~\z \.orig\z \.rej\z \.bak\z \.gemspec\z],
-      'hyperlink_all'        => false,
-      'line_numbers'         => false,
-      'locale_dir'           => 'locale',
-      'locale_name'          => nil,
-      'main_page'            => nil,
-      'markup'               => 'rdoc',
-      'output_decoration'    => true,
-      'page_dir'             => nil,
-      'rdoc_include'         => [],
-      'show_hash'            => false,
-      'static_path'          => [],
-      'tab_width'            => 8,
-      'template_stylesheets' => [],
-      'title'                => nil,
-      'visibility'           => :protected,
-      'webcvs'               => nil,
-      'skip_tests'           => true,
+      'charset'               => 'UTF-8',
+      'encoding'              => encoding,
+      'embed_mixins'          => false,
+      'exclude'               => [],
+      'hyperlink_all'         => false,
+      'line_numbers'          => false,
+      'locale_dir'            => 'locale',
+      'locale_name'           => nil,
+      'main_page'             => nil,
+      'markup'                => 'rdoc',
+      'output_decoration'     => true,
+      'page_dir'              => nil,
+      'rdoc_include'          => [],
+      'show_hash'             => false,
+      'static_path'           => [],
+      'tab_width'             => 8,
+      'template_stylesheets'  => [],
+      'title'                 => nil,
+      'visibility'            => :protected,
+      'warn_missing_rdoc_ref' => false,
+      'webcvs'                => nil,
+      'skip_tests'            => true,
+      'apply_default_exclude' => true,
+      'autolink_excluded_words' => [],
     }
 
     assert_equal expected, coder
@@ -936,6 +939,29 @@ rdoc_include:
   def test_no_skip_test_value
     @options.parse %w[--no-skipping-tests]
     assert_equal false, @options.skip_tests
+  end
+
+  def test_apply_default_exclude_option
+    @options.parse %w[]
+    exclude = @options.exclude
+    assert_kind_of Regexp, exclude
+    assert_match exclude, "foo~"
+    assert_match exclude, "foo.orig"
+    assert_match exclude, "foo.rej"
+    assert_match exclude, "foo.bak"
+    assert_match exclude, "foo.gemspec"
+  end
+
+  def test_no_apply_default_exclude_option
+    @options.parse %w[--no-apply-default-exclude]
+    assert_nil @options.exclude
+  end
+
+  def test_exclude_option_without_default
+    @options.parse %w[--no-apply-default-exclude --exclude=\.old\z]
+    exclude = @options.exclude
+    assert_match exclude, "foo.old"
+    assert_not_match exclude, "foo~"
   end
 
   class DummyCoder < Hash
