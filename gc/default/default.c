@@ -7947,6 +7947,10 @@ gc_count_add_each_types(VALUE hash, const char *name, const size_t *types)
 size_t
 rb_gc_impl_gc_count(void *objspace_ptr)
 {
+    WHEN_USING_MMTK({
+        return rb_mmtk_gc_count();
+    })
+
     rb_objspace_t *objspace = objspace_ptr;
 
     return objspace->profile.count;
