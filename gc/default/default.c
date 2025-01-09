@@ -8222,24 +8222,14 @@ rb_gc_impl_stat(void *objspace_ptr, VALUE hash_or_sym)
     else if (hash != Qnil) \
         rb_hash_aset(hash, gc_stat_symbols[gc_stat_sym_##name], SIZET2NUM(attr));
 
-#if USE_MMTK
-    if (!rb_mmtk_enabled_p()) {
-#endif
+    WHEN_NOT_USING_MMTK({
+
     SET(count, objspace->profile.count);
     SET(time, (size_t)ns_to_ms(objspace->profile.marking_time_ns + objspace->profile.sweeping_time_ns)); // TODO: UINT64T2NUM
     SET(marking_time, (size_t)ns_to_ms(objspace->profile.marking_time_ns));
     SET(sweeping_time, (size_t)ns_to_ms(objspace->profile.sweeping_time_ns));
-#if USE_MMTK
-    }
-#endif
-    /* implementation dependent counters */
-    SET(total_allocated_objects, total_allocated_objects(objspace));
-    SET(malloc_increase_bytes, malloc_increase);
-    SET(malloc_increase_bytes_limit, malloc_limit);
 
-#if USE_MMTK
-    if (!rb_mmtk_enabled_p()) {
-#endif
+    /* implementation dependent counters */
     SET(heap_allocated_pages, rb_darray_size(objspace->heap_pages.sorted));
     SET(heap_empty_pages, objspace->empty_pages_count)
     SET(heap_allocatable_slots, objspace->heap_pages.allocatable_slots);
@@ -8253,6 +8243,8 @@ rb_gc_impl_stat(void *objspace_ptr, VALUE hash_or_sym)
     SET(total_freed_pages, objspace->heap_pages.freed_pages);
     SET(total_allocated_objects, total_allocated_objects(objspace));
     SET(total_freed_objects, total_freed_objects(objspace));
+    SET(malloc_increase_bytes, malloc_increase);
+    SET(malloc_increase_bytes_limit, malloc_limit);
     SET(minor_gc_count, objspace->profile.minor_gc_count);
     SET(major_gc_count, objspace->profile.major_gc_count);
     SET(compact_count, objspace->profile.compact_count);
@@ -8262,6 +8254,11 @@ rb_gc_impl_stat(void *objspace_ptr, VALUE hash_or_sym)
     SET(remembered_wb_unprotected_objects_limit, objspace->rgengc.uncollectible_wb_unprotected_objects_limit);
     SET(old_objects, objspace->rgengc.old_objects);
     SET(old_objects_limit, objspace->rgengc.old_objects_limit);
+#if RGENGC_ESTIMATE_OLDMALLOC
+    SET(oldmalloc_increase_bytes, objspace->rgengc.oldmalloc_increase);
+    SET(oldmalloc_increase_bytes_limit, objspace->rgengc.oldmalloc_increase_limit);
+#endif
+
 #if RGENGC_PROFILE
     SET(total_generated_normal_object_count, objspace->profile.total_generated_normal_object_count);
     SET(total_generated_shady_object_count, objspace->profile.total_generated_shady_object_count);
@@ -8270,24 +8267,17 @@ rb_gc_impl_stat(void *objspace_ptr, VALUE hash_or_sym)
     SET(total_remembered_normal_object_count, objspace->profile.total_remembered_normal_object_count);
     SET(total_remembered_shady_object_count, objspace->profile.total_remembered_shady_object_count);
 #endif /* RGENGC_PROFILE */
-#if USE_MMTK
-    }
-#endif
+    })
 
-#if RGENGC_ESTIMATE_OLDMALLOC
-    SET(oldmalloc_increase_bytes, objspace->rgengc.oldmalloc_increase);
-    SET(oldmalloc_increase_bytes_limit, objspace->rgengc.oldmalloc_increase_limit);
-#endif
-
-#if USE_MMTK
-    if (rb_mmtk_enabled_p()) {
+    WHEN_USING_MMTK({
+        SET(count, rb_mmtk_gc_count());
         SET(mmtk_free_bytes, mmtk_free_bytes());
         SET(mmtk_total_bytes, mmtk_total_bytes());
         SET(mmtk_used_bytes, mmtk_used_bytes());
         SET(mmtk_starting_heap_address, (size_t) mmtk_starting_heap_address());
         SET(mmtk_last_heap_address, (size_t) mmtk_last_heap_address());
-    }
-#endif
+        // TODO: Add more statistics in a way similar to the default GC, if applicable.
+    })
 #undef SET
 
     if (!NIL_P(key)) {
