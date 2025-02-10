@@ -54,6 +54,9 @@ void rb_evict_ivars_to_hash(VALUE obj);
 RUBY_SYMBOL_EXPORT_BEGIN
 /* variable.c (export) */
 void rb_mark_generic_ivar(VALUE obj);
+#if USE_MMTK
+void rb_mmtk_update_generic_ivar(VALUE obj);
+#endif
 VALUE rb_const_missing(VALUE klass, VALUE name);
 int rb_class_ivar_set(VALUE klass, ID vid, VALUE value);
 void rb_iv_tbl_copy(VALUE dst, VALUE src);

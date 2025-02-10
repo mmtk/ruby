@@ -1129,20 +1129,14 @@ gen_ivtbl_resize(struct gen_ivtbl *old, uint32_t n)
 void
 rb_mark_generic_ivar(VALUE obj)
 {
-    st_data_t data;
-
-    int r = 0;
-    WHEN_USING_MMTK2({
-        // When using copying GC, if `obj` is alredy moved, we won't find it in `generic_iv_tbl_`
-        // because `generic_iv_tbl_` is not updated yet.  The Rust part of the binding maintains
-        // another table for moved objects.  We call into the Rust part.
-        data = (st_data_t)mmtk_get_givtbl_during_gc((MMTk_ObjectReference)obj);
-        r = (data != 0);
-    }, {
-        r = st_lookup(generic_ivtbl_no_ractor_check(obj), (st_data_t)obj, &data);
+    WHEN_USING_MMTK({
+        // In MMTk, we only call this function when traversing.
+        // During GC, we call rb_mmtk_update_generic_ivar.
+        RUBY_ASSERT(GET_VM()->gc.mark_func_data != NULL);
     })
 
-    if (r) {
+    st_data_t data;
+    if (st_lookup(generic_ivtbl_no_ractor_check(obj), (st_data_t)obj, &data)) {
         struct gen_ivtbl *ivtbl = (struct gen_ivtbl *)data;
         if (rb_shape_obj_too_complex(obj)) {
             rb_mark_tbl_no_pin(ivtbl->as.complex.table);
@@ -1156,10 +1150,30 @@ rb_mark_generic_ivar(VALUE obj)
 }
 
 #if USE_MMTK
-st_table*
-rb_mmtk_get_generic_iv_tbl(void)
+void
+rb_mmtk_update_generic_ivar(VALUE obj)
 {
-    return generic_iv_tbl_;
+    struct gen_ivtbl *ivtbl = mmtk_get_givtbl_during_gc((MMTk_ObjectReference)obj);
+    if (ivtbl != NULL) {
+        if (rb_shape_obj_too_complex(obj)) {
+            rb_gc_update_tbl_refs(ivtbl->as.complex.table);
+        }
+        else {
+            for (uint32_t i = 0; i < ivtbl->as.shape.numiv; i++) {
+                ivtbl->as.shape.ivptr[i] = rb_gc_location(ivtbl->as.shape.ivptr[i]);
+            }
+        }
+    }
+}
+
+void
+rb_mmtk_mv_generic_ivar(VALUE rsrc, VALUE dst)
+{
+    st_data_t key = (st_data_t)rsrc;
+    st_data_t ivtbl;
+
+    if (st_delete(generic_ivtbl_no_ractor_check(rsrc), &key, &ivtbl))
+        st_insert(generic_ivtbl_no_ractor_check(dst), (st_data_t)dst, ivtbl);
 }
 
 static int

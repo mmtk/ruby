@@ -1682,9 +1682,18 @@ rb_mmtk_get_original_givtbl(MMTk_ObjectReference object) {
     }
 }
 
+struct st_table *rb_generic_ivtbl_get(void); // Defined in variable.c
+
+st_table*
+rb_mmtk_get_generic_iv_tbl(void) {
+    return rb_generic_ivtbl_get();
+}
+
+void rb_mmtk_mv_generic_ivar(VALUE src, VALUE dst); // Defined in variable.c
+
 static void
 rb_mmtk_move_givtbl(MMTk_ObjectReference old_objref, MMTk_ObjectReference new_objref) {
-    rb_mv_generic_ivar((VALUE)old_objref, (VALUE)new_objref);
+    rb_mmtk_mv_generic_ivar((VALUE)old_objref, (VALUE)new_objref);
 }
 
 void rb_mmtk_cleanup_generic_iv_tbl(void); // Defined in variable.c
@@ -1694,7 +1703,6 @@ void rb_mmtk_update_global_symbols_table(void); // Defined in gc.c
 void rb_mmtk_update_overloaded_cme_table(void); // Defined in default.c
 void rb_mmtk_update_ci_table(void); // Defined in default.c
 
-st_table* rb_mmtk_get_generic_iv_tbl(void); // Defined in variable.c
 st_table* rb_mmtk_get_frozen_strings_table(void); // Defined in default.c
 st_table* rb_mmtk_get_finalizer_table(void); // Defined in default.c
 st_table* rb_mmtk_get_obj_to_id_table(void); // Defined in default.c

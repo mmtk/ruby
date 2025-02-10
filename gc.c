@@ -2760,9 +2760,13 @@ rb_mmtk_scan_yjit_roots(void)
 void
 rb_gc_mark_children(void *objspace, VALUE obj)
 {
+    // When using MMTK, we rely on rb_gc_update_object_references to trace generic ivars.
+    // We still need to visit generic ivars in rb_gc_mark_children when traversing (not during GC).
+    WHEN_USING_MMTK_CONDITIONAL(GET_VM()->gc.mark_func_data != NULL, {
     if (FL_TEST(obj, FL_EXIVAR)) {
         rb_mark_generic_ivar(obj);
     }
+    })
 
     switch (BUILTIN_TYPE(obj)) {
       case T_FLOAT:
@@ -3853,6 +3857,14 @@ rb_mmtk_gc_ref_update_string(void * objspace, VALUE str)
 void
 rb_gc_update_object_references(void *objspace, VALUE obj)
 {
+    WHEN_USING_MMTK({
+        // When using MMTk, we eagerly trace and update the generic ivars when scanning an object.
+        // In the default GC, we update the global ivar table during weak ref processing.
+        if (FL_TEST(obj, FL_EXIVAR)) {
+            rb_mmtk_update_generic_ivar(obj);
+        }
+    })
+
     switch (BUILTIN_TYPE(obj)) {
       case T_CLASS:
         if (FL_TEST(obj, FL_SINGLETON)) {
