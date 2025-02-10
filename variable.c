@@ -1155,34 +1155,6 @@ rb_mark_generic_ivar(VALUE obj)
     }
 }
 
-void
-rb_ref_update_generic_ivar(VALUE obj)
-{
-    struct gen_ivtbl *ivtbl;
-
-#if USE_MMTK
-    int r = 0;
-    if (rb_mmtk_enabled_p()) {
-        ivtbl = mmtk_get_givtbl_during_gc((MMTk_ObjectReference)obj);
-        r = (ivtbl != NULL);
-    } else {
-        r = rb_gen_ivtbl_get(obj, 0, &ivtbl);
-    }
-    if (r) {
-#else
-    if (rb_gen_ivtbl_get(obj, 0, &ivtbl)) {
-#endif
-        if (rb_shape_obj_too_complex(obj)) {
-            rb_gc_ref_update_table_values_only(ivtbl->as.complex.table);
-        }
-        else {
-            for (uint32_t i = 0; i < ivtbl->as.shape.numiv; i++) {
-                ivtbl->as.shape.ivptr[i] = rb_gc_location(ivtbl->as.shape.ivptr[i]);
-            }
-        }
-    }
-}
-
 #if USE_MMTK
 st_table*
 rb_mmtk_get_generic_iv_tbl(void)
@@ -1226,16 +1198,6 @@ rb_mmtk_cleanup_generic_iv_tbl(void)
                             0);
 }
 #endif
-
-void
-rb_mv_generic_ivar(VALUE rsrc, VALUE dst)
-{
-    st_data_t key = (st_data_t)rsrc;
-    st_data_t ivtbl;
-
-    if (st_delete(generic_ivtbl_no_ractor_check(rsrc), &key, &ivtbl))
-        st_insert(generic_ivtbl_no_ractor_check(dst), (st_data_t)dst, ivtbl);
-}
 
 void
 rb_free_generic_ivar(VALUE obj)

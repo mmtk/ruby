@@ -216,6 +216,9 @@ const ID rb_iseq_shared_exc_local_tbl[] = {idERROR_INFO};
 #define NEW_CHILD_ISEQ(node, name, type, line_no) \
   new_child_iseq(iseq, (node), rb_fstring(name), iseq, (type), (line_no))
 
+#define NEW_CHILD_ISEQ_WITH_CALLBACK(callback_func, name, type, line_no) \
+  new_child_iseq_with_callback(iseq, (callback_func), (name), iseq, (type), (line_no))
+
 /* add instructions */
 #define ADD_SEQ(seq1, seq2) \
   APPEND_LIST((seq1), (seq2))
@@ -1980,7 +1983,7 @@ iseq_set_arguments_keywords(rb_iseq_t *iseq, LINK_ANCHOR *const optargs,
     keyword->num = kw;
 
     if (RNODE_DVAR(args->kw_rest_arg)->nd_vid != 0) {
-        ID kw_id = iseq->body->local_table[arg_size];
+        ID kw_id = ISEQ_BODY(iseq)->local_table[arg_size];
         keyword->rest_start = arg_size++;
         body->param.flags.has_kwrest = TRUE;
 
@@ -2110,7 +2113,7 @@ iseq_set_arguments(rb_iseq_t *iseq, LINK_ANCHOR *const optargs, const NODE *cons
             arg_size = iseq_set_arguments_keywords(iseq, optargs, args, arg_size);
         }
         else if (args->kw_rest_arg && !optimized_forward) {
-            ID kw_id = iseq->body->local_table[arg_size];
+            ID kw_id = ISEQ_BODY(iseq)->local_table[arg_size];
             struct rb_iseq_param_keyword *keyword = ZALLOC_N(struct rb_iseq_param_keyword, 1);
             keyword->rest_start = arg_size++;
             body->param.keyword = keyword;
@@ -4012,8 +4015,8 @@ iseq_peephole_optimize(rb_iseq_t *iseq, LINK_ELEMENT *list, const int do_tailcal
             if (IS_NEXT_INSN_ID(iobj->link.next, leave)) {
                 iobj->insn_id = BIN(opt_invokebuiltin_delegate_leave);
                 const struct rb_builtin_function *bf = (const struct rb_builtin_function *)iobj->operands[0];
-                if (iobj == (INSN *)list && bf->argc == 0 && (iseq->body->builtin_attrs & BUILTIN_ATTR_LEAF)) {
-                    iseq->body->builtin_attrs |= BUILTIN_ATTR_SINGLE_NOARG_LEAF;
+                if (iobj == (INSN *)list && bf->argc == 0 && (ISEQ_BODY(iseq)->builtin_attrs & BUILTIN_ATTR_LEAF)) {
+                    ISEQ_BODY(iseq)->builtin_attrs |= BUILTIN_ATTR_SINGLE_NOARG_LEAF;
                 }
             }
         }
@@ -6265,10 +6268,10 @@ defined_expr(rb_iseq_t *iseq, LINK_ANCHOR *const ret,
         const rb_iseq_t *rescue;
         struct rb_iseq_new_with_callback_callback_func *ifunc =
             rb_iseq_new_with_callback_new_callback(build_defined_rescue_iseq, NULL);
-        rescue = new_child_iseq_with_callback(iseq, ifunc,
+        rescue = NEW_CHILD_ISEQ_WITH_CALLBACK(ifunc,
                                               rb_str_concat(rb_str_new2("defined guard in "),
                                                             ISEQ_BODY(iseq)->location.label),
-                                              iseq, ISEQ_TYPE_RESCUE, 0);
+                                              ISEQ_TYPE_RESCUE, 0);
         lstart->rescued = LABEL_RESCUE_BEG;
         lend->rescued = LABEL_RESCUE_END;
         APPEND_LABEL(ret, lcur, lstart);
@@ -10246,7 +10249,8 @@ compile_attrasgn(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const node
     /* optimization shortcut
      *   obj["literal"] = value -> opt_aset_with(obj, "literal", value)
      */
-    if (mid == idASET && !private_recv_p(node) && RNODE_ATTRASGN(node)->nd_args &&
+    if (!ISEQ_COMPILE_DATA(iseq)->in_masgn &&
+        mid == idASET && !private_recv_p(node) && RNODE_ATTRASGN(node)->nd_args &&
         nd_type_p(RNODE_ATTRASGN(node)->nd_args, NODE_LIST) && RNODE_LIST(RNODE_ATTRASGN(node)->nd_args)->as.nd_alen == 2 &&
         (nd_type_p(RNODE_LIST(RNODE_ATTRASGN(node)->nd_args)->nd_head, NODE_STR) || nd_type_p(RNODE_LIST(RNODE_ATTRASGN(node)->nd_args)->nd_head, NODE_FILE)) &&
         ISEQ_COMPILE_DATA(iseq)->current_block == NULL &&
@@ -10423,7 +10427,7 @@ compile_shareable_literal_constant(rb_iseq_t *iseq, LINK_ANCHOR *ret, enum rb_pa
     VALUE lit = Qnil;
     DECL_ANCHOR(anchor);
 
-    enum node_type type = nd_type(node);
+    enum node_type type = node ? nd_type(node) : NODE_NIL;
     switch (type) {
       case NODE_TRUE:
         *value_p = Qtrue;
@@ -10799,7 +10803,10 @@ iseq_compile_each0(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const no
       }
 
       case NODE_MASGN:{
+        bool prev_in_masgn = ISEQ_COMPILE_DATA(iseq)->in_masgn;
+        ISEQ_COMPILE_DATA(iseq)->in_masgn = true;
         compile_massign(iseq, ret, node, popped);
+        ISEQ_COMPILE_DATA(iseq)->in_masgn = prev_in_masgn;
         break;
       }
 
@@ -11412,8 +11419,7 @@ iseq_compile_each0(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const no
         struct rb_iseq_new_with_callback_callback_func *ifunc =
             rb_iseq_new_with_callback_new_callback(build_postexe_iseq, RNODE_POSTEXE(node)->nd_body);
         const rb_iseq_t *once_iseq =
-            new_child_iseq_with_callback(iseq, ifunc,
-                                 rb_fstring(make_name_for_block(iseq)), iseq, ISEQ_TYPE_BLOCK, line);
+            NEW_CHILD_ISEQ_WITH_CALLBACK(ifunc, rb_fstring(make_name_for_block(iseq)), ISEQ_TYPE_BLOCK, line);
 
         ADD_INSN2(ret, node, once, once_iseq, INT2FIX(is_index));
         RB_OBJ_WRITTEN(iseq, Qundef, (VALUE)once_iseq);

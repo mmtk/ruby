@@ -1105,7 +1105,7 @@ pm_iseq_new_with_opt(pm_scope_node_t *node, VALUE name, VALUE path, VALUE realpa
         .end_pos = { .lineno = (int) end.line, .column = (int) end.column }
     };
 
-    prepare_iseq_build(iseq, name, path, realpath, first_lineno, &code_location, -1,
+    prepare_iseq_build(iseq, name, path, realpath, first_lineno, &code_location, node->ast_node->node_id,
                        parent, isolated_depth, type, node->script_lines == NULL ? Qnil : *node->script_lines, option);
 
     struct pm_iseq_new_with_opt_data data = {
@@ -3639,7 +3639,9 @@ rb_iseq_parameters(const rb_iseq_t *iseq, int is_proc)
     if (is_proc) {
         for (i = 0; i < body->param.lead_num; i++) {
             PARAM_TYPE(opt);
-            rb_ary_push(a, rb_id2str(PARAM_ID(i)) ? ID2SYM(PARAM_ID(i)) : Qnil);
+            if (rb_id2str(PARAM_ID(i))) {
+                rb_ary_push(a, ID2SYM(PARAM_ID(i)));
+            }
             rb_ary_push(args, a);
         }
     }
@@ -3664,7 +3666,9 @@ rb_iseq_parameters(const rb_iseq_t *iseq, int is_proc)
     if (is_proc) {
         for (i = body->param.post_start; i < r; i++) {
             PARAM_TYPE(opt);
-            rb_ary_push(a, rb_id2str(PARAM_ID(i)) ? ID2SYM(PARAM_ID(i)) : Qnil);
+            if (rb_id2str(PARAM_ID(i))) {
+                rb_ary_push(a, ID2SYM(PARAM_ID(i)));
+            }
             rb_ary_push(args, a);
         }
     }

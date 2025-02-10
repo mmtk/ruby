@@ -678,6 +678,8 @@ do-install-dbg: $(PROGRAM) pre-install-dbg
 post-install-dbg::
 	@$(NULLCMD)
 
+srcs-doc: prepare-gems
+
 rdoc: PHONY main srcs-doc
 	@echo Generating RDoc documentation
 	$(Q) $(RDOC) --ri --op "$(RDOCOUT)" $(RDOC_GEN_OPTS) $(RDOCFLAGS) .
@@ -1072,7 +1074,7 @@ PHONY:
 {$(srcdir)}.y.c:
 	$(ECHO) generating $@
 	$(Q)$(BASERUBY) $(tooldir)/id2token.rb $(SRC_FILE) | \
-	$(YACC) $(YFLAGS) -o$@ -H$*.h - parse.y
+	$(LRAMA) $(YFLAGS) -o$@ -H$*.h - parse.y
 
 $(PLATFORM_D):
 	$(Q) $(MAKEDIRS) $(PLATFORM_DIR) $(@D)
@@ -1252,7 +1254,7 @@ srcs-ext: $(EXT_SRCS)
 realclean-srcs-ext::
 	$(Q)$(RM) $(EXT_SRCS)
 
-EXTRA_SRCS = $(srcdir)/ext/json/parser/parser.c \
+EXTRA_SRCS = \
 	     $(srcdir)/ext/date/zonetab.h \
 	     $(empty)
 
@@ -1268,7 +1270,7 @@ srcs-enc: $(ENC_MK)
 	$(ECHO) making srcs under enc
 	$(Q) $(MAKE) $(MAKE_ENC) srcs
 
-all-incs: incs {$(VPATH)}encdb.h {$(VPATH)}transdb.h
+all-incs: incs {$(VPATH)}encdb.h {$(VPATH)}transdb.h {$(VPATH)}probes.h
 incs: $(INSNS) {$(VPATH)}node_name.inc {$(VPATH)}known_errors.inc \
       {$(VPATH)}vm_call_iseq_optimized.inc $(srcdir)/revision.h \
       $(REVISION_H) \
@@ -1373,11 +1375,6 @@ $(RIPPER_SRCS): $(srcdir)/ext/ripper/ripper_init.c.tmpl $(srcdir)/ext/ripper/eve
 	$(exec) $(MAKE) -f - $(mflags) \
 		Q=$(Q) ECHO=$(ECHO) RM="$(RM1)" top_srcdir=../.. srcdir=. VPATH=../.. \
 		RUBY="$(BASERUBY)" BASERUBY="$(BASERUBY)" PATH_SEPARATOR="$(PATH_SEPARATOR)" LANG=C
-
-$(srcdir)/ext/json/parser/parser.c: $(srcdir)/ext/json/parser/parser.rl $(srcdir)/ext/json/parser/prereq.mk
-	$(ECHO) generating $@
-	$(Q) $(CHDIR) $(@D) && $(exec) $(MAKE) -f prereq.mk $(mflags) \
-		Q=$(Q) ECHO=$(ECHO) top_srcdir=../../.. srcdir=. VPATH=../../.. BASERUBY="$(BASERUBY)"
 
 $(srcdir)/ext/date/zonetab.h: $(srcdir)/ext/date/zonetab.list $(srcdir)/ext/date/prereq.mk
 	$(ECHO) generating $@
@@ -1613,7 +1610,7 @@ yes-install-for-test-bundled-gems: yes-update-default-gemspecs
 	$(XRUBY) -C "$(srcdir)" -r./tool/lib/gem_env.rb bin/gem \
 		install --no-document --conservative \
 		"hoe" "json-schema:5.1.0" "test-unit-rr" "simplecov" "simplecov-html" "simplecov-json" "rspec" "zeitwerk" \
-		"sinatra" "rack" "tilt" "mustermann" "base64" "compact_index" "rack-test"
+		"sinatra" "rack" "tilt" "mustermann" "base64" "compact_index" "rack-test" "logger" "kpeg" "tracer"
 
 test-bundled-gems-fetch: yes-test-bundled-gems-fetch
 yes-test-bundled-gems-fetch:
@@ -1633,13 +1630,13 @@ yes-test-bundled-gems-precheck: Preparing-test-bundled-gems
 yes-install-for-test-bundled-gems: Preparing-test-bundled-gems
 yes-test-bundled-gems-fetch: Preparing-test-bundled-gems
 
-
 PREPARE_BUNDLED_GEMS = test-bundled-gems-prepare
 test-bundled-gems: $(TEST_RUNNABLE)-test-bundled-gems $(DOT_WAIT) $(TEST_RUNNABLE)-test-bundled-gems-spec
+yes-test-bundled-gems: test-bundled-gems-run
+no-test-bundled-gems:
+
 bundled_gems_spec-run: install-for-test-bundled-gems
 	$(XRUBY) -C $(srcdir) .bundle/bin/rspec spec/bundled_gems_spec.rb
-yes-test-bundled-gems: bundled_gems_spec-run $(DOT_WAIT) test-bundled-gems-run
-no-test-bundled-gems:
 
 # Override this to allow failure of specific gems on CI
 # TEST_BUNDLED_GEMS_ALLOW_FAILURES =
@@ -1908,6 +1905,7 @@ info-arch: PHONY
 
 exam: check
 exam: $(DOT_WAIT) test-bundler-parallel
+exam: $(DOT_WAIT) bundled_gems_spec-run
 exam: $(DOT_WAIT) test-bundled-gems
 
 love: sudo-precheck up all test exam install
@@ -7563,6 +7561,7 @@ gc.$(OBJEXT): {$(VPATH)}thread.h
 gc.$(OBJEXT): {$(VPATH)}thread_$(THREAD_MODEL).h
 gc.$(OBJEXT): {$(VPATH)}thread_native.h
 gc.$(OBJEXT): {$(VPATH)}util.h
+gc.$(OBJEXT): {$(VPATH)}variable.h
 gc.$(OBJEXT): {$(VPATH)}vm.h
 gc.$(OBJEXT): {$(VPATH)}vm_callinfo.h
 gc.$(OBJEXT): {$(VPATH)}vm_core.h
