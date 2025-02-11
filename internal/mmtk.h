@@ -203,6 +203,8 @@ void mmtk_enable_collection(void);
 
 void mmtk_disable_collection(void);
 
+bool mmtk_is_collection_enabled(void);
+
 const char *mmtk_plan_name(void);
 
 size_t mmtk_used_bytes(void);
@@ -219,7 +221,7 @@ MMTk_NullableObjectReference mmtk_get_forwarded_object(MMTk_ObjectReference obje
 
 bool mmtk_is_mmtk_object(MMTk_Address addr);
 
-void mmtk_handle_user_collection_request(MMTk_VMMutatorThread tls);
+void mmtk_handle_user_collection_request(MMTk_VMMutatorThread tls, bool force, bool exhaustive);
 
 void mmtk_harness_begin(MMTk_VMMutatorThread tls);
 

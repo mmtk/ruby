@@ -1499,6 +1499,10 @@ RVALUE_WHITE_P(rb_objspace_t *objspace, VALUE obj)
 bool
 rb_gc_impl_gc_enabled_p(void *objspace_ptr)
 {
+    WHEN_USING_MMTK({
+        return mmtk_is_collection_enabled();
+    })
+
     rb_objspace_t *objspace = objspace_ptr;
     return !dont_gc_val();
 }
@@ -1506,6 +1510,11 @@ rb_gc_impl_gc_enabled_p(void *objspace_ptr)
 void
 rb_gc_impl_gc_enable(void *objspace_ptr)
 {
+    WHEN_USING_MMTK({
+        mmtk_enable_collection();
+        return;
+    })
+
     rb_objspace_t *objspace = objspace_ptr;
 
     dont_gc_off();
@@ -1514,6 +1523,11 @@ rb_gc_impl_gc_enable(void *objspace_ptr)
 void
 rb_gc_impl_gc_disable(void *objspace_ptr, bool finish_current_gc)
 {
+    WHEN_USING_MMTK({
+        mmtk_disable_collection();
+        return;
+    })
+
     rb_objspace_t *objspace = objspace_ptr;
 
     if (finish_current_gc) {
@@ -7444,7 +7458,11 @@ rb_gc_impl_start(void *objspace_ptr, bool full_mark, bool immediate_mark, bool i
     rb_objspace_t *objspace = objspace_ptr;
 #if USE_MMTK
     if (rb_mmtk_enabled_p()) {
-        mmtk_handle_user_collection_request(GET_THREAD());
+        // Note: GC.start will initiates garbage collection even if manually disabled.
+        // Therefore, we need to force GC.
+        // We do a full-heap GC if full_mark is true.  In StickyImmix this may or may not trigger defragmentation.
+        // There is currently no way to force a defragmentation GC.
+        mmtk_handle_user_collection_request(GET_THREAD(), true, full_mark);
 
         gc_finalize_deferred(objspace);
     }
@@ -8741,6 +8759,8 @@ objspace_malloc_increase_body(rb_objspace_t *objspace, void *mem, size_t new_siz
         // object is allocated but other disjoint parts allocated by xmalloc have not been assigned
         // to the fields of the object.  If GC is triggered at this time, the GC may try to scan
         // incomplete objects and crash.
+        // TODO: Re-investigate whether we shouldn't trigger GC.  If triggering a GC during xmalloc
+        // is a problem, the default GC should crash, too.
         return true;
     }
 #endif
@@ -8767,7 +8787,8 @@ objspace_malloc_increase_body(rb_objspace_t *objspace, void *mem, size_t new_siz
                 // This will trigger user-requested GC.
                 // `obj_free` is called during GC for dead objects.
                 // It will free underlying xmalloc-ed buffers for them.
-                mmtk_handle_user_collection_request((MMTk_VMMutatorThread)GET_THREAD());
+                // We don't force GC.  When GC.disable is called, allocation should not trigger GC.
+                mmtk_handle_user_collection_request((MMTk_VMMutatorThread)GET_THREAD(), false, false);
 
                 gc_reset_malloc_info(objspace, true);
             } else {
