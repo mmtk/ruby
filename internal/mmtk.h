@@ -29,8 +29,6 @@ typedef uint32_t MMTk_AllocationSemantics;
 
 #define MMTK_GC_THREAD_KIND_WORKER 1
 
-#define MMTK_HAS_MOVED_GIVTBL 9223372036854775808ull
-
 #define MMTK_HIDDEN_SIZE_MASK 281474976710655
 
 typedef struct st_table st_table;
@@ -270,5 +268,7 @@ void mmtk_object_reference_write_post(MMTk_Mutator *mutator, MMTk_ObjectReferenc
  * undefined behavior if allocation or GC happens while this function is running.
  */
 void mmtk_enumerate_objects(void (*callback)(MMTk_ObjectReference, void*), void *data);
+
+bool mmtk_hidden_header_is_sane(const struct MMTk_HiddenHeader *hidden_header);
 
 #endif /* MMTK_H */

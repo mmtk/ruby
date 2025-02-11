@@ -404,6 +404,10 @@ rb_mmtk_init_hidden_header(VALUE object, size_t payload_size)
 
     struct MMTk_HiddenHeader *hidden_header = (struct MMTk_HiddenHeader*)(object - MMTK_OBJREF_OFFSET);
     hidden_header->prefix = payload_size;
+
+    RUBY_ASSERT(mmtk_hidden_header_is_sane(hidden_header),
+                "Hidden header is not sane on construction.  Object: %p, prefix: %zx",
+                (void*) object, hidden_header->prefix);
 }
 
 size_t
@@ -412,8 +416,9 @@ rb_mmtk_get_payload_size(VALUE object)
     struct MMTk_HiddenHeader *hidden_header = (struct MMTk_HiddenHeader*)(object - MMTK_OBJREF_OFFSET);
     size_t prefix = hidden_header->prefix;
 
-    RUBY_ASSERT((prefix & ~(MMTK_HIDDEN_SIZE_MASK | MMTK_HAS_MOVED_GIVTBL)) == 0,
-                "Hidden field is corrupted.  Object: %p, prefix: %zx", (void*) object, prefix);
+    RUBY_ASSERT(mmtk_hidden_header_is_sane(hidden_header),
+                "Hidden header is corrupted.  Object: %p, prefix: %zx",
+                (void*) object, prefix);
 
     return prefix & MMTK_HIDDEN_SIZE_MASK;
 }
