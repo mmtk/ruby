@@ -259,7 +259,11 @@ module Gem
     end
 
     def installation_missing?
-      !default_gem? && (!Dir.exist?(full_gem_path) || Dir.empty?(full_gem_path))
+      !default_gem? && !File.directory?(full_gem_path)
+    end
+
+    def lock_name
+      @lock_name ||= name_tuple.lock_name
     end
 
     unless VALIDATES_FOR_RESOLUTION

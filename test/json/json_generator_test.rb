@@ -399,10 +399,23 @@ class JSONGeneratorTest < Test::Unit::TestCase
     assert_equal :bar, state_hash[:foo]
   end
 
+  def test_json_state_to_h_roundtrip
+    state = JSON.state.new
+    assert_equal state.to_h, JSON.state.new(state.to_h).to_h
+  end
+
   def test_json_generate
     assert_raise JSON::GeneratorError do
       generate(["\xea"])
     end
+  end
+
+  def test_json_generate_error_detailed_message
+    error = assert_raise JSON::GeneratorError do
+      generate(["\xea"])
+    end
+
+    assert_not_nil(error.detailed_message)
   end
 
   def test_json_generate_unsupported_types
@@ -684,5 +697,14 @@ class JSONGeneratorTest < Test::Unit::TestCase
   def test_json_generate_as_json_convert_to_proc
     object = Object.new
     assert_equal object.object_id.to_json, JSON.generate(object, strict: true, as_json: :object_id)
+  end
+
+  def test_json_generate_float
+      values = [-1.0, 1.0, 0.0, 12.2, 7.5 / 3.2, 12.0, 100.0, 1000.0]
+      expecteds = ["-1.0", "1.0", "0.0", "12.2", "2.34375", "12.0", "100.0", "1000.0"]
+
+      values.zip(expecteds).each do |value, expected|
+        assert_equal expected, value.to_json
+      end
   end
 end

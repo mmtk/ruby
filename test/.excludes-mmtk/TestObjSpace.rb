@@ -1,4 +1,5 @@
 exclude(:test_dump_all_full, "testing behaviour specific to default GC")
+exclude(:test_dump_flag_age, "testing behaviour specific to default GC")
 exclude(:test_dump_flags, "testing behaviour specific to default GC")
 exclude(:test_finalizer, "times out in debug mode on Ubuntu")
 exclude(:test_memsize_of, "testing behaviour specific to default GC")

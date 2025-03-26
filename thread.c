@@ -89,7 +89,6 @@
 #include "internal/time.h"
 #include "internal/warnings.h"
 #include "iseq.h"
-#include "rjit.h"
 #include "ruby/debug.h"
 #include "ruby/io.h"
 #include "ruby/thread.h"
@@ -102,10 +101,6 @@
 
 #if USE_MMTK
 #include "internal/mmtk.h"
-#endif
-
-#if USE_RJIT && defined(HAVE_SYS_WAIT_H)
-#include <sys/wait.h>
 #endif
 
 #ifndef USE_NATIVE_THREAD_PRIORITY
@@ -4779,9 +4774,6 @@ rb_thread_atfork_internal(rb_thread_t *th, void (*atfork)(rb_thread_t *, const r
     rb_ractor_atfork(vm, th);
     rb_vm_postponed_job_atfork();
 
-    /* may be held by RJIT threads in parent */
-    rb_native_mutex_initialize(&vm->workqueue_lock);
-
     /* may be held by any thread in parent */
     rb_native_mutex_initialize(&th->interrupt_lock);
     ccan_list_head_init(&th->interrupt_exec_tasks);
@@ -4802,6 +4794,7 @@ static void
 terminate_atfork_i(rb_thread_t *th, const rb_thread_t *current_th)
 {
     if (th != current_th) {
+        rb_native_mutex_initialize(&th->interrupt_lock);
         rb_mutex_abandon_keeping_mutexes(th);
         rb_mutex_abandon_locking_mutex(th);
         thread_cleanup_func(th, TRUE);
@@ -5634,7 +5627,7 @@ debug_deadlock_check(rb_ractor_t *r, VALUE msg)
             }
         }
         rb_str_catf(msg, "\n   ");
-        rb_str_concat(msg, rb_ary_join(rb_ec_backtrace_str_ary(th->ec, 0, 0), sep));
+        rb_str_concat(msg, rb_ary_join(rb_ec_backtrace_str_ary(th->ec, RUBY_BACKTRACE_START, RUBY_ALL_BACKTRACE_LINES), sep));
         rb_str_catf(msg, "\n");
     }
 }

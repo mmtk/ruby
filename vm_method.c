@@ -4,7 +4,6 @@
 
 #include "id_table.h"
 #include "yjit.h"
-#include "rjit.h"
 
 #define METHOD_DEBUG 0
 
@@ -123,7 +122,6 @@ vm_cme_invalidate(rb_callable_method_entry_t *cme)
     RB_DEBUG_COUNTER_INC(cc_cme_invalidate);
 
     rb_yjit_cme_invalidate(cme);
-    rb_rjit_cme_invalidate(cme);
 }
 
 static int
@@ -149,7 +147,6 @@ rb_clear_constant_cache_for_id(ID id)
     }
 
     rb_yjit_constant_state_changed(id);
-    rb_rjit_constant_state_changed(id);
 }
 
 static void
@@ -188,7 +185,6 @@ clear_method_cache_by_id_in_class(VALUE klass, ID mid)
         if (cc_tbl && rb_id_table_lookup(cc_tbl, mid, &ccs_data)) {
             struct rb_class_cc_entries *ccs = (struct rb_class_cc_entries *)ccs_data;
             rb_yjit_cme_invalidate((rb_callable_method_entry_t *)ccs->cme);
-            rb_rjit_cme_invalidate((rb_callable_method_entry_t *)ccs->cme);
             if (NIL_P(ccs->cme->owner)) invalidate_negative_cache(mid);
             rb_vm_ccs_free(ccs);
             rb_id_table_delete(cc_tbl, mid);
@@ -201,9 +197,6 @@ clear_method_cache_by_id_in_class(VALUE klass, ID mid)
             VALUE cme;
             if (rb_yjit_enabled_p && rb_id_table_lookup(cm_tbl, mid, &cme)) {
                 rb_yjit_cme_invalidate((rb_callable_method_entry_t *)cme);
-            }
-            if (rb_rjit_enabled && rb_id_table_lookup(cm_tbl, mid, &cme)) {
-                rb_rjit_cme_invalidate((rb_callable_method_entry_t *)cme);
             }
             rb_id_table_delete(cm_tbl, mid);
             RB_DEBUG_COUNTER_INC(cc_invalidate_leaf_callable);
@@ -518,14 +511,13 @@ static void
 rb_method_definition_release(rb_method_definition_t *def)
 {
     if (def != NULL) {
-        const int reference_count = def->reference_count;
-        def->reference_count--;
+        const unsigned int reference_count_was = RUBY_ATOMIC_FETCH_SUB(def->reference_count, 1);
 
-        VM_ASSERT(reference_count >= 0);
+        RUBY_ASSERT_ALWAYS(reference_count_was != 0);
 
-        if (def->reference_count == 0) {
-            if (METHOD_DEBUG) fprintf(stderr, "-%p-%s:%d (remove)\n", (void *)def,
-                                      rb_id2name(def->original_id), def->reference_count);
+        if (reference_count_was == 1) {
+            if (METHOD_DEBUG) fprintf(stderr, "-%p-%s:1->0 (remove)\n", (void *)def,
+                                      rb_id2name(def->original_id));
             if (def->type == VM_METHOD_TYPE_BMETHOD && def->body.bmethod.hooks) {
                 xfree(def->body.bmethod.hooks);
             }
@@ -533,7 +525,7 @@ rb_method_definition_release(rb_method_definition_t *def)
         }
         else {
             if (METHOD_DEBUG) fprintf(stderr, "-%p-%s:%d->%d (dec)\n", (void *)def, rb_id2name(def->original_id),
-                                      reference_count, def->reference_count);
+                                      reference_count_was, reference_count_was - 1);
         }
     }
 }
@@ -621,9 +613,13 @@ setup_method_cfunc_struct(rb_method_cfunc_t *cfunc, VALUE (*func)(ANYARGS), int 
 static rb_method_definition_t *
 method_definition_addref(rb_method_definition_t *def, bool complemented)
 {
-    if (!complemented &&  def->reference_count > 0) def->aliased = true;
-    def->reference_count++;
-    if (METHOD_DEBUG) fprintf(stderr, "+%p-%s:%d\n", (void *)def, rb_id2name(def->original_id), def->reference_count);
+    unsigned int reference_count_was = RUBY_ATOMIC_FETCH_ADD(def->reference_count, 1);
+    if (!complemented && reference_count_was > 0) {
+        /* TODO: A Ractor can reach this via UnboundMethod#bind */
+        def->aliased = true;
+    }
+    if (METHOD_DEBUG) fprintf(stderr, "+%p-%s:%d->%d\n", (void *)def, rb_id2name(def->original_id), reference_count_was, reference_count_was+1);
+
     return def;
 }
 

@@ -108,7 +108,6 @@
 #include "internal/thread.h"
 #include "internal/variable.h"
 #include "internal/warnings.h"
-#include "rjit.h"
 #include "probes.h"
 #include "regint.h"
 #include "ruby/debug.h"
@@ -627,14 +626,14 @@ typedef struct gc_function_map {
     // Bootup
     void *(*objspace_alloc)(void);
     void (*objspace_init)(void *objspace_ptr);
-    void (*objspace_free)(void *objspace_ptr);
     void *(*ractor_cache_alloc)(void *objspace_ptr, void *ractor);
-    void (*ractor_cache_free)(void *objspace_ptr, void *cache);
     void (*set_params)(void *objspace_ptr);
     void (*init)(void);
     size_t *(*heap_sizes)(void *objspace_ptr);
     // Shutdown
     void (*shutdown_free_objects)(void *objspace_ptr);
+    void (*objspace_free)(void *objspace_ptr);
+    void (*ractor_cache_free)(void *objspace_ptr, void *cache);
     // GC
     void (*start)(void *objspace_ptr, bool full_mark, bool immediate_mark, bool immediate_sweep, bool compact);
     bool (*during_gc_p)(void *objspace_ptr);
@@ -696,7 +695,7 @@ typedef struct gc_function_map {
     VALUE (*stat_heap)(void *objspace_ptr, VALUE heap_name, VALUE hash_or_sym);
     const char *(*active_gc_name)(void);
     // Miscellaneous
-    size_t (*obj_flags)(void *objspace_ptr, VALUE obj, ID* flags, size_t max);
+    struct rb_gc_object_metadata_entry *(*object_metadata)(void *objspace_ptr, VALUE obj);
     bool (*pointer_to_heap_p)(void *objspace_ptr, const void *ptr);
     bool (*garbage_object_p)(void *objspace_ptr, VALUE obj);
     void (*set_event_hook)(void *objspace_ptr, const rb_event_flag_t event);
@@ -804,14 +803,14 @@ ruby_modular_gc_init(void)
     // Bootup
     load_modular_gc_func(objspace_alloc);
     load_modular_gc_func(objspace_init);
-    load_modular_gc_func(objspace_free);
     load_modular_gc_func(ractor_cache_alloc);
-    load_modular_gc_func(ractor_cache_free);
     load_modular_gc_func(set_params);
     load_modular_gc_func(init);
     load_modular_gc_func(heap_sizes);
     // Shutdown
     load_modular_gc_func(shutdown_free_objects);
+    load_modular_gc_func(objspace_free);
+    load_modular_gc_func(ractor_cache_free);
     // GC
     load_modular_gc_func(start);
     load_modular_gc_func(during_gc_p);
@@ -873,7 +872,7 @@ ruby_modular_gc_init(void)
     load_modular_gc_func(stat_heap);
     load_modular_gc_func(active_gc_name);
     // Miscellaneous
-    load_modular_gc_func(obj_flags);
+    load_modular_gc_func(object_metadata);
     load_modular_gc_func(pointer_to_heap_p);
     load_modular_gc_func(garbage_object_p);
     load_modular_gc_func(set_event_hook);
@@ -887,14 +886,14 @@ ruby_modular_gc_init(void)
 // Bootup
 # define rb_gc_impl_objspace_alloc rb_gc_functions.objspace_alloc
 # define rb_gc_impl_objspace_init rb_gc_functions.objspace_init
-# define rb_gc_impl_objspace_free rb_gc_functions.objspace_free
 # define rb_gc_impl_ractor_cache_alloc rb_gc_functions.ractor_cache_alloc
-# define rb_gc_impl_ractor_cache_free rb_gc_functions.ractor_cache_free
 # define rb_gc_impl_set_params rb_gc_functions.set_params
 # define rb_gc_impl_init rb_gc_functions.init
 # define rb_gc_impl_heap_sizes rb_gc_functions.heap_sizes
 // Shutdown
 # define rb_gc_impl_shutdown_free_objects rb_gc_functions.shutdown_free_objects
+# define rb_gc_impl_objspace_free rb_gc_functions.objspace_free
+# define rb_gc_impl_ractor_cache_free rb_gc_functions.ractor_cache_free
 // GC
 # define rb_gc_impl_start rb_gc_functions.start
 # define rb_gc_impl_during_gc_p rb_gc_functions.during_gc_p
@@ -956,7 +955,7 @@ ruby_modular_gc_init(void)
 # define rb_gc_impl_stat_heap rb_gc_functions.stat_heap
 # define rb_gc_impl_active_gc_name rb_gc_functions.active_gc_name
 // Miscellaneous
-# define rb_gc_impl_obj_flags rb_gc_functions.obj_flags
+# define rb_gc_impl_object_metadata rb_gc_functions.object_metadata
 # define rb_gc_impl_pointer_to_heap_p rb_gc_functions.pointer_to_heap_p
 # define rb_gc_impl_garbage_object_p rb_gc_functions.garbage_object_p
 # define rb_gc_impl_set_event_hook rb_gc_functions.set_event_hook
@@ -2712,6 +2711,9 @@ rb_gc_mark_roots(void *objspace, const char **categoryp)
     MARK_CHECKPOINT("machine_context");
     mark_current_machine_context(ec);
 
+    MARK_CHECKPOINT("global_symbols");
+    rb_sym_global_symbols_mark();
+
     MARK_CHECKPOINT("finish");
 
 #undef MARK_CHECKPOINT
@@ -3085,11 +3087,10 @@ rb_gc_active_gc_name(void)
     return gc_name;
 }
 
-// TODO: rearchitect this function to work for a generic GC
-size_t
-rb_obj_gc_flags(VALUE obj, ID* flags, size_t max)
+struct rb_gc_object_metadata_entry *
+rb_gc_object_metadata(VALUE obj)
 {
-    return rb_gc_impl_obj_flags(rb_gc_get_objspace(), obj, flags, max);
+    return rb_gc_impl_object_metadata(rb_gc_get_objspace(), obj);
 }
 
 /* GC */
@@ -3597,6 +3598,8 @@ vm_weak_table_gen_ivar_foreach_too_complex_i(st_data_t _key, st_data_t value, st
 
     GC_ASSERT(!iter_data->weak_only);
 
+    if (SPECIAL_CONST_P((VALUE)value)) return ST_CONTINUE;
+
     return iter_data->callback((VALUE)value, iter_data->data);
 }
 
@@ -3773,8 +3776,7 @@ rb_gc_update_vm_references(void *objspace)
 
     rb_vm_update_references(vm);
     rb_gc_update_global_tbl();
-    global_symbols.ids = gc_location_internal(objspace, global_symbols.ids);
-    global_symbols.dsymbol_fstr_hash = gc_location_internal(objspace, global_symbols.dsymbol_fstr_hash);
+    rb_sym_global_symbols_update_references();
 
 #if USE_YJIT
     void rb_yjit_root_update_references(void); // in Rust

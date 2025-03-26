@@ -35,7 +35,6 @@ extern int madvise(caddr_t, size_t, int);
 #include "internal/sanitizers.h"
 #include "internal/warnings.h"
 #include "ruby/fiber/scheduler.h"
-#include "rjit.h"
 #include "yjit.h"
 #include "vm_core.h"
 #include "vm_sync.h"
@@ -552,6 +551,9 @@ fiber_pool_expand(struct fiber_pool * fiber_pool, size_t count)
             VirtualFree(allocation->base, 0, MEM_RELEASE);
             rb_raise(rb_eFiberError, "can't set a guard page: %s", ERRNOMSG);
         }
+#elif defined(__wasi__)
+        // wasi-libc's mprotect emulation doesn't support PROT_NONE.
+        (void)page;
 #else
         if (mprotect(page, RB_PAGE_SIZE, PROT_NONE) < 0) {
             munmap(allocation->base, count*stride);

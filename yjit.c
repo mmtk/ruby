@@ -16,7 +16,6 @@
 #include "internal/fixnum.h"
 #include "internal/numeric.h"
 #include "internal/gc.h"
-#include "internal/vm.h"
 #include "vm_core.h"
 #include "vm_callinfo.h"
 #include "builtin.h"
@@ -42,7 +41,6 @@
 // Field offsets for the RObject struct
 enum robject_offsets {
     ROBJECT_OFFSET_AS_HEAP_IVPTR = offsetof(struct RObject, as.heap.ivptr),
-    ROBJECT_OFFSET_AS_HEAP_IV_INDEX_TBL = offsetof(struct RObject, as.heap.iv_index_tbl),
     ROBJECT_OFFSET_AS_ARY = offsetof(struct RObject, as.ary),
 };
 
@@ -95,11 +93,6 @@ rb_yjit_mark_executable(void *mem_block, uint32_t mem_size)
         rb_bug("Couldn't make JIT page (%p, %lu bytes) executable, errno: %s",
             mem_block, (unsigned long)mem_size, strerror(errno));
     }
-}
-
-uint64_t
-rb_yjit_vm_insns_count(void) {
-    return rb_vm_insns_count;
 }
 
 // Free the specified memory block.
@@ -1257,7 +1250,7 @@ VALUE rb_yjit_insns_compiled(rb_execution_context_t *ec, VALUE self, VALUE iseq)
 VALUE rb_yjit_code_gc(rb_execution_context_t *ec, VALUE self);
 VALUE rb_yjit_simulate_oom_bang(rb_execution_context_t *ec, VALUE self);
 VALUE rb_yjit_get_exit_locations(rb_execution_context_t *ec, VALUE self);
-VALUE rb_yjit_enable(rb_execution_context_t *ec, VALUE self, VALUE gen_stats, VALUE print_stats, VALUE gen_compilation_log, VALUE print_compilation_log);
+VALUE rb_yjit_enable(rb_execution_context_t *ec, VALUE self, VALUE gen_stats, VALUE print_stats, VALUE gen_compilation_log, VALUE print_compilation_log, VALUE mem_size, VALUE call_threshold);
 VALUE rb_yjit_c_builtin_p(rb_execution_context_t *ec, VALUE self);
 
 // Allow YJIT_C_BUILTIN macro to force --yjit-c-builtin
