@@ -1729,6 +1729,7 @@ MMTk_RubyUpcalls ruby_upcalls = {
     rb_mmtk_scan_end_proc_roots,
     rb_mmtk_scan_global_tbl_roots,
     rb_mmtk_scan_yjit_roots,
+    rb_mmtk_scan_global_symbols_roots,
     rb_mmtk_scan_finalizer_tbl_roots,
     rb_mmtk_scan_obj_to_id_tbl_roots,
     rb_mmtk_scan_misc_roots,

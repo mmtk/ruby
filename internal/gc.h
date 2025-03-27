@@ -232,6 +232,7 @@ void rb_mmtk_scan_vm_roots(void);
 void rb_mmtk_scan_end_proc_roots(void);
 void rb_mmtk_scan_global_tbl_roots(void);
 void rb_mmtk_scan_yjit_roots(void);
+void rb_mmtk_scan_global_symbols_roots(void);
 void rb_mmtk_scan_finalizer_tbl_roots(void);
 void rb_mmtk_scan_obj_to_id_tbl_roots(void);
 void rb_mmtk_scan_misc_roots(void);

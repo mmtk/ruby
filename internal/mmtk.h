@@ -70,6 +70,7 @@ typedef struct MMTk_RubyUpcalls {
     void (*scan_end_proc_roots)(void);
     void (*scan_global_tbl_roots)(void);
     void (*scan_yjit_roots)(void);
+    void (*scan_global_symbols_roots)(void);
     void (*scan_finalizer_tbl_roots)(void);
     void (*scan_obj_to_id_tbl_roots)(void);
     void (*scan_misc_roots)(void);
@@ -273,4 +274,4 @@ void mmtk_enumerate_objects(void (*callback)(MMTk_ObjectReference, void*), void 
 
 bool mmtk_hidden_header_is_sane(const struct MMTk_HiddenHeader *hidden_header);
 
-#endif /* MMTK_H */
+#endif  /* MMTK_H */

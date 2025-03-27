@@ -2755,6 +2755,12 @@ rb_mmtk_scan_yjit_roots(void)
     }
 #endif
 }
+
+void
+rb_mmtk_scan_global_symbols_roots(void)
+{
+    rb_sym_global_symbols_mark();
+}
 #endif
 
 #define TYPED_DATA_REFS_OFFSET_LIST(d) (size_t *)(uintptr_t)RTYPEDDATA(d)->type->function.dmark
