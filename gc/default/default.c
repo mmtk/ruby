@@ -6864,20 +6864,27 @@ rb_gc_impl_object_metadata(void *objspace_ptr, VALUE obj)
     n++; \
 } while (0)
 
-    // This function is only called from `objspace_dump.c`.
-    // In MMTk, these bitmaps are not prepared.  Accessing them will result in crash.
-    // MMTk has its own metadata, such as marking bits and pinning bits,
+    // MMTk note: MMTk has its own way to decide if an object is wb-protected, so we can still dump it.
+    if (!RVALUE_WB_UNPROTECTED(objspace, obj)) SET_ENTRY(wb_protected, Qtrue);
+
+    // When using MMTk, these bitmaps from the default GC are not prepared.
+    // Accessing them will result in crash.
+    // MMTk has its own metadata, such as marking bits and forwarding bits,
     // but those metadata are specific to GC algorithms not exposed to mutators.
     WHEN_NOT_USING_MMTK({
-    if (!RVALUE_WB_UNPROTECTED(objspace, obj)) SET_ENTRY(wb_protected, Qtrue);
     SET_ENTRY(age, INT2FIX(RVALUE_AGE_GET(obj)));
     if (RVALUE_OLD_P(objspace, obj)) SET_ENTRY(old, Qtrue);
     if (RVALUE_UNCOLLECTIBLE(objspace, obj)) SET_ENTRY(uncollectible, Qtrue);
     if (RVALUE_MARKING(objspace, obj)) SET_ENTRY(marking, Qtrue);
     if (RVALUE_MARKED(objspace, obj)) SET_ENTRY(marked, Qtrue);
+    // MMTk note: MMTk does have pinning bits, but we only use it to handle PPPs.
+    // Therefore pinning bits are always unset during mutator time.
+    // We mostly rely on conservative stack scanning to pin objects if needed to interact with native code.
     if (RVALUE_PINNED(objspace, obj)) SET_ENTRY(pinned, Qtrue);
-    if (FL_TEST(obj, FL_SEEN_OBJ_ID)) SET_ENTRY(object_id, rb_obj_id(obj));
     })
+
+    // MMTk note: We still reuse the obj ID mechanism of the default GC, so we can still dump it.
+    if (FL_TEST(obj, FL_SEEN_OBJ_ID)) SET_ENTRY(object_id, rb_obj_id(obj));
 
     object_metadata_entries[n].name = 0;
     object_metadata_entries[n].val = 0;
