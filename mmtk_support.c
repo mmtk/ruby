@@ -672,17 +672,15 @@ rb_mmtk_is_initially_ppp(VALUE obj)
 static bool
 rb_mmtk_is_no_longer_ppp(MMTk_ObjectReference objref)
 {
+    // We no longer have any objects that become non-PPP during execution.
+    // But we keep this function just in case any use cases appear again in the future.
+
     VALUE obj = (VALUE)objref;
     RUBY_ASSERT(!rb_special_const_p(obj));
 
     switch (RB_BUILTIN_TYPE(obj)) {
       case T_IMEMO:
         switch (imemo_type(obj)) {
-          case imemo_iseq: {
-            if (rb_mmtk_iseq_is_no_longer_ppp((rb_iseq_t*)obj)) {
-                return true;
-            }
-          }
           default:
             break;
         }

@@ -452,20 +452,6 @@ rb_iseq_mark_and_move(rb_iseq_t *iseq, bool reference_updating)
     RUBY_MARK_LEAVE("iseq");
 }
 
-#if USE_MMTK
-void rb_mmtk_iseq_register_ppp(rb_iseq_t *iseq)
-{
-    WHEN_USING_MMTK({
-        rb_mmtk_register_ppp((VALUE)iseq);
-    })
-}
-
-bool rb_mmtk_iseq_is_no_longer_ppp(rb_iseq_t *iseq)
-{
-    return !FL_TEST_RAW((VALUE)iseq, ISEQ_USE_COMPILE_DATA);
-}
-#endif
-
 static size_t
 param_keyword_size(const struct rb_iseq_param_keyword *pkw)
 {

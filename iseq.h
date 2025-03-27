@@ -147,11 +147,6 @@ struct iseq_compile_data {
 #endif
 };
 
-#if USE_MMTK
-void rb_mmtk_iseq_register_ppp(rb_iseq_t *iseq);
-bool rb_mmtk_iseq_is_no_longer_ppp(rb_iseq_t *iseq);
-#endif
-
 static inline struct iseq_compile_data *
 ISEQ_COMPILE_DATA(const rb_iseq_t *iseq)
 {
@@ -168,10 +163,6 @@ ISEQ_COMPILE_DATA_ALLOC(rb_iseq_t *iseq)
 {
     iseq->aux.compile_data = ZALLOC(struct iseq_compile_data);
     iseq->flags |= ISEQ_USE_COMPILE_DATA;
-
-#if USE_MMTK
-    rb_mmtk_iseq_register_ppp(iseq);
-#endif
 }
 
 static inline void
