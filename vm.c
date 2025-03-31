@@ -50,6 +50,13 @@
 #include "probes.h"
 #include "probes_helper.h"
 
+#if USE_MMTK
+#include "internal/mmtk_support.h"
+#endif
+
+// Conditional compilation macros for MMTk.
+#include "internal/mmtk_macros.h"
+
 #ifdef RUBY_ASSERT_CRITICAL_SECTION
 int ruby_assert_critical_section_entered = 0;
 #endif
@@ -4308,6 +4315,14 @@ Init_BareVM(void)
     vm->constant_cache = rb_id_table_create(0);
     vm->unused_block_warning_table = st_init_numtable();
 
+    WHEN_USING_MMTK({
+        // We initialize MMTk before we initialize the main ractor.
+        // When creating a ractor, it will bind mutator.
+        // We pass NULL as the tls because `Collection::spawn_gc_thread` in the mmtk-ruby binding does not use it anyway.
+        mmtk_initialize_collection(NULL);
+        // Note: GC is disabled at this moment.
+    })
+
     // setup main thread
     th->nt = ZALLOC(struct rb_native_thread);
     th->vm = vm;
@@ -4323,17 +4338,6 @@ Init_BareVM(void)
     // setup ractor system
     rb_native_mutex_initialize(&vm->ractor.sync.lock);
     rb_native_cond_initialize(&vm->ractor.sync.terminate_cond);
-
-#if USE_MMTK
-    if (rb_mmtk_enabled_p()) {
-        // The threading system is ready.  Initialize collection.
-        mmtk_initialize_collection(th);
-        // Bind the main thread.
-        rb_mmtk_bind_mutator(th);
-        // Temporarily disable GC.
-        mmtk_disable_collection();
-    }
-#endif
 
     vm_opt_method_def_table = st_init_numtable();
     vm_opt_mid_table = st_init_numtable();

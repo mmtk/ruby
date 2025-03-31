@@ -178,7 +178,22 @@ typedef struct ractor_newobj_heap_cache {
 typedef struct ractor_newobj_cache {
     size_t incremental_mark_step_allocated_slots;
     rb_ractor_newobj_heap_cache_t heap_caches[HEAP_COUNT];
+
+#if USE_MMTK
+    // Embed the MMTk-specific mutator-local structure into the ractor cache.
+    // We are converging to the design of mmtk.c GC module.
+    // Eventually the fields of rb_mmtk_mutator_local will be in MMTk_ractor_cache.
+    struct rb_mmtk_mutator_local mutator_local;
+#endif
 } rb_ractor_newobj_cache_t;
+
+#if USE_MMTK
+struct rb_mmtk_mutator_local*
+rb_mmtk_ractor_cache_get_mutator_local(rb_ractor_newobj_cache_t *ractor_cache)
+{
+    return &ractor_cache->mutator_local;
+}
+#endif
 
 typedef struct {
     size_t heap_init_slots[HEAP_COUNT];
@@ -2270,6 +2285,10 @@ rb_gc_impl_source_location_cstr(int *ptr)
 static inline VALUE
 newobj_init(VALUE klass, VALUE flags, int wb_protected, rb_objspace_t *objspace, VALUE obj)
 {
+    WHEN_USING_MMTK({
+        rb_bug("newobj_init should not be called when using MMTk.");
+    })
+
 #if !__has_feature(memory_sanitizer)
     GC_ASSERT(BUILTIN_TYPE(obj) == T_NONE);
     GC_ASSERT((flags & FL_WB_PROTECTED) == 0);
@@ -2277,22 +2296,10 @@ newobj_init(VALUE klass, VALUE flags, int wb_protected, rb_objspace_t *objspace,
     RBASIC(obj)->flags = flags;
     *((VALUE *)&RBASIC(obj)->klass) = klass;
 
-#if USE_MMTK
-    // MMTk uses its own way to distinguish young objects from old objects.
-    if (!rb_mmtk_enabled_p()) {
     int t = flags & RUBY_T_MASK;
     if (t == T_CLASS || t == T_MODULE || t == T_ICLASS) {
         RVALUE_AGE_SET_CANDIDATE(objspace, obj);
     }
-    }
-#endif
-
-#if USE_MMTK
-    if (rb_mmtk_enabled_p()) {
-        rb_mmtk_maybe_register_initial_obj_free_candidate(obj);
-        rb_mmtk_maybe_register_initial_ppp(obj);
-    }
-#endif
 
 #if RACTOR_CHECK_MODE
     void rb_ractor_setup_belonging(VALUE obj);
@@ -2317,15 +2324,7 @@ newobj_init(VALUE klass, VALUE flags, int wb_protected, rb_objspace_t *objspace,
 #endif
 
     if (RB_UNLIKELY(wb_protected == FALSE)) {
-#if USE_MMTK
-        if (rb_mmtk_enabled_p()) {
-            mmtk_register_wb_unprotected_object((MMTk_ObjectReference)obj);
-        } else {
-#endif
         MARK_IN_BITMAP(GET_HEAP_WB_UNPROTECTED_BITS(obj), obj);
-#if USE_MMTK
-        }
-#endif
     }
 
 #if RGENGC_PROFILE
@@ -2625,28 +2624,6 @@ newobj_slowpath_wb_unprotected(VALUE klass, VALUE flags, rb_objspace_t *objspace
     return newobj_slowpath(klass, flags, objspace, cache, FALSE, heap_idx);
 }
 
-#if USE_MMTK
-// Allocate an object, bypassing size pool check.
-static inline VALUE
-rb_mmtk_newobj_of_inner(VALUE klass, VALUE flags, int wb_protected, size_t payload_size)
-{
-    rb_objspace_t *objspace = rb_gc_get_objspace();
-
-    size_t prefix_size = rb_mmtk_prefix_size();
-    size_t suffix_size = rb_mmtk_suffix_size();
-
-    // We prepend a size field before the object.
-    size_t mmtk_alloc_size = payload_size + prefix_size + suffix_size;
-
-    // Allocate the object.
-    VALUE obj = rb_mmtk_alloc_obj(mmtk_alloc_size, payload_size, prefix_size);
-
-    // Finally, do the rest of Ruby-level initialization.
-    return newobj_init(klass, flags, wb_protected, objspace, obj);
-}
-#endif
-
-
 VALUE
 rb_gc_impl_new_obj(void *objspace_ptr, void *cache_ptr, VALUE klass, VALUE flags, VALUE v1, VALUE v2, VALUE v3, bool wb_protected, size_t alloc_size)
 {
@@ -2664,8 +2641,7 @@ rb_gc_impl_new_obj(void *objspace_ptr, void *cache_ptr, VALUE klass, VALUE flags
 
     size_t heap_idx = heap_idx_for_size(alloc_size);
 
-#if USE_MMTK
-    if (rb_mmtk_enabled_p()) {
+    WHEN_USING_MMTK({
         // FIXME: Currently, types that uses VWA asks the GC for the object size (rb_gc_obj_slot_size).
         // It is only convenient to implement for size-segregated free-list allocators which
         // Ruby currently implements. However, for high-performance bump-pointer allcators,
@@ -2682,12 +2658,10 @@ rb_gc_impl_new_obj(void *objspace_ptr, void *cache_ptr, VALUE klass, VALUE flags
         // Please keep in mind that this is only a temporary solution.
 
         // We first calculate the object size if the object were allocated using Ruby's own GC.
-        size_t payload_size = heap_slot_size(heap_idx);
-        RUBY_ASSERT(payload_size % MMTK_MIN_OBJ_ALIGN == 0);
-
-        obj = rb_mmtk_newobj_of_inner(klass, flags, wb_protected, payload_size);
-    } else {
-#endif
+        size_t size_pool_size = heap_slot_size(heap_idx);
+        RUBY_ASSERT(size_pool_size % MMTK_MIN_OBJ_ALIGN == 0);
+        return rb_mmtk_new_obj(objspace_ptr, cache_ptr, klass, flags, v1, v2, v3, wb_protected, alloc_size, size_pool_size);
+    })
 
     rb_ractor_newobj_cache_t *cache = (rb_ractor_newobj_cache_t *)cache_ptr;
 
@@ -2703,10 +2677,6 @@ rb_gc_impl_new_obj(void *objspace_ptr, void *cache_ptr, VALUE klass, VALUE flags
           newobj_slowpath_wb_protected(klass, flags, objspace, cache, heap_idx) :
           newobj_slowpath_wb_unprotected(klass, flags, objspace, cache, heap_idx);
     }
-
-#if USE_MMTK
-    }
-#endif
 
     return newobj_fill(obj, v1, v2, v3);
 }
@@ -6684,7 +6654,7 @@ rb_gc_impl_writebarrier(void *objspace_ptr, VALUE a, VALUE b)
     }
 #endif
     if (rb_mmtk_enabled_p() && rb_mmtk_use_barrier) {
-        mmtk_object_reference_write_post(GET_THREAD()->mutator, (MMTk_ObjectReference)a);
+        rb_mmtk_object_reference_write_post(rb_mmtk_get_mutator_local(), (MMTk_ObjectReference)a);
         return;
     }
 #endif
@@ -6813,7 +6783,7 @@ rb_gc_impl_writebarrier_remember(void *objspace_ptr, VALUE obj)
     }
 #endif
     if (rb_mmtk_enabled_p() && rb_mmtk_use_barrier) {
-        mmtk_object_reference_write_post(GET_THREAD()->mutator, (MMTk_ObjectReference)obj);
+        rb_mmtk_object_reference_write_post(rb_mmtk_get_mutator_local(), (MMTk_ObjectReference)obj);
         return;
     }
 #endif
@@ -6900,7 +6870,14 @@ rb_gc_impl_ractor_cache_alloc(void *objspace_ptr, void *ractor)
 
     objspace->live_ractor_cache_count++;
 
-    return calloc1(sizeof(rb_ractor_newobj_cache_t));
+    void *result = calloc1(sizeof(rb_ractor_newobj_cache_t));
+
+    WHEN_USING_MMTK({
+        rb_ractor_newobj_cache_t *ractor_cache = (rb_ractor_newobj_cache_t*)result;
+        rb_mmtk_bind_mutator(ractor, ractor_cache);
+    })
+
+    return result;
 }
 
 void
@@ -10548,12 +10525,6 @@ rb_mmtk_get_vanilla_times(uint64_t *mark, uint64_t *sweep)
     rb_objspace_t *objspace = rb_gc_get_objspace();
     *mark = objspace->profile.marking_time_ns;
     *sweep = objspace->profile.sweeping_time_ns;
-}
-
-VALUE
-rb_mmtk_newobj_raw(VALUE klass, VALUE flags, int wb_protected, size_t payload_size)
-{
-    return rb_mmtk_newobj_of_inner(klass, flags, wb_protected, payload_size);
 }
 
 void

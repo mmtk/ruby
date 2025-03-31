@@ -32,6 +32,28 @@ typedef struct {
     VALUE ary[]; // The actual content.
 } rb_mmtk_objbuf_t;
 
+#define RB_MMTK_VALUES_BUFFER_SIZE 4096
+
+struct rb_mmtk_values_buffer {
+    VALUE objects[RB_MMTK_VALUES_BUFFER_SIZE];
+    size_t len;
+};
+
+// Mutator-local things.
+struct rb_mmtk_mutator_local {
+    MMTk_Mutator *mutator;
+    struct BumpPointer *immix_bump_pointer;
+    // for prefetching
+    uintptr_t last_new_cursor;
+    // for prefetching
+    uintptr_t last_meta_addr;
+    struct rb_mmtk_values_buffer obj_free_candidates;
+    struct rb_mmtk_values_buffer ppp_buffer;
+};
+
+typedef struct rb_ractor_struct rb_ractor_t; // defined in ractor_core.h
+typedef struct ractor_newobj_cache rb_ractor_newobj_cache_t; // Defined in default.c
+
 // Write barrier
 extern bool rb_mmtk_use_barrier;
 
@@ -43,13 +65,18 @@ RUBY_SYMBOL_EXPORT_BEGIN
 bool rb_mmtk_enabled_p(void);
 RUBY_SYMBOL_EXPORT_END
 
+// Helper functions
+struct rb_mmtk_mutator_local* rb_mmtk_get_mutator_local();
+struct rb_mmtk_mutator_local* rb_mmtk_ractor_get_mutator_local(rb_ractor_t *ractor);
+struct rb_mmtk_mutator_local* rb_mmtk_ractor_cache_get_mutator_local(rb_ractor_newobj_cache_t *ractor_cache); // defined in default.c
+
 // Initialization
-void rb_mmtk_bind_mutator(MMTk_VMMutatorThread cur_thread);
+void rb_mmtk_bind_mutator(rb_ractor_t *ractor, rb_ractor_newobj_cache_t *ractor_cache);
 void rb_mmtk_main_thread_init(void);
 
 // Flushing and de-initialization
-void rb_mmtk_flush_mutator_local_buffers(MMTk_VMMutatorThread thread);
-void rb_mmtk_destroy_mutator(MMTk_VMMutatorThread cur_thread, bool at_fork);
+void rb_mmtk_flush_mutator_local_buffers(rb_ractor_newobj_cache_t *ractor_cache);
+void rb_mmtk_destroy_mutator(rb_ractor_newobj_cache_t *ractor_cache, bool at_fork);
 
 // Object layout
 size_t rb_mmtk_prefix_size(void);
@@ -58,7 +85,11 @@ void rb_mmtk_init_hidden_header(VALUE object, size_t payload_size);
 size_t rb_mmtk_get_payload_size(VALUE object);
 
 // Allocation
-VALUE rb_mmtk_alloc_obj(size_t mmtk_alloc_size, size_t size_pool_size, size_t prefix_size);
+VALUE
+rb_mmtk_new_obj(void *objspace_ptr, void *cache_ptr, VALUE klass, VALUE flags, VALUE v1, VALUE v2, VALUE v3, bool wb_protected, size_t alloc_size, size_t size_pool_size);
+
+// Write barrier
+void rb_mmtk_object_reference_write_post(struct rb_mmtk_mutator_local *local, MMTk_ObjectReference object);
 
 // Tracing
 void rb_mmtk_mark_movable(VALUE obj);
@@ -68,12 +99,10 @@ bool rb_mmtk_object_moved_p(VALUE obj);
 VALUE rb_mmtk_maybe_forward(VALUE object);
 
 // PPP support
-void rb_mmtk_register_ppp(VALUE obj);
-void rb_mmtk_maybe_register_initial_ppp(VALUE obj);
+void rb_mmtk_register_ppp(struct rb_mmtk_mutator_local *local, VALUE obj);
 
 // Finalization and exiting
-void rb_mmtk_register_obj_free_candidate(VALUE obj);
-void rb_mmtk_maybe_register_initial_obj_free_candidate(VALUE obj);
+void rb_mmtk_register_obj_free_candidate(struct rb_mmtk_mutator_local *local, VALUE obj);
 void rb_mmtk_call_obj_free_on_exit(void);
 
 bool rb_gc_obj_free_on_exit_started(void);

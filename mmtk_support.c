@@ -129,29 +129,16 @@ struct rb_mmtk_address_buffer {
     size_t capa;
 };
 
-#define RB_MMTK_VALUES_BUFFER_SIZE 4096
-
-struct rb_mmtk_values_buffer {
-    VALUE objects[RB_MMTK_VALUES_BUFFER_SIZE];
-    size_t len;
-};
-
-struct rb_mmtk_mutator_local {
-    struct BumpPointer *immix_bump_pointer;
-    // for prefetching
-    uintptr_t last_new_cursor;
-    // for prefetching
-    uintptr_t last_meta_addr;
-    struct rb_mmtk_values_buffer obj_free_candidates;
-    struct rb_mmtk_values_buffer ppp_buffer;
-};
-
 #ifdef RB_THREAD_LOCAL_SPECIFIER
 RB_THREAD_LOCAL_SPECIFIER struct MMTk_GCThreadTLS *rb_mmtk_gc_thread_tls;
-RB_THREAD_LOCAL_SPECIFIER struct rb_mmtk_mutator_local rb_mmtk_mutator_local;
 #else // RB_THREAD_LOCAL_SPECIFIER
 #error We currently need language-supported TLS
 #endif // RB_THREAD_LOCAL_SPECIFIER
+
+
+////////////////////////////////////////////////////////////////////////////////
+// Helper functions
+////////////////////////////////////////////////////////////////////////////////
 
 static void
 rb_mmtk_use_mmtk_global(void (*func)(void *), void* arg)
@@ -190,6 +177,29 @@ rb_mmtk_values_buffer_clear(struct rb_mmtk_values_buffer *buffer)
     memset(buffer->objects, 0, sizeof(buffer->objects));
 }
 
+// Temporary assertion that panicks if there are multiple ractors.
+// TODO: We should have proper ractor support like the mmtk.c GC module.
+static void
+rb_mmtk_panic_if_multiple_ractor(const char *msg)
+{
+    if (rb_multi_ractor_p()) {
+        fprintf(stderr, "Panic: %s is not implememted for multiple ractors.\n", msg);
+        abort();
+    }
+}
+
+struct rb_mmtk_mutator_local*
+rb_mmtk_get_mutator_local()
+{
+    return rb_mmtk_ractor_get_mutator_local(GET_RACTOR());
+}
+
+struct rb_mmtk_mutator_local*
+rb_mmtk_ractor_get_mutator_local(rb_ractor_t *ractor)
+{
+    return rb_mmtk_ractor_cache_get_mutator_local(ractor->newobj_cache);
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // Query for enabled/disabled.
 ////////////////////////////////////////////////////////////////////////////////
@@ -205,14 +215,15 @@ rb_mmtk_enabled_p(void)
 ////////////////////////////////////////////////////////////////////////////////
 
 void
-rb_mmtk_bind_mutator(MMTk_VMMutatorThread cur_thread)
+rb_mmtk_bind_mutator(rb_ractor_t *ractor, rb_ractor_newobj_cache_t *ractor_cache)
 {
-    MMTk_Mutator *mutator = mmtk_bind_mutator((MMTk_VMMutatorThread)cur_thread);
+    // Note: The `ractor` instance is still being initialized.
+    struct rb_mmtk_mutator_local *mutator_local = rb_mmtk_ractor_cache_get_mutator_local(ractor_cache);
+    memset(mutator_local, 0, sizeof(struct rb_mmtk_mutator_local));
 
-    cur_thread->mutator = mutator;
-    cur_thread->mutator_local = (void*)&rb_mmtk_mutator_local;
-
-    rb_mmtk_mutator_local.immix_bump_pointer = (struct BumpPointer*)((char*)mutator + mmtk_get_immix_bump_ptr_offset());
+    MMTk_Mutator *mutator = mmtk_bind_mutator((MMTk_VMMutatorThread)ractor);
+    mutator_local->mutator = mutator;
+    mutator_local->immix_bump_pointer = (struct BumpPointer*)((char*)mutator + mmtk_get_immix_bump_ptr_offset());
 }
 
 static size_t
@@ -351,32 +362,33 @@ static void rb_mmtk_flush_obj_free_candidates(struct rb_mmtk_values_buffer *buff
 static void rb_mmtk_flush_ppp_buffer(struct rb_mmtk_values_buffer *buffer);
 
 void
-rb_mmtk_flush_mutator_local_buffers(MMTk_VMMutatorThread thread)
+rb_mmtk_flush_mutator_local_buffers(rb_ractor_newobj_cache_t *ractor_cache)
 {
-    struct rb_mmtk_mutator_local *local = (struct rb_mmtk_mutator_local*)thread->mutator_local;
+    struct rb_mmtk_mutator_local *local = rb_mmtk_ractor_cache_get_mutator_local(ractor_cache);
     rb_mmtk_flush_obj_free_candidates(&local->obj_free_candidates);
     rb_mmtk_flush_ppp_buffer(&local->ppp_buffer);
 }
 
 void
-rb_mmtk_destroy_mutator(MMTk_VMMutatorThread cur_thread, bool at_fork)
+rb_mmtk_destroy_mutator(rb_ractor_newobj_cache_t *ractor_cache, bool at_fork)
 {
+    struct rb_mmtk_mutator_local *local = rb_mmtk_ractor_cache_get_mutator_local(ractor_cache);
+
     if (!at_fork) {
         // A thread only destroys its own mutator when it exits normally (not at fork).
         // But after forking, only the forking thread continue to live in the child process.
         // The living thread will call this function to close the mutators of all dead threads.
         // So we skip the assertions at fork.
-        RUBY_ASSERT(cur_thread == GET_THREAD());
-        RUBY_ASSERT(cur_thread->mutator_local == &rb_mmtk_mutator_local);
+        // RUBY_ASSERT(cur_thread == GET_THREAD());
+        // RUBY_ASSERT(cur_thread->mutator_local == &rb_mmtk_mutator_local);
     }
 
-    rb_mmtk_flush_mutator_local_buffers(cur_thread);
+    rb_mmtk_flush_mutator_local_buffers(ractor_cache);
 
-    MMTk_Mutator *mutator = cur_thread->mutator;
+    MMTk_Mutator *mutator = local->mutator;
     mmtk_destroy_mutator(mutator);
 
-    cur_thread->mutator = NULL;
-    cur_thread->mutator_local = NULL;
+    local->mutator = NULL;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -428,9 +440,8 @@ rb_mmtk_get_payload_size(VALUE object)
 ////////////////////////////////////////////////////////////////////////////////
 
 static void*
-rb_mmtk_immix_alloc_fast_bump_pointer(size_t size)
+rb_mmtk_immix_alloc_fast_bump_pointer(struct rb_mmtk_mutator_local *local, size_t size)
 {
-    struct rb_mmtk_mutator_local *local = &rb_mmtk_mutator_local;
     // TODO: verify the usefulness of this prefetching.
     PREFETCH((void*)local->last_new_cursor, 1);
     PREFETCH((void*)local->last_meta_addr, 1);
@@ -455,18 +466,18 @@ rb_mmtk_immix_alloc_fast_bump_pointer(size_t size)
 
 /// Wrap mmtk_alloc, but use fast path if possible.
 static void*
-rb_mmtk_alloc(size_t size, MMTk_AllocationSemantics semantics)
+rb_mmtk_alloc(struct rb_mmtk_mutator_local *local, size_t size, MMTk_AllocationSemantics semantics)
 {
     if (semantics == MMTK_ALLOCATION_SEMANTICS_DEFAULT && rb_mmtk_plan_uses_bump_pointer) {
         // Try the fast path.
-        void *fast_result = rb_mmtk_immix_alloc_fast_bump_pointer(size);
+        void *fast_result = rb_mmtk_immix_alloc_fast_bump_pointer(local, size);
         if (fast_result != NULL) {
             return fast_result;
         }
     }
 
     // Fall back to the slow path.
-    void *result = mmtk_alloc(GET_THREAD()->mutator, size, MMTK_MIN_OBJ_ALIGN, 0, semantics);
+    void *result = mmtk_alloc(local->mutator, size, MMTK_MIN_OBJ_ALIGN, 0, semantics);
 
     return result;
 }
@@ -475,7 +486,7 @@ rb_mmtk_alloc(size_t size, MMTk_AllocationSemantics semantics)
 #define RB_MMTK_VO_BIT_SET_NON_ATOMIC true
 
 static void
-rb_mmtk_post_alloc_fast_immix(VALUE obj)
+rb_mmtk_post_alloc_fast_immix(struct rb_mmtk_mutator_local *local, VALUE obj)
 {
     uintptr_t obj_addr = obj;
     uintptr_t region_offset = obj_addr >> mmtk_vo_bit_log_region_size;
@@ -492,40 +503,109 @@ rb_mmtk_post_alloc_fast_immix(VALUE obj)
         // When GC is triggered, the handshake between GC and mutator provides synchronization.
         atomic_fetch_or_explicit(meta_byte_ptr, byte, memory_order_relaxed);
     }
-    rb_mmtk_mutator_local.last_meta_addr = meta_byte_address;
+    local->last_meta_addr = meta_byte_address;
 }
 
 /// Wrap mmtk_post_alloc, but use fast path if possible.
 static void
-rb_mmtk_post_alloc(VALUE obj, size_t mmtk_alloc_size, MMTk_AllocationSemantics semantics)
+rb_mmtk_post_alloc(struct rb_mmtk_mutator_local *local, VALUE obj, size_t mmtk_alloc_size, MMTk_AllocationSemantics semantics)
 {
     if (RB_MMTK_USE_POST_ALLOC_FAST_PATH && semantics == MMTK_ALLOCATION_SEMANTICS_DEFAULT && rb_mmtk_plan_is_immix) {
-        rb_mmtk_post_alloc_fast_immix(obj);
+        rb_mmtk_post_alloc_fast_immix(local, obj);
     } else {
         // Call post_alloc.  This will initialize GC-specific metadata.
-        mmtk_post_alloc(GET_THREAD()->mutator, (void*)obj, mmtk_alloc_size, semantics);
+        mmtk_post_alloc(local->mutator, (void*)obj, mmtk_alloc_size, semantics);
     }
 }
 
-VALUE
-rb_mmtk_alloc_obj(size_t mmtk_alloc_size, size_t size_pool_size, size_t prefix_size)
+static VALUE
+rb_mmtk_alloc_obj(struct rb_mmtk_mutator_local *local, size_t alloc_size)
 {
+    size_t prefix_size = rb_mmtk_prefix_size();
+    size_t suffix_size = rb_mmtk_suffix_size();
+    size_t mmtk_alloc_size = alloc_size + prefix_size + suffix_size;
+
     MMTk_AllocationSemantics semantics = mmtk_alloc_size <= MMTK_MAX_IMMIX_OBJECT_SIZE ? MMTK_ALLOCATION_SEMANTICS_DEFAULT
                                        : MMTK_ALLOCATION_SEMANTICS_LOS;
 
     // Allocate the object.
-    void *addr = rb_mmtk_alloc(mmtk_alloc_size, semantics);
+    void *addr = rb_mmtk_alloc(local, mmtk_alloc_size, semantics);
 
     // The Ruby-level object reference (i.e. VALUE) is at an offset from the MMTk-level
     // allocation unit.
     VALUE obj = (VALUE)addr + prefix_size;
 
     // Store the Ruby-level object size before the object.
-    rb_mmtk_init_hidden_header(obj, size_pool_size);
+    rb_mmtk_init_hidden_header(obj, alloc_size);
 
-    rb_mmtk_post_alloc(obj, mmtk_alloc_size, semantics);
+    rb_mmtk_post_alloc(local, obj, mmtk_alloc_size, semantics);
+
+#if RACTOR_CHECK_MODE
+    void rb_ractor_setup_belonging(VALUE obj);
+    rb_ractor_setup_belonging(obj);
+#endif
 
     return obj;
+}
+
+
+static void rb_mmtk_maybe_register_initial_obj_free_candidate(struct rb_mmtk_mutator_local *local, VALUE obj);
+static void rb_mmtk_maybe_register_initial_ppp(struct rb_mmtk_mutator_local *local, VALUE obj);
+
+// Use this to allocate imemo:mmtk_strbuf or imemo:mmtk_objbuf.
+VALUE
+rb_mmtk_new_obj_raw(struct rb_mmtk_mutator_local *local, VALUE klass, VALUE flags, int wb_protected, size_t alloc_size)
+{
+    VALUE obj = rb_mmtk_alloc_obj(local, alloc_size);
+
+    VALUE *alloc_obj = (VALUE*)obj;
+    alloc_obj[0] = flags;
+    alloc_obj[1] = klass;
+
+    return obj;
+}
+
+// Use this to allocate any other Ruby objects.
+// Copied from mmtk.c, with lots of modification.
+VALUE
+rb_mmtk_new_obj(void *objspace_ptr, void *cache_ptr, VALUE klass, VALUE flags, VALUE v1, VALUE v2, VALUE v3, bool wb_protected, size_t alloc_size, size_t size_pool_size)
+{
+    #define MMTK_ALLOCATION_SEMANTICS_DEFAULT 0
+    // struct objspace *objspace = objspace_ptr;
+    struct rb_mmtk_mutator_local *local = rb_mmtk_ractor_cache_get_mutator_local((rb_ractor_newobj_cache_t*)cache_ptr);
+
+    // if (objspace->gc_stress) {
+    //     mmtk_handle_user_collection_request(ractor_cache, false, false);
+    // }
+
+    // The size pool size of default.c is a bit subtle when ractor checking mode is enabled.
+    // We just let default.c work out the size pool size and we shall allocate that size.
+    VALUE obj = rb_mmtk_new_obj_raw(local, klass, flags, wb_protected, size_pool_size);
+
+    VALUE *alloc_obj = (VALUE*)obj;
+    if (alloc_size > 16) alloc_obj[2] = v1;
+    if (alloc_size > 24) alloc_obj[3] = v2;
+    if (alloc_size > 32) alloc_obj[4] = v3;
+
+    rb_mmtk_maybe_register_initial_obj_free_candidate(local, obj);
+    rb_mmtk_maybe_register_initial_ppp(local, obj);
+
+    if (RB_UNLIKELY(wb_protected == FALSE)) {
+        mmtk_register_wb_unprotected_object((MMTk_ObjectReference)obj);
+    }
+
+    // objspace->total_allocated_objects++;
+
+    return obj;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Write barrier
+////////////////////////////////////////////////////////////////////////////////
+void
+rb_mmtk_object_reference_write_post(struct rb_mmtk_mutator_local *local, MMTk_ObjectReference object)
+{
+    mmtk_object_reference_write_post(local->mutator, object);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -700,23 +780,23 @@ rb_mmtk_flush_ppp_buffer(struct rb_mmtk_values_buffer *buffer)
 }
 
 void
-rb_mmtk_register_ppp(VALUE obj)
+rb_mmtk_register_ppp(struct rb_mmtk_mutator_local *local, VALUE obj)
 {
     RUBY_ASSERT(!rb_special_const_p(obj));
 
-    struct rb_mmtk_values_buffer *buffer = &rb_mmtk_mutator_local.ppp_buffer;
+    struct rb_mmtk_values_buffer *buffer = &local->ppp_buffer;
     if (rb_mmtk_values_buffer_append(buffer, obj)) {
         rb_mmtk_flush_ppp_buffer(buffer);
     }
 }
 
-void
-rb_mmtk_maybe_register_initial_ppp(VALUE obj)
+static void
+rb_mmtk_maybe_register_initial_ppp(struct rb_mmtk_mutator_local *local, VALUE obj)
 {
     RUBY_ASSERT(!rb_special_const_p(obj));
 
     if (rb_mmtk_is_initially_ppp(obj)) {
-        rb_mmtk_register_ppp(obj);
+        rb_mmtk_register_ppp(local, obj);
     }
 }
 
@@ -733,7 +813,7 @@ rb_mmtk_flush_obj_free_candidates(struct rb_mmtk_values_buffer *buffer)
 }
 
 void
-rb_mmtk_register_obj_free_candidate(VALUE obj)
+rb_mmtk_register_obj_free_candidate(struct rb_mmtk_mutator_local *local, VALUE obj)
 {
     RUBY_DEBUG_LOG("Object registered for obj_free: %p: %s %s",
         (void*)obj,
@@ -743,7 +823,7 @@ rb_mmtk_register_obj_free_candidate(VALUE obj)
         rb_class2name(rb_obj_class(obj))
         );
 
-    struct rb_mmtk_values_buffer *buffer = &rb_mmtk_mutator_local.obj_free_candidates;
+    struct rb_mmtk_values_buffer *buffer = &local->obj_free_candidates;
     if (rb_mmtk_values_buffer_append(buffer, obj)) {
         rb_mmtk_flush_obj_free_candidates(buffer);
     }
@@ -829,11 +909,11 @@ rb_mmtk_is_initial_obj_free_candidate(VALUE obj)
     UNREACHABLE;
 }
 
-void
-rb_mmtk_maybe_register_initial_obj_free_candidate(VALUE obj)
+static void
+rb_mmtk_maybe_register_initial_obj_free_candidate(struct rb_mmtk_mutator_local *local, VALUE obj)
 {
     if (rb_mmtk_is_initial_obj_free_candidate(obj)) {
-        rb_mmtk_register_obj_free_candidate(obj);
+        rb_mmtk_register_obj_free_candidate(local, obj);
     }
 }
 
@@ -912,20 +992,13 @@ rb_mmtk_call_obj_free_on_exit(void)
     rb_mmtk_call_obj_free_for_each_on_exit((VALUE*)registered_candidates.ptr, registered_candidates.len);
     mmtk_free_raw_vec_of_obj_ref(registered_candidates);
 
+    // TODO: Fix the code below and iterate over all live ractors.
+    rb_mmtk_panic_if_multiple_ractor(__FUNCTION__);
+
     rb_ractor_t *main_ractor = GET_VM()->ractor.main_ractor;
-    rb_thread_t *th = NULL;
-    ccan_list_for_each(&main_ractor->threads.set, th, lt_node) {
-        // Ruby caches native threads on some platforms,
-        // and the rb_thread_t structs can be reused while a thread is cached.
-        // Currently we destroy the mutator and the mutator_local structs when a thread exits.
-        if (th->mutator != NULL) {
-            struct rb_mmtk_mutator_local *local = (struct rb_mmtk_mutator_local*)th->mutator_local;
-            struct rb_mmtk_values_buffer *buffer = &local->obj_free_candidates;
-            rb_mmtk_call_obj_free_for_each_on_exit(buffer->objects, buffer->len);
-        } else {
-            RUBY_ASSERT(th->mutator_local == NULL);
-        }
-    }
+    struct rb_mmtk_mutator_local *local = rb_mmtk_ractor_cache_get_mutator_local(main_ractor->newobj_cache);
+    struct rb_mmtk_values_buffer *buffer = &local->obj_free_candidates;
+    rb_mmtk_call_obj_free_for_each_on_exit(buffer->objects, buffer->len);
 }
 
 bool
@@ -1145,7 +1218,7 @@ rb_mmtk_new_strbuf(size_t capa)
     if (payload_size % MMTK_MIN_OBJ_ALIGN != 0) {
         payload_size = (payload_size + MMTK_MIN_OBJ_ALIGN - 1) & ~(MMTK_MIN_OBJ_ALIGN - 1);
     }
-    VALUE obj = rb_mmtk_newobj_raw(capa, flags, true, payload_size);
+    VALUE obj = rb_mmtk_new_obj_raw(rb_mmtk_get_mutator_local(), capa, flags, true, payload_size);
     return (rb_mmtk_strbuf_t*)obj;
 }
 
@@ -1209,7 +1282,7 @@ rb_mmtk_new_objbuf(size_t capa)
     if (payload_size % MMTK_MIN_OBJ_ALIGN != 0) {
         payload_size = (payload_size + MMTK_MIN_OBJ_ALIGN - 1) & ~(MMTK_MIN_OBJ_ALIGN - 1);
     }
-    VALUE obj = rb_mmtk_newobj_raw(capa, flags, true, payload_size);
+    VALUE obj = rb_mmtk_new_obj_raw(rb_mmtk_get_mutator_local(), capa, flags, true, payload_size);
     return (rb_mmtk_objbuf_t*)obj;
 }
 
@@ -1421,15 +1494,6 @@ rb_mmtk_assert_mutator(void)
     RUBY_ASSERT_MESG(rb_mmtk_is_mutator(), "The current thread is not a mutator (i.e. Ruby thread)");
 }
 
-static void
-rb_mmtk_panic_if_multiple_ractor(const char *msg)
-{
-    if (rb_multi_ractor_p()) {
-        fprintf(stderr, "Panic: %s is not implememted for multiple ractors.\n", msg);
-        abort();
-    }
-}
-
 bool
 rb_mmtk_is_valid_objref(VALUE obj)
 {
@@ -1597,18 +1661,11 @@ rb_mmtk_block_for_gc(MMTk_VMMutatorThread tls)
 {
     rb_mmtk_assert_mutator();
 
+    // TODO: Fix the code below and iterate over all live ractors.
+    rb_mmtk_panic_if_multiple_ractor(__FUNCTION__);
+
     rb_ractor_t *main_ractor = GET_VM()->ractor.main_ractor;
-    rb_thread_t *th = NULL;
-    ccan_list_for_each(&main_ractor->threads.set, th, lt_node) {
-        // Ruby caches native threads on some platforms,
-        // and the rb_thread_t structs can be reused while a thread is cached.
-        // Currently we destroy the mutator and the mutator_local structs when a thread exits.
-        if (th->mutator != NULL) {
-            rb_mmtk_flush_mutator_local_buffers(th);
-        } else {
-            RUBY_ASSERT(th->mutator_local == NULL);
-        }
-    }
+    rb_mmtk_flush_mutator_local_buffers(main_ractor->newobj_cache);
 
     rb_thread_t *cur_th = GET_THREAD();
     RB_VM_SAVE_MACHINE_CONTEXT(cur_th);
@@ -1624,19 +1681,12 @@ rb_mmtk_get_mutators(void (*visit_mutator)(MMTk_Mutator *mutator, void *data), v
     rb_mmtk_assert_mmtk_worker();
     rb_mmtk_panic_if_multiple_ractor(__FUNCTION__);
 
-    rb_ractor_t *main_ractor = GET_VM()->ractor.main_ractor;
+    // TODO: Fix the code below and iterate over all live ractors.
+    rb_mmtk_panic_if_multiple_ractor(__FUNCTION__);
 
-    rb_thread_t *th = NULL;
-    ccan_list_for_each(&main_ractor->threads.set, th, lt_node) {
-        // Ruby caches native threads on some platforms,
-        // and the rb_thread_t structs can be reused while a thread is cached.
-        // Currently we destroy the mutator and the mutator_local structs when a thread exits.
-        if (th->mutator != NULL) {
-            visit_mutator(th->mutator, data);
-        } else {
-            RUBY_ASSERT(th->mutator_local == NULL);
-        }
-    }
+    rb_ractor_t *main_ractor = GET_VM()->ractor.main_ractor;
+    struct rb_mmtk_mutator_local *mutator_local = rb_mmtk_ractor_cache_get_mutator_local(main_ractor->newobj_cache);
+    visit_mutator(mutator_local->mutator, data);
 }
 
 static void
@@ -1658,18 +1708,11 @@ rb_mmtk_number_of_mutators(void)
 }
 
 static void
-rb_mmtk_scan_roots_in_mutator_thread(MMTk_VMMutatorThread mutator, MMTk_VMWorkerThread worker)
+rb_mmtk_scan_roots_in_mutator_thread(MMTk_VMMutatorThread vm_mutator, MMTk_VMWorkerThread worker)
 {
     rb_mmtk_assert_mmtk_worker();
 
-    rb_thread_t *thread = mutator;
-    rb_execution_context_t *ec = thread->ec;
-
-    RUBY_DEBUG_LOG("[Worker: %p] We will scan thread root for thread: %p, ec: %p", worker, thread, ec);
-
-    rb_execution_context_mark(ec);
-
-    RUBY_DEBUG_LOG("[Worker: %p] Finished scanning thread for thread: %p, ec: %p", worker, thread, ec);
+    // We don't really need to do anything because all ractors and stacks are reachable from rb_vm_t.
 }
 
 static void*

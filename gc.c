@@ -1082,7 +1082,7 @@ rb_data_object_wrap(VALUE klass, void *datap, RUBY_DATA_FUNC dmark, RUBY_DATA_FU
     VALUE result = newobj_of(GET_RACTOR(), klass, T_DATA, (VALUE)dmark, (VALUE)dfree, (VALUE)datap, !dmark, sizeof(struct RTypedData));
     WHEN_USING_MMTK({
         // Conservatively consider all RData as candidates of obj_free.
-        rb_mmtk_register_obj_free_candidate(result);
+        rb_mmtk_register_obj_free_candidate(rb_mmtk_get_mutator_local(), result);
     })
     return result;
 }
@@ -1112,7 +1112,7 @@ typed_data_alloc(VALUE klass, VALUE typed_flag, void *datap, const rb_data_type_
         bool using_default_free = type->function.dfree == RUBY_TYPED_DEFAULT_FREE;
         if (!(is_embedded && using_default_free)) {
             // Embedded objects using default free do not need obj_free.
-            rb_mmtk_register_obj_free_candidate(result);
+            rb_mmtk_register_obj_free_candidate(rb_mmtk_get_mutator_local(), result);
         }
     })
     return result;
