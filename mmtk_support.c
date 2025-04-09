@@ -1,17 +1,16 @@
 #include "ruby/internal/config.h"
 
+#include "gc/gc.h"
 #include "internal.h"
 #include "internal/cmdlineopt.h"
 #include "internal/gc.h"
 #include "internal/imemo.h"
 #include "internal/thread.h"
 #include "internal/variable.h"
-#include "iseq.h"
 #include "ruby/ruby.h"
 #include "ractor_core.h"
 #include "vm_core.h"
 #include "ruby/st.h"
-#include "vm_sync.h"
 #ifndef _WIN32
 #include "stdatomic.h"
 #endif
@@ -113,13 +112,13 @@ struct RubyMMTKGlobal {
     pthread_mutex_t mutex;
     pthread_cond_t cond_world_stopped;
     pthread_cond_t cond_world_started;
-    size_t stopped_ractors;
+    bool world_stopped;
     size_t start_the_world_count;
 } rb_mmtk_global = {
     .mutex = PTHREAD_MUTEX_INITIALIZER,
     .cond_world_stopped = PTHREAD_COND_INITIALIZER,
     .cond_world_started = PTHREAD_COND_INITIALIZER,
-    .stopped_ractors = 0,
+    .world_stopped = false,
     .start_the_world_count = 0,
 };
 
@@ -175,17 +174,6 @@ rb_mmtk_values_buffer_clear(struct rb_mmtk_values_buffer *buffer)
 
     // Just to be safe.
     memset(buffer->objects, 0, sizeof(buffer->objects));
-}
-
-// Temporary assertion that panicks if there are multiple ractors.
-// TODO: We should have proper ractor support like the mmtk.c GC module.
-static void
-rb_mmtk_panic_if_multiple_ractor(const char *msg)
-{
-    if (rb_multi_ractor_p()) {
-        fprintf(stderr, "Panic: %s is not implememted for multiple ractors.\n", msg);
-        abort();
-    }
 }
 
 struct rb_mmtk_mutator_local*
@@ -992,13 +980,17 @@ rb_mmtk_call_obj_free_on_exit(void)
     rb_mmtk_call_obj_free_for_each_on_exit((VALUE*)registered_candidates.ptr, registered_candidates.len);
     mmtk_free_raw_vec_of_obj_ref(registered_candidates);
 
-    // TODO: Fix the code below and iterate over all live ractors.
-    rb_mmtk_panic_if_multiple_ractor(__FUNCTION__);
+    rb_vm_t *vm = GET_VM();
+    rb_ractor_t *ractor;
 
-    rb_ractor_t *main_ractor = GET_VM()->ractor.main_ractor;
-    struct rb_mmtk_mutator_local *local = rb_mmtk_ractor_cache_get_mutator_local(main_ractor->newobj_cache);
-    struct rb_mmtk_values_buffer *buffer = &local->obj_free_candidates;
-    rb_mmtk_call_obj_free_for_each_on_exit(buffer->objects, buffer->len);
+    ccan_list_for_each(&vm->ractor.set, ractor, vmlr_node) {
+        // ractor.set only contains blocking or running ractors
+        GC_ASSERT(rb_ractor_status_p(ractor, ractor_blocking) ||
+                  rb_ractor_status_p(ractor, ractor_running));
+        struct rb_mmtk_mutator_local *local = rb_mmtk_ractor_get_mutator_local(ractor);
+        struct rb_mmtk_values_buffer *buffer = &local->obj_free_candidates;
+        rb_mmtk_call_obj_free_for_each_on_exit(buffer->objects, buffer->len);
+    }
 }
 
 bool
@@ -1590,9 +1582,8 @@ rb_mmtk_get_gc_thread_tls(void)
 static void
 rb_mmtk_wait_until_ractors_stopped(void *unused)
 {
-    while (rb_mmtk_global.stopped_ractors < 1) {
-        RUBY_DEBUG_LOG("Will wait for 1 ractor to stop. cur: %zu, expected: %zu",
-                rb_mmtk_global.stopped_ractors, (size_t)1);
+    while (!rb_mmtk_global.world_stopped) {
+        RUBY_DEBUG_LOG("Waiting for the world to stop...");
         pthread_cond_wait(&rb_mmtk_global.cond_world_stopped, &rb_mmtk_global.mutex);
     }
 }
@@ -1601,12 +1592,10 @@ static void
 rb_mmtk_stop_the_world(MMTk_VMWorkerThread _tls)
 {
     rb_mmtk_assert_mmtk_worker();
-    rb_mmtk_panic_if_multiple_ractor(__FUNCTION__);
 
-    // We assume there is only one ractor.
-    // Then the only cause of stop the world is allocation failure.
-    // We wait until the only ractor has stopped.
-
+    // CRuby uses VM barrier to do STW.  But only one CRuby ractor can stop other CRuby ractors.
+    // We let `rb_mmtk_block_for_gc` initiate the STW.
+    // Here we just wait for the world to come to a stop.
     rb_mmtk_use_mmtk_global(rb_mmtk_wait_until_ractors_stopped, NULL);
 
     rb_mmtk_set_during_gc(true);
@@ -1624,7 +1613,6 @@ static void
 rb_mmtk_resume_mutators(MMTk_VMWorkerThread tls)
 {
     rb_mmtk_assert_mmtk_worker();
-    rb_mmtk_panic_if_multiple_ractor(__FUNCTION__);
 
     rb_mmtk_set_during_gc(false);
 
@@ -1634,24 +1622,22 @@ rb_mmtk_resume_mutators(MMTk_VMWorkerThread tls)
 static void
 rb_mmtk_block_for_gc_internal(void *unused)
 {
-    // Increment the stopped ractor count
-    rb_mmtk_global.stopped_ractors++;
-    if (rb_mmtk_global.stopped_ractors == 1) {
-        RUBY_DEBUG_LOG("The only ractor has stopped.  Notify the GC thread.");
-        pthread_cond_broadcast(&rb_mmtk_global.cond_world_stopped);
-    }
+    // Mark that the world has stopped, and notify the GC worker thread.
+    rb_mmtk_global.world_stopped = true;
+    pthread_cond_broadcast(&rb_mmtk_global.cond_world_stopped);
 
     // Wait for GC end
     size_t my_count = rb_mmtk_global.start_the_world_count;
+    size_t next_count = my_count + 1;
 
-    while (rb_mmtk_global.start_the_world_count < my_count + 1) {
-        RUBY_DEBUG_LOG("Will wait for cond. cur: %zu, expected: %zu",
-                rb_mmtk_global.start_the_world_count, my_count + 1);
+    while (rb_mmtk_global.start_the_world_count < next_count) {
+        RUBY_DEBUG_LOG("Will wait until world start again. cur: %zu, expected: %zu",
+                rb_mmtk_global.start_the_world_count, next_count);
         pthread_cond_wait(&rb_mmtk_global.cond_world_started, &rb_mmtk_global.mutex);
     }
 
-    // Decrement the stopped ractor count
-    rb_mmtk_global.stopped_ractors--;
+    // Mark that the world has started.
+    rb_mmtk_global.world_stopped = false;
 
     RUBY_DEBUG_LOG("GC finished.");
 }
@@ -1661,15 +1647,52 @@ rb_mmtk_block_for_gc(MMTk_VMMutatorThread tls)
 {
     rb_mmtk_assert_mutator();
 
-    // TODO: Fix the code below and iterate over all live ractors.
-    rb_mmtk_panic_if_multiple_ractor(__FUNCTION__);
-
-    rb_ractor_t *main_ractor = GET_VM()->ractor.main_ractor;
-    rb_mmtk_flush_mutator_local_buffers(main_ractor->newobj_cache);
-
+    // Save the execution context of the current thread.
+    // Other threads in the current mutator should have saved their contexts before they go to sleep.
     rb_thread_t *cur_th = GET_THREAD();
     RB_VM_SAVE_MACHINE_CONTEXT(cur_th);
-    rb_mmtk_use_mmtk_global(rb_mmtk_block_for_gc_internal, NULL);
+
+    // Get the start-the-world count.
+    // It is thread-safe because the count is only mutated by a GC worker when all mutators stopped.
+    size_t my_count = rb_mmtk_global.start_the_world_count;
+
+    // Acquire the VM lock.
+    // Note that the current ractor may not be the only mutator that requests GC.
+    // The first mutator reached here will acquire the lock and initiate the VM barrier.
+    // Subsequent mutators reached here will block until the GC finishes.
+    int lock_lev = rb_gc_vm_lock();
+
+    if (rb_mmtk_global.start_the_world_count == my_count) {
+        // If the GC count is the same, we are the first mutator reached here.
+
+        // Execute GC event hooks.
+        // TODO: Should we do this when other Ractors have reached the VM barrier?
+        rb_gc_event_hook(0, RUBY_INTERNAL_EVENT_GC_START);
+
+        // Stop other Ractors.
+        rb_gc_vm_barrier();
+        // By the time we reach here, other Ractors have stopped, attempting to acquire the VM lock.
+
+        // Flush ractor-local (mutator-local) buffers.
+        {
+            rb_vm_t *vm = GET_VM();
+            rb_ractor_t *ractor;
+            ccan_list_for_each(&vm->ractor.set, ractor, vmlr_node) {
+                // ractor.set only contains blocking or running ractors
+                GC_ASSERT(rb_ractor_status_p(ractor, ractor_blocking) ||
+                        rb_ractor_status_p(ractor, ractor_running));
+                rb_mmtk_flush_mutator_local_buffers(ractor->newobj_cache);
+            }
+        }
+
+        // Notify GC worker and wait for GC to finish.
+        rb_mmtk_use_mmtk_global(rb_mmtk_block_for_gc_internal, NULL);
+        // By the time we reach here, the GC has finished.
+    }
+
+    // Release the VM lock.
+    // Other Ractors will continue from rb_gc_vm_lock and find that the GC has finished.
+    rb_gc_vm_unlock(lock_lev);
 
     // Trigger postponed job so that a mutator will start running pending final jobs soon.
     rb_mmtk_gc_finalize_deferred_register();
@@ -1679,14 +1702,17 @@ static void
 rb_mmtk_get_mutators(void (*visit_mutator)(MMTk_Mutator *mutator, void *data), void *data)
 {
     rb_mmtk_assert_mmtk_worker();
-    rb_mmtk_panic_if_multiple_ractor(__FUNCTION__);
 
-    // TODO: Fix the code below and iterate over all live ractors.
-    rb_mmtk_panic_if_multiple_ractor(__FUNCTION__);
+    rb_vm_t *vm = GET_VM();
+    rb_ractor_t *ractor;
 
-    rb_ractor_t *main_ractor = GET_VM()->ractor.main_ractor;
-    struct rb_mmtk_mutator_local *mutator_local = rb_mmtk_ractor_cache_get_mutator_local(main_ractor->newobj_cache);
-    visit_mutator(mutator_local->mutator, data);
+    ccan_list_for_each(&vm->ractor.set, ractor, vmlr_node) {
+        // ractor.set only contains blocking or running ractors
+        GC_ASSERT(rb_ractor_status_p(ractor, ractor_blocking) ||
+                  rb_ractor_status_p(ractor, ractor_running));
+        struct rb_mmtk_mutator_local *local = rb_mmtk_ractor_get_mutator_local(ractor);
+        visit_mutator(local->mutator, data);
+    }
 }
 
 static void
@@ -1700,7 +1726,6 @@ static size_t
 rb_mmtk_number_of_mutators(void)
 {
     rb_mmtk_assert_mmtk_worker();
-    rb_mmtk_panic_if_multiple_ractor(__FUNCTION__);
 
     size_t counter = 0;
     rb_mmtk_get_mutators(increment_mutator_counter, (void*)&counter);
