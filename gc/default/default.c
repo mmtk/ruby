@@ -2832,7 +2832,15 @@ rb_mmtk_make_finalize_job(VALUE obj, VALUE finalizer_array)
         // obj is technically dead already,
         // but finalizer_table is processed before obj_to_id_table,
         // so the cached ID is still in the table.
-        observed_id = rb_obj_id(obj);
+        // NOTE: Don't call `rb_obj_id()` because it will attempt to acquire the VM lock.
+        // GC worker threads cannot acquire the VM lock.
+        rb_objspace_t *objspace = rb_gc_get_objspace();
+        st_data_t val;
+        if (st_lookup(objspace->obj_to_id_tbl, (st_data_t)obj, &val)) {
+            observed_id = (VALUE)val;
+        } else {
+            rb_bug("Object %p with FL_SEEN_OBJ_ID does not have id in obj_to_id_tbl", (void*)obj);
+        }
     }
 
     job->as.finalize.observed_id = observed_id;
