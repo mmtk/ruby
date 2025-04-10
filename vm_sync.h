@@ -1,6 +1,7 @@
 #ifndef RUBY_VM_SYNC_H
 #define RUBY_VM_SYNC_H
 
+#include "ruby/internal/core/rarray.h"
 #include "vm_debug.h"
 #include "debug_counter.h"
 
@@ -34,6 +35,10 @@ void rb_vm_barrier(void);
 
 RUBY_EXTERN struct rb_ractor_struct *ruby_single_main_ractor; // ractor.c
 
+#if USE_MMTK
+void rb_mmtk_assert_not_acquiring_vm_lock_in_gc_worker();
+#endif
+
 static inline bool
 rb_multi_ractor_p(void)
 {
@@ -51,6 +56,10 @@ rb_multi_ractor_p(void)
 static inline void
 rb_vm_lock(const char *file, int line)
 {
+#if USE_MMTK
+    rb_mmtk_assert_not_acquiring_vm_lock_in_gc_worker();
+#endif
+
     RB_DEBUG_COUNTER_INC(vm_sync_lock);
 
     if (rb_multi_ractor_p()) {
@@ -69,6 +78,10 @@ rb_vm_unlock(const char *file, int line)
 static inline void
 rb_vm_lock_enter(unsigned int *lev, const char *file, int line)
 {
+#if USE_MMTK
+    rb_mmtk_assert_not_acquiring_vm_lock_in_gc_worker();
+#endif
+
     RB_DEBUG_COUNTER_INC(vm_sync_lock_enter);
 
     if (rb_multi_ractor_p()) {
@@ -79,6 +92,10 @@ rb_vm_lock_enter(unsigned int *lev, const char *file, int line)
 static inline void
 rb_vm_lock_enter_nb(unsigned int *lev, const char *file, int line)
 {
+#if USE_MMTK
+    rb_mmtk_assert_not_acquiring_vm_lock_in_gc_worker();
+#endif
+
     RB_DEBUG_COUNTER_INC(vm_sync_lock_enter_nb);
 
     if (rb_multi_ractor_p()) {
@@ -97,6 +114,10 @@ rb_vm_lock_leave(unsigned int *lev, const char *file, int line)
 static inline void
 rb_vm_lock_enter_cr(struct rb_ractor_struct *cr, unsigned int *levp, const char *file, int line)
 {
+#if USE_MMTK
+    rb_mmtk_assert_not_acquiring_vm_lock_in_gc_worker();
+#endif
+
     RB_DEBUG_COUNTER_INC(vm_sync_lock_enter_cr);
     rb_vm_lock_enter_body_cr(cr, levp APPEND_LOCATION_PARAMS);
 }

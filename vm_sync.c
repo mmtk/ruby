@@ -125,6 +125,10 @@ vm_lock_leave(rb_vm_t *vm, unsigned int *lev APPEND_LOCATION_ARGS)
 void
 rb_vm_lock_enter_body(unsigned int *lev APPEND_LOCATION_ARGS)
 {
+#if USE_MMTK
+    rb_mmtk_assert_not_acquiring_vm_lock_in_gc_worker();
+#endif
+
     rb_vm_t *vm = GET_VM();
     if (vm_locked(vm)) {
         vm_lock_enter(NULL, vm, true, false, lev APPEND_LOCATION_PARAMS);
@@ -137,6 +141,10 @@ rb_vm_lock_enter_body(unsigned int *lev APPEND_LOCATION_ARGS)
 void
 rb_vm_lock_enter_body_nb(unsigned int *lev APPEND_LOCATION_ARGS)
 {
+#if USE_MMTK
+    rb_mmtk_assert_not_acquiring_vm_lock_in_gc_worker();
+#endif
+
     rb_vm_t *vm = GET_VM();
     if (vm_locked(vm)) {
         vm_lock_enter(NULL, vm, true, true, lev APPEND_LOCATION_PARAMS);
@@ -149,6 +157,10 @@ rb_vm_lock_enter_body_nb(unsigned int *lev APPEND_LOCATION_ARGS)
 void
 rb_vm_lock_enter_body_cr(rb_ractor_t *cr, unsigned int *lev APPEND_LOCATION_ARGS)
 {
+#if USE_MMTK
+    rb_mmtk_assert_not_acquiring_vm_lock_in_gc_worker();
+#endif
+
     rb_vm_t *vm = GET_VM();
     vm_lock_enter(cr, vm, vm_locked(vm), false, lev APPEND_LOCATION_PARAMS);
 }
@@ -162,6 +174,10 @@ rb_vm_lock_leave_body(unsigned int *lev APPEND_LOCATION_ARGS)
 void
 rb_vm_lock_body(LOCATION_ARGS)
 {
+#if USE_MMTK
+    rb_mmtk_assert_not_acquiring_vm_lock_in_gc_worker();
+#endif
+
     rb_vm_t *vm = GET_VM();
     ASSERT_vm_unlocking();
 
@@ -248,3 +264,14 @@ rb_ec_vm_lock_rec_release(const rb_execution_context_t *ec,
 
     VM_ASSERT(recorded_lock_rec == rb_ec_vm_lock_rec(ec));
 }
+
+#if USE_MMTK
+void rb_mmtk_assert_not_acquiring_vm_lock_in_gc_worker()
+{
+    if (rb_mmtk_enabled_p()) {
+        if (rb_mmtk_is_mmtk_worker()) {
+            rb_bug("MMTk GC worker thread must not acquire VM lock.");
+        }
+    }
+}
+#endif
