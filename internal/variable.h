@@ -57,6 +57,7 @@ RUBY_SYMBOL_EXPORT_BEGIN
 /* variable.c (export) */
 void rb_mark_generic_ivar(VALUE obj);
 #if USE_MMTK
+struct gen_ivtbl *rb_mmtk_gen_ivtbl_get_during_gc(VALUE obj);
 void rb_mmtk_update_generic_ivar(VALUE obj);
 #endif
 VALUE rb_const_missing(VALUE klass, VALUE name);

@@ -1745,12 +1745,7 @@ rb_mmtk_get_original_givtbl(MMTk_ObjectReference object) {
     VALUE obj = (VALUE)object;
 
     RUBY_ASSERT(FL_TEST(obj, FL_EXIVAR));
-    struct gen_ivtbl *ivtbl;
-    if (rb_gen_ivtbl_get(obj, 0, &ivtbl)) {
-        return ivtbl;
-    } else {
-        return NULL;
-    }
+    return rb_mmtk_gen_ivtbl_get_during_gc(obj);
 }
 
 struct st_table *rb_generic_ivtbl_get(void); // Defined in variable.c

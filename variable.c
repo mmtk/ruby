@@ -1178,6 +1178,26 @@ rb_gen_ivtbl_get(VALUE obj, ID id, struct gen_ivtbl **ivtbl)
     return r;
 }
 
+#if USE_MMTK
+// Get the gen ivtbl of an object during GC.
+// When using MMTk, this is called by a GC worker thread during transitive closure.
+// We can't acquire the VM lock in GC worker threads,
+// and we don't need to because we don't modify the generic_iv_tbl_ during transitive closure.
+struct gen_ivtbl *
+rb_mmtk_gen_ivtbl_get_during_gc(VALUE obj)
+{
+    RUBY_ASSERT(!RB_TYPE_P(obj, T_ICLASS));
+
+    st_data_t data;
+
+    if (st_lookup(generic_iv_tbl_, (st_data_t)obj, &data)) {
+        return (struct gen_ivtbl *)data;
+    }
+
+    return NULL;
+}
+#endif
+
 int
 rb_ivar_generic_ivtbl_lookup(VALUE obj, struct gen_ivtbl **ivtbl)
 {
