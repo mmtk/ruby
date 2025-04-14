@@ -2599,7 +2599,13 @@ iseq_set_sequence(rb_iseq_t *iseq, LINK_ANCHOR *const anchor)
     else {
         body->is_entries = NULL;
     }
-    body->call_data = ZALLOC_N(struct rb_call_data, body->ci_size);
+
+    if (body->ci_size) {
+        body->call_data = ZALLOC_N(struct rb_call_data, body->ci_size);
+    }
+    else {
+        body->call_data = NULL;
+    }
     ISEQ_COMPILE_DATA(iseq)->ci_index = 0;
 
     // Calculate the bitmask buffer size.
@@ -10749,7 +10755,7 @@ iseq_compile_each0(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const no
         if (nd_fl_newline(node)) {
             int event = RUBY_EVENT_LINE;
             ISEQ_COMPILE_DATA(iseq)->last_line = line;
-            if (ISEQ_COVERAGE(iseq) && ISEQ_LINE_COVERAGE(iseq)) {
+            if (line > 0 && ISEQ_COVERAGE(iseq) && ISEQ_LINE_COVERAGE(iseq)) {
                 event |= RUBY_EVENT_COVERAGE_LINE;
             }
             ADD_TRACE(ret, event);
@@ -13379,6 +13385,11 @@ ibf_load_ci_entries(const struct ibf_load *load,
                     unsigned int ci_size,
                     struct rb_call_data **cd_ptr)
 {
+    if (!ci_size) {
+        *cd_ptr = NULL;
+        return;
+    }
+
     ibf_offset_t reading_pos = ci_entries_offset;
 
     unsigned int i;

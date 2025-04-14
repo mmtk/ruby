@@ -2255,6 +2255,27 @@ rb_copy_generic_ivar(VALUE clone, VALUE obj)
 }
 
 void
+rb_replace_generic_ivar(VALUE clone, VALUE obj)
+{
+    RUBY_ASSERT(FL_TEST(obj, FL_EXIVAR));
+
+    RB_VM_LOCK_ENTER();
+    {
+        st_data_t ivtbl, obj_data = (st_data_t)obj;
+        if (st_delete(generic_iv_tbl_, &obj_data, &ivtbl)) {
+            FL_UNSET_RAW(obj, FL_EXIVAR);
+
+            st_insert(generic_iv_tbl_, (st_data_t)clone, ivtbl);
+            FL_SET_RAW(clone, FL_EXIVAR);
+        }
+        else {
+            rb_bug("unreachable");
+        }
+    }
+    RB_VM_LOCK_LEAVE();
+}
+
+void
 rb_ivar_foreach(VALUE obj, rb_ivar_foreach_callback_func *func, st_data_t arg)
 {
     if (SPECIAL_CONST_P(obj)) return;
@@ -2700,6 +2721,7 @@ rb_autoload(VALUE module, ID name, const char *feature)
 }
 
 static void const_set(VALUE klass, ID id, VALUE val);
+static void const_added(VALUE klass, ID const_name);
 
 struct autoload_arguments {
     VALUE module;
@@ -2808,7 +2830,7 @@ rb_autoload_str(VALUE module, ID name, VALUE feature)
     VALUE result = rb_mutex_synchronize(autoload_mutex, autoload_synchronized, (VALUE)&arguments);
 
     if (result == Qtrue) {
-        rb_const_added(module, name);
+        const_added(module, name);
     }
 }
 
@@ -3679,8 +3701,8 @@ set_namespace_path(VALUE named_namespace, VALUE namespace_path)
     RB_VM_LOCK_LEAVE();
 }
 
-void
-rb_const_added(VALUE klass, ID const_name)
+static void
+const_added(VALUE klass, ID const_name)
 {
     if (GET_VM()->running) {
         VALUE name = ID2SYM(const_name);
@@ -3756,16 +3778,10 @@ const_set(VALUE klass, ID id, VALUE val)
 }
 
 void
-rb_const_set_raw(VALUE klass, ID id, VALUE val)
-{
-    const_set(klass, id, val);
-}
-
-void
 rb_const_set(VALUE klass, ID id, VALUE val)
 {
     const_set(klass, id, val);
-    rb_const_added(klass, id);
+    const_added(klass, id);
 }
 
 static struct autoload_data *

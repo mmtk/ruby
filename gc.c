@@ -2765,14 +2765,6 @@ rb_mmtk_scan_global_symbols_roots(void)
 #define TYPED_DATA_REFS_OFFSET_LIST(d) (size_t *)(uintptr_t)RTYPEDDATA(d)->type->function.dmark
 
 void
-rb_gc_ractor_moved(VALUE dest, VALUE src)
-{
-    rb_gc_obj_free(rb_gc_get_objspace(), src);
-    MEMZERO((void *)src, char, rb_gc_obj_slot_size(src));
-    RBASIC(src)->flags = T_OBJECT | FL_FREEZE; // Avoid mutations using bind_call, etc.
-}
-
-void
 rb_gc_mark_children(void *objspace, VALUE obj)
 {
     // When using MMTK, we rely on rb_gc_update_object_references to trace generic ivars.

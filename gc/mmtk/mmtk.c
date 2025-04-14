@@ -191,9 +191,7 @@ static void
 rb_mmtk_get_mutators(void (*visit_mutator)(MMTk_Mutator *mutator, void *data), void *data)
 {
     struct objspace *objspace = rb_gc_get_objspace();
-
     struct MMTk_ractor_cache *ractor_cache;
-    RUBY_ASSERT(ractor_cache != NULL);
 
     ccan_list_for_each(&objspace->ractor_caches, ractor_cache, list_node) {
         visit_mutator(ractor_cache->mutator, data);
@@ -203,7 +201,13 @@ rb_mmtk_get_mutators(void (*visit_mutator)(MMTk_Mutator *mutator, void *data), v
 static void
 rb_mmtk_scan_gc_roots(void)
 {
-    // rb_gc_mark_roots(rb_gc_get_objspace(), NULL);
+    struct objspace *objspace = rb_gc_get_objspace();
+
+    // FIXME: Make `rb_gc_mark_roots` aware that the current thread may not have EC.
+    // See: https://github.com/ruby/mmtk/issues/22
+    rb_gc_worker_thread_set_vm_context(&objspace->vm_context);
+    rb_gc_mark_roots(objspace, NULL);
+    rb_gc_worker_thread_unset_vm_context(&objspace->vm_context);
 }
 
 static int
@@ -239,18 +243,6 @@ rb_mmtk_scan_objspace(void)
         }
 
         job = job->next;
-    }
-}
-
-static void
-rb_mmtk_scan_roots_in_mutator_thread(MMTk_VMMutatorThread mutator, MMTk_VMWorkerThread worker)
-{
-    if (mutator->gc_mutator_p) {
-        struct objspace *objspace = rb_gc_get_objspace();
-
-        rb_gc_worker_thread_set_vm_context(&objspace->vm_context);
-        rb_gc_mark_roots(objspace, NULL);
-        rb_gc_worker_thread_unset_vm_context(&objspace->vm_context);
     }
 }
 
@@ -402,7 +394,6 @@ MMTk_RubyUpcalls ruby_upcalls = {
     rb_mmtk_get_mutators,
     rb_mmtk_scan_gc_roots,
     rb_mmtk_scan_objspace,
-    rb_mmtk_scan_roots_in_mutator_thread,
     rb_mmtk_scan_object_ruby_style,
     rb_mmtk_call_gc_mark_children,
     rb_mmtk_call_obj_free,
