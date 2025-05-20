@@ -19,6 +19,7 @@
 #include "internal/cmdlineopt.h"
 #include "internal/mmtk.h"
 #include "internal/mmtk_support.h"
+#include "internal/string.h"
 #endif
 
 #include "internal/bits.h"
@@ -1048,7 +1049,6 @@ struct MMTk_FinalJob {
             void *data;
         } dfree;
         struct {
-            VALUE observed_id;
             VALUE finalizer_array;
         } finalize;
     } as;
@@ -2774,23 +2774,6 @@ rb_mmtk_make_finalize_job(VALUE obj, VALUE finalizer_array)
     RUBY_DEBUG_LOG("Created finalize job %p.  obj: %p, finalizer_array: %p\n",
                    job, (void*)obj, (void*)finalizer_array);
 
-    VALUE observed_id = Qnil;
-    if (FL_TEST(obj, FL_SEEN_OBJ_ID)) {
-        // obj is technically dead already,
-        // but finalizer_table is processed before obj_to_id_table,
-        // so the cached ID is still in the table.
-        // NOTE: Don't call `rb_obj_id()` because it will attempt to acquire the VM lock.
-        // GC worker threads cannot acquire the VM lock.
-        rb_objspace_t *objspace = rb_gc_get_objspace();
-        st_data_t val;
-        if (st_lookup(objspace->obj_to_id_tbl, (st_data_t)obj, &val)) {
-            observed_id = (VALUE)val;
-        } else {
-            rb_bug("Object %p with FL_SEEN_OBJ_ID does not have id in obj_to_id_tbl", (void*)obj);
-        }
-    }
-
-    job->as.finalize.observed_id = observed_id;
     job->as.finalize.finalizer_array = finalizer_array;
 
     rb_mmtk_push_final_job(job);
@@ -3229,8 +3212,10 @@ rb_mmtk_run_final_job(struct MMTk_FinalJob *job)
             break;
         }
         case MMTK_FJOB_FINALIZE: {
-            VALUE objid = job->as.finalize.observed_id;
             VALUE table = job->as.finalize.finalizer_array;
+            // Note: table[0] is the observed ID, and table[a..] are finalizer blocks.
+            // ObjectSpace.define_finalizer forcefully observes the object's ID.
+            VALUE objid = RARRAY_AREF(table, 0);
 
             RUBY_DEBUG_LOG("Running finalize job %p. observed_id: %p, table: %p\n",
                            job, (void*)objid, (void*)table);
@@ -3239,7 +3224,7 @@ rb_mmtk_run_final_job(struct MMTk_FinalJob *job)
                 rb_bug("Finalize job still exists after obj_free on exit has started.");
             }
 
-            rb_gc_run_obj_finalizer(objid, RARRAY_LEN(table), get_final, (void *)table);
+            rb_gc_run_obj_finalizer(objid, RARRAY_LEN(table) - 1, get_final, (void *)table);
 
             break;
         }
@@ -5056,15 +5041,6 @@ rb_mmtk_scan_finalizer_tbl_roots(void)
     if (finalizer_table != NULL) {
         st_foreach(finalizer_table, pin_value, (st_data_t)objspace);
     }
-}
-
-void
-rb_mmtk_scan_obj_to_id_tbl_roots(void)
-{
-    rb_vm_t *vm = GET_VM();
-    rb_objspace_t *objspace = vm->gc.objspace;
-
-    rb_mark_tbl_no_pin(objspace->obj_to_id_tbl); /* Only mark ids */
 }
 
 void
@@ -10248,21 +10224,6 @@ rb_mmtk_on_finalizer_table_delete(st_data_t key, st_data_t value, void *arg)
 }
 
 static void
-rb_mmtk_on_obj_to_id_tbl_delete(st_data_t key, st_data_t value, void *arg)
-{
-#if USE_RUBY_DEBUG_LOG
-    if (RB_FIXNUM_P((VALUE)value)) {
-        RUBY_DEBUG_LOG("Deleting from id_to_obj_tbl: obj=%p, id=%lu)", (void*)key, rb_fix2ulong((VALUE)value));
-    } else {
-        RUBY_DEBUG_LOG("Deleting from id_to_obj_tbl: obj=%p, id=BigNum@%p)", (void*)key, (void*)value);
-    }
-#endif
-    rb_objspace_t *objspace = rb_gc_get_objspace();
-    int result = rb_st_delete(objspace->id_to_obj_tbl, &value, NULL);
-    RUBY_ASSERT_ALWAYS(result != 0);
-}
-
-static void
 rb_mmtk_on_overloaded_cme_delete(st_data_t key, st_data_t value, void *arg)
 {
 #if USE_RUBY_DEBUG_LOG
@@ -10270,21 +10231,35 @@ rb_mmtk_on_overloaded_cme_delete(st_data_t key, st_data_t value, void *arg)
 #endif
 }
 
+// Copied from mmtk.c
+static int
+rb_mmtk_update_table_i(VALUE val, void *data)
+{
+    if (!mmtk_is_reachable((MMTk_ObjectReference)val)) {
+        return ST_DELETE;
+    }
+
+    return ST_CONTINUE;
+}
+
 void
 rb_mmtk_update_frozen_strings_table(void)
 {
     // The frozen strings table is a deduplicating table for frozen strings.
-    // Used as a HashSet (key always equals value).
-    // Hashed by string content.
+    // It is now implemented as a special data structure `fstring_table_struct`.
+    // We just use the default implementation to clean it up.
+    // TODO: See if we need to parallelize it.
+    // Since the default implementation simply does a linear scan, it is trivial to parallelize.
+
 
 #if USE_RUBY_DEBUG_LOG
-    size_t size1 = GET_VM()->frozen_strings->num_entries;
+    size_t size1 = rb_mmtk_debug_get_num_fstrings();
 #endif
 
-    rb_mmtk_st_update_dedup_table(GET_VM()->frozen_strings);
+    rb_gc_vm_weak_table_foreach(rb_mmtk_update_table_i, NULL, NULL, true, RB_GC_VM_FROZEN_STRINGS_TABLE);
 
 #if USE_RUBY_DEBUG_LOG
-    size_t size2 = GET_VM()->frozen_strings->num_entries;
+    size_t size2 = rb_mmtk_debug_get_num_fstrings();
 #endif
 
     RUBY_DEBUG_LOG("fstring table size: %zu -> %zu.  Removed: %zu\n",
@@ -10313,19 +10288,13 @@ rb_mmtk_update_finalizer_and_obj_id_tables(void)
                               rb_mmtk_on_finalizer_table_delete,
                               NULL);
 
-    // Update the obj_to_id_tbl first, and remove dead objects from both
-    // obj_to_id_tbl and id_to_obj_tbl.
-    rb_mmtk_update_weak_table(objspace->obj_to_id_tbl,
-                              true,
-                              RB_MMTK_VALUES_NON_REF,
-                              rb_mmtk_on_obj_to_id_tbl_delete,
-                              NULL);
-
     // Now that dead objects are removed, we forward keys and values now.
     // This table hashes Fixnum and Bignum by value (object_id_hash_type),
     // so the hash will not change if the key is Bignum and it is moved.
     // We can update keys and values in place.
-    gc_update_table_refs(objspace->id_to_obj_tbl);
+    // Note that the id2ref_tbl is lazily constructed,
+    // but rb_gc_vm_weak_table_foreach will helps us checking if id2ref_tbl == NULL.
+    rb_gc_vm_weak_table_foreach(rb_mmtk_update_table_i, NULL, NULL, true, RB_GC_VM_ID2REF_TABLE);
 }
 
 void
@@ -10361,30 +10330,10 @@ rb_mmtk_update_ci_table(void)
 }
 
 st_table*
-rb_mmtk_get_frozen_strings_table(void)
-{
-    return GET_VM()->frozen_strings;
-}
-
-st_table*
 rb_mmtk_get_finalizer_table(void)
 {
     rb_objspace_t *objspace = rb_gc_get_objspace();
     return finalizer_table;
-}
-
-st_table*
-rb_mmtk_get_obj_to_id_table(void)
-{
-    rb_objspace_t *objspace = rb_gc_get_objspace();
-    return objspace->obj_to_id_tbl;
-}
-
-st_table*
-rb_mmtk_get_id_to_obj_table(void)
-{
-    rb_objspace_t *objspace = rb_gc_get_objspace();
-    return objspace->id_to_obj_tbl;
 }
 
 st_table*

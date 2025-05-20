@@ -5,6 +5,7 @@
 #include "internal/cmdlineopt.h"
 #include "internal/gc.h"
 #include "internal/imemo.h"
+#include "internal/string.h"
 #include "internal/thread.h"
 #include "internal/variable.h"
 #include "ruby/ruby.h"
@@ -1745,14 +1746,14 @@ rb_mmtk_get_original_givtbl(MMTk_ObjectReference object) {
     VALUE obj = (VALUE)object;
 
     RUBY_ASSERT(FL_TEST(obj, FL_EXIVAR));
-    return rb_mmtk_gen_ivtbl_get_during_gc(obj);
+    return rb_mmtk_gen_fields_tbl_get_during_gc(obj);
 }
 
-struct st_table *rb_generic_ivtbl_get(void); // Defined in variable.c
+struct st_table *rb_generic_fields_tbl_get(void); // Defined in variable.c
 
 st_table*
 rb_mmtk_get_generic_iv_tbl(void) {
-    return rb_generic_ivtbl_get();
+    return rb_generic_fields_tbl_get();
 }
 
 void rb_mmtk_mv_generic_ivar(VALUE src, VALUE dst); // Defined in variable.c
@@ -1771,8 +1772,7 @@ void rb_mmtk_update_ci_table(void); // Defined in default.c
 
 st_table* rb_mmtk_get_frozen_strings_table(void); // Defined in default.c
 st_table* rb_mmtk_get_finalizer_table(void); // Defined in default.c
-st_table* rb_mmtk_get_obj_to_id_table(void); // Defined in default.c
-st_table* rb_mmtk_get_id_to_obj_table(void); // Defined in default.c
+st_table* rb_mmtk_get_id2ref_table(void); // Defined in default.c
 st_table* rb_mmtk_get_global_symbols_table(void); // Defined in gc.c
 st_table* rb_mmtk_get_overloaded_cme_table(void); // Defined in default.c
 st_table* rb_mmtk_get_ci_table(void); // Defined in default.c
@@ -1792,7 +1792,6 @@ MMTk_RubyUpcalls ruby_upcalls = {
     rb_mmtk_scan_yjit_roots,
     rb_mmtk_scan_global_symbols_roots,
     rb_mmtk_scan_finalizer_tbl_roots,
-    rb_mmtk_scan_obj_to_id_tbl_roots,
     rb_mmtk_scan_misc_roots,
     rb_mmtk_scan_final_jobs_roots,
     rb_mmtk_scan_roots_in_mutator_thread,
@@ -1810,10 +1809,9 @@ MMTk_RubyUpcalls ruby_upcalls = {
     rb_mmtk_update_overloaded_cme_table,
     rb_mmtk_update_ci_table,
     rb_mmtk_get_generic_iv_tbl,
-    rb_mmtk_get_frozen_strings_table,
+    rb_mmtk_debug_get_num_fstrings,
     rb_mmtk_get_finalizer_table,
-    rb_mmtk_get_obj_to_id_table,
-    rb_mmtk_get_id_to_obj_table,
+    rb_mmtk_get_id2ref_table,
     rb_mmtk_get_global_symbols_table,
     rb_mmtk_get_overloaded_cme_table,
     rb_mmtk_get_ci_table,

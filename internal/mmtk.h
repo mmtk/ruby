@@ -72,7 +72,6 @@ typedef struct MMTk_RubyUpcalls {
     void (*scan_yjit_roots)(void);
     void (*scan_global_symbols_roots)(void);
     void (*scan_finalizer_tbl_roots)(void);
-    void (*scan_obj_to_id_tbl_roots)(void);
     void (*scan_misc_roots)(void);
     void (*scan_final_jobs_roots)(void);
     void (*scan_roots_in_mutator_thread)(MMTk_VMMutatorThread mutator_tls,
@@ -91,10 +90,9 @@ typedef struct MMTk_RubyUpcalls {
     void (*update_overloaded_cme_table)(void);
     void (*update_ci_table)(void);
     struct st_table *(*get_generic_iv_tbl)(void);
-    struct st_table *(*get_frozen_strings_table)(void);
+    size_t (*get_num_fstrings)(void);
     struct st_table *(*get_finalizer_table)(void);
-    struct st_table *(*get_obj_to_id_table)(void);
-    struct st_table *(*get_id_to_obj_table)(void);
+    struct st_table *(*get_id2ref_table)(void);
     struct st_table *(*get_global_symbols_table)(void);
     struct st_table *(*get_overloaded_cme_table)(void);
     struct st_table *(*get_ci_table)(void);

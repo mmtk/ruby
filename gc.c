@@ -3196,6 +3196,12 @@ rb_mmtk_scan_global_symbols_roots(void)
 {
     rb_sym_global_symbols_mark();
 }
+
+st_table*
+rb_mmtk_get_id2ref_table(void)
+{
+    return id2ref_tbl;
+}
 #endif
 
 struct gc_mark_classext_foreach_arg {

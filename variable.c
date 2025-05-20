@@ -1229,19 +1229,19 @@ rb_gen_fields_tbl_get(VALUE obj, ID id, struct gen_fields_tbl **fields_tbl)
 }
 
 #if USE_MMTK
-// Get the gen ivtbl of an object during GC.
+// Get the gen_fields_tbl of an object during GC.
 // When using MMTk, this is called by a GC worker thread during transitive closure.
 // We can't acquire the VM lock in GC worker threads,
-// and we don't need to because we don't modify the generic_iv_tbl_ during transitive closure.
-struct gen_ivtbl *
-rb_mmtk_gen_ivtbl_get_during_gc(VALUE obj)
+// and we don't need to because we don't modify the generic_fields_tbl_ during transitive closure.
+struct gen_fields_tbl *
+rb_mmtk_gen_fields_tbl_get_during_gc(VALUE obj)
 {
     RUBY_ASSERT(!RB_TYPE_P(obj, T_ICLASS));
 
     st_data_t data;
 
-    if (st_lookup(generic_iv_tbl_, (st_data_t)obj, &data)) {
-        return (struct gen_ivtbl *)data;
+    if (st_lookup(generic_fields_tbl_, (st_data_t)obj, &data)) {
+        return (struct gen_fields_tbl *)data;
     }
 
     return NULL;
@@ -1303,14 +1303,14 @@ rb_mark_generic_ivar(VALUE obj)
 void
 rb_mmtk_update_generic_ivar(VALUE obj)
 {
-    struct gen_ivtbl *ivtbl = mmtk_get_givtbl_during_gc((MMTk_ObjectReference)obj);
-    if (ivtbl != NULL) {
-        if (rb_shape_obj_too_complex(obj)) {
-            rb_gc_update_tbl_refs(ivtbl->as.complex.table);
+    struct gen_fields_tbl *fields_tbl = (struct gen_fields_tbl *)mmtk_get_givtbl_during_gc((MMTk_ObjectReference)obj);
+    if (fields_tbl != NULL) {
+        if (rb_shape_obj_too_complex_p(obj)) {
+            rb_gc_update_tbl_refs(fields_tbl->as.complex.table);
         }
         else {
-            for (uint32_t i = 0; i < ivtbl->as.shape.numiv; i++) {
-                ivtbl->as.shape.ivptr[i] = rb_gc_location(ivtbl->as.shape.ivptr[i]);
+            for (uint32_t i = 0; i < fields_tbl->as.shape.fields_count; i++) {
+                fields_tbl->as.shape.fields[i] = rb_gc_location(fields_tbl->as.shape.fields[i]);
             }
         }
     }
@@ -1322,8 +1322,8 @@ rb_mmtk_mv_generic_ivar(VALUE rsrc, VALUE dst)
     st_data_t key = (st_data_t)rsrc;
     st_data_t ivtbl;
 
-    if (st_delete(generic_ivtbl_no_ractor_check(rsrc), &key, &ivtbl))
-        st_insert(generic_ivtbl_no_ractor_check(dst), (st_data_t)dst, ivtbl);
+    if (st_delete(generic_fields_tbl_no_ractor_check(rsrc), &key, &ivtbl))
+        st_insert(generic_fields_tbl_no_ractor_check(dst), (st_data_t)dst, ivtbl);
 }
 
 static int
@@ -1356,7 +1356,7 @@ rb_mmtk_cleanup_generic_iv_tbl_check(st_data_t key, st_data_t value, st_data_t a
 void
 rb_mmtk_cleanup_generic_iv_tbl(void)
 {
-    st_foreach_with_replace(generic_iv_tbl_,
+    st_foreach_with_replace(generic_fields_tbl_,
                             rb_mmtk_cleanup_generic_iv_tbl_check,
                             NULL,
                             0);

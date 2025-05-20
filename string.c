@@ -835,6 +835,20 @@ Init_fstring_table(void)
     rb_gc_register_address(&fstring_table_obj);
 }
 
+#if USE_MMTK
+// Get the number of entries in the fstring table, for debug purposes.
+size_t
+rb_mmtk_debug_get_num_fstrings(void)
+{
+    VALUE table_obj = fstring_table_obj;
+    if (!table_obj) {
+        return 0;
+    }
+    struct fstring_table_struct *table = RTYPEDDATA_GET_DATA(table_obj);
+    return table->count;
+}
+#endif
+
 #if 0
 
 // Linear probe
