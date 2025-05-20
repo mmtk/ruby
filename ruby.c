@@ -111,6 +111,8 @@ void rb_warning_category_update(unsigned int mask, unsigned int bits);
     SEP \
     X(yjit) \
     SEP \
+    X(zjit) \
+    SEP \
     X(mmtk) \
     /* END OF FEATURES */
 #define EACH_DEBUG_FEATURES(X, SEP) \
@@ -124,7 +126,7 @@ enum feature_flag_bits {
     DEFINE_FEATURE(frozen_string_literal_set),
     feature_debug_flag_first,
     DEFINE_FEATURE(jit) = feature_yjit,
-    feature_jit_mask = FEATURE_BIT(yjit),
+    feature_jit_mask = FEATURE_BIT(yjit) | FEATURE_BIT(zjit),
 
     feature_debug_flag_begin = feature_debug_flag_first - 1,
     EACH_DEBUG_FEATURES(DEFINE_DEBUG_FEATURE, COMMA),
@@ -315,7 +317,9 @@ usage(const char *name, int help, int highlight, int columns)
 #define M(shortopt, longopt, desc) RUBY_OPT_MESSAGE(shortopt, longopt, desc)
 
 #if USE_YJIT
-# define PLATFORM_JIT_OPTION "--yjit"
+# define DEFAULT_JIT_OPTION "--yjit"
+#elif USE_ZJIT
+# define DEFAULT_JIT_OPTION "--zjit"
 #endif
 
     /* This message really ought to be max 23 lines.
@@ -346,11 +350,14 @@ usage(const char *name, int help, int highlight, int columns)
         M("-W[level=2|:category]", "",             "Set warning flag ($-W):\n"
             "0 for silent; 1 for moderate; 2 for verbose."),
         M("-x[dirpath]",   "",			   "Execute Ruby code starting from a #!ruby line."),
-#if USE_YJIT
-        M("--jit",         "",                     "Enable JIT for the platform; same as " PLATFORM_JIT_OPTION "."),
+#if USE_YJIT || USE_ZJIT
+        M("--jit",         "",                     "Enable the default JIT for the build; same as " DEFAULT_JIT_OPTION "."),
 #endif
 #if USE_YJIT
         M("--yjit",        "",                     "Enable in-process JIT compiler."),
+#endif
+#if USE_ZJIT
+        M("--zjit",        "",                     "Enable method-based JIT compiler."),
 #endif
 #if USE_MMTK
         M("--mmtk",        "",                     "use MMTk for garbage collection (experimental)"),
@@ -391,6 +398,9 @@ usage(const char *name, int help, int highlight, int columns)
         M("frozen-string-literal", "", "Freeze all string literals (default: disabled)."),
 #if USE_YJIT
         M("yjit",                  "", "In-process JIT compiler (default: disabled)."),
+#endif
+#if USE_ZJIT
+        M("zjit",                  "", "Method-based JIT compiler (default: disabled)."),
 #endif
 #if USE_MMTK
         M("mmtk", "",           "MMTk garbage collection (default: disabled)"),
@@ -436,6 +446,11 @@ usage(const char *name, int help, int highlight, int columns)
 #if USE_YJIT
     printf("%s""YJIT options:%s\n", sb, se);
     rb_yjit_show_usage(help, highlight, w, columns);
+#endif
+#if USE_ZJIT
+    printf("%s""ZJIT options:%s\n", sb, se);
+    extern void rb_zjit_show_usage(int help, int highlight, unsigned int width, int columns);
+    rb_zjit_show_usage(help, highlight, w, columns);
 #endif
 #if USE_MMTK
     printf("%s""MMTk options (experimental):%s\n", sb, se);
@@ -1208,6 +1223,21 @@ setup_yjit_options(const char *s)
 }
 #endif
 
+#if USE_ZJIT
+static void
+setup_zjit_options(ruby_cmdline_options_t *opt, const char *s)
+{
+    // The option parsing is done in zjit/src/options.rs
+    extern void *rb_zjit_init_options(void);
+    extern bool rb_zjit_parse_option(void *options, const char *s);
+
+    if (!opt->zjit) opt->zjit = rb_zjit_init_options();
+    if (!rb_zjit_parse_option(opt->zjit, s)) {
+        rb_raise(rb_eRuntimeError, "invalid ZJIT option '%s' (--help will show valid zjit options)", s);
+    }
+}
+#endif
+
 /*
  * Following proc_*_option functions are tree kinds:
  *
@@ -1475,6 +1505,15 @@ proc_long_options(ruby_cmdline_options_t *opt, const char *s, long argc, char **
 #else
         rb_warn("Ruby was built without YJIT support."
                 " You may need to install rustc to build Ruby with YJIT.");
+#endif
+    }
+    else if (is_option_with_optarg("zjit", '-', true, false, false)) {
+#if USE_ZJIT
+        FEATURE_SET(opt->features, FEATURE_BIT(zjit));
+        setup_zjit_options(opt, s);
+#else
+        rb_warn("Ruby was built without ZJIT support."
+                " You may need to install rustc to build Ruby with ZJIT.");
 #endif
     }
     else if (is_option_with_optarg("mmtk", '-', true, false, false)) {
@@ -1822,14 +1861,25 @@ ruby_opt_init(ruby_cmdline_options_t *opt)
 
     ruby_init_prelude();
 
+    if (rb_namespace_available())
+        rb_initialize_main_namespace();
+
     // Initialize JITs after prelude because JITing prelude is typically not optimal.
 #if USE_YJIT
     rb_yjit_init(opt->yjit);
 #endif
+#if USE_ZJIT
+    if (opt->zjit) {
+        extern void rb_zjit_init(void *options);
+        rb_zjit_init(opt->zjit);
+    }
+#endif
 
+#if USE_YJIT
     // Call yjit_hook.rb after rb_yjit_init() to use `RubyVM::YJIT.enabled?`
     void Init_builtin_yjit_hook();
     Init_builtin_yjit_hook();
+#endif
 
     ruby_set_script_name(opt->script_name);
     require_libraries(&opt->req_list);
@@ -1995,7 +2045,7 @@ copy_str(VALUE str, rb_encoding *enc, bool intern)
     return rb_enc_interned_str(RSTRING_PTR(str), RSTRING_LEN(str), enc);
 }
 
-#if USE_YJIT
+#if USE_YJIT || USE_ZJIT
 // Check that an environment variable is set to a truthy value
 static bool
 env_var_truthy(const char *name)
@@ -2351,6 +2401,10 @@ process_options(int argc, char **argv, ruby_cmdline_options_t *opt)
         if (!FEATURE_USED_P(opt->features, yjit) && env_var_truthy("RUBY_YJIT_ENABLE")) {
             FEATURE_SET(opt->features, FEATURE_BIT(yjit));
         }
+#elif USE_ZJIT
+        if (!FEATURE_USED_P(opt->features, zjit) && env_var_truthy("RUBY_ZJIT_ENABLE")) {
+            FEATURE_SET(opt->features, FEATURE_BIT(zjit));
+        }
 #endif
     }
     if (MULTI_BITS_P(FEATURE_SET_BITS(opt->features) & feature_jit_mask)) {
@@ -2362,6 +2416,12 @@ process_options(int argc, char **argv, ruby_cmdline_options_t *opt)
     if (FEATURE_SET_P(opt->features, yjit)) {
         bool rb_yjit_option_disable(void);
         opt->yjit = !rb_yjit_option_disable(); // set opt->yjit for Init_ruby_description() and calling rb_yjit_init()
+    }
+#endif
+#if USE_ZJIT
+    if (FEATURE_SET_P(opt->features, zjit) && !opt->zjit) {
+        extern void *rb_zjit_init_options(void);
+        opt->zjit = rb_zjit_init_options();
     }
 #endif
 

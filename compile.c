@@ -2017,7 +2017,7 @@ iseq_set_use_block(rb_iseq_t *iseq)
 
         if (!rb_warning_category_enabled_p(RB_WARN_CATEGORY_STRICT_UNUSED_BLOCK)) {
             st_data_t key = (st_data_t)rb_intern_str(body->location.label); // String -> ID
-            st_insert(vm->unused_block_warning_table, key, 1);
+            set_insert(vm->unused_block_warning_table, key);
         }
     }
 }
@@ -9389,6 +9389,7 @@ compile_call(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const node, co
 
     INIT_ANCHOR(recv);
     INIT_ANCHOR(args);
+
 #if OPT_SUPPORT_JOKE
     if (nd_type_p(node, NODE_VCALL)) {
         ID id_bitblt;
@@ -9484,6 +9485,17 @@ compile_call(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const node, co
     }
 
     ADD_SEQ(ret, recv);
+
+    bool inline_new = ISEQ_COMPILE_DATA(iseq)->option->specialized_instruction &&
+        mid == rb_intern("new") &&
+        parent_block == NULL &&
+        !(flag & VM_CALL_ARGS_BLOCKARG);
+
+    if (inline_new) {
+        ADD_INSN(ret, node, putnil);
+        ADD_INSN(ret, node, swap);
+    }
+
     ADD_SEQ(ret, args);
 
     debugp_param("call args argc", argc);
@@ -9500,7 +9512,37 @@ compile_call(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const node, co
     if ((flag & VM_CALL_ARGS_BLOCKARG) && (flag & VM_CALL_KW_SPLAT) && !(flag & VM_CALL_KW_SPLAT_MUT)) {
         ADD_INSN(ret, line_node, splatkw);
     }
-    ADD_SEND_R(ret, line_node, mid, argc, parent_block, INT2FIX(flag), keywords);
+
+    LABEL *not_basic_new = NEW_LABEL(nd_line(node));
+    LABEL *not_basic_new_finish = NEW_LABEL(nd_line(node));
+
+    if (inline_new) {
+        // Jump unless the receiver uses the "basic" implementation of "new"
+        VALUE ci;
+        if (flag & VM_CALL_FORWARDING) {
+            ci = (VALUE)new_callinfo(iseq, mid, NUM2INT(argc) + 1, flag, keywords, 0);
+        }
+        else {
+            ci = (VALUE)new_callinfo(iseq, mid, NUM2INT(argc), flag, keywords, 0);
+        }
+        ADD_INSN2(ret, node, opt_new, ci, not_basic_new);
+        LABEL_REF(not_basic_new);
+
+        // optimized path
+        ADD_SEND_R(ret, line_node, rb_intern("initialize"), argc, parent_block, INT2FIX(flag | VM_CALL_FCALL), keywords);
+        ADD_INSNL(ret, line_node, jump, not_basic_new_finish);
+
+        ADD_LABEL(ret, not_basic_new);
+        // Fall back to normal send
+        ADD_SEND_R(ret, line_node, mid, argc, parent_block, INT2FIX(flag), keywords);
+        ADD_INSN(ret, line_node, swap);
+
+        ADD_LABEL(ret, not_basic_new_finish);
+        ADD_INSN(ret, line_node, pop);
+    }
+    else {
+        ADD_SEND_R(ret, line_node, mid, argc, parent_block, INT2FIX(flag), keywords);
+    }
 
     qcall_branch_end(iseq, ret, else_label, branches, node, line_node);
     if (popped) {

@@ -69,6 +69,16 @@ const int ruby_api_version[] = {
 #else
 #define YJIT_DESCRIPTION " +YJIT"
 #endif
+#ifdef ZJIT_SUPPORT
+#define ZJIT_DESCRIPTION " +ZJIT " STRINGIZE(ZJIT_SUPPORT)
+#else
+#define ZJIT_DESCRIPTION " +ZJIT"
+#endif
+#if USE_ZJIT
+#define JIT_DESCRIPTION ZJIT_DESCRIPTION
+#else
+#define JIT_DESCRIPTION YJIT_DESCRIPTION
+#endif
 #if USE_MODULAR_GC
 #define GC_DESCRIPTION " +GC"
 #else
@@ -170,6 +180,12 @@ Init_version(void)
 #define YJIT_OPTS_ON 0
 #endif
 
+#if USE_ZJIT
+#define ZJIT_OPTS_ON opt->zjit
+#else
+#define ZJIT_OPTS_ON 0
+#endif
+
 int ruby_mn_threads_enabled;
 
 #ifndef RB_DEFAULT_PARSER
@@ -194,7 +210,7 @@ define_ruby_description(const char *const jit_opt)
 {
     static char desc[
         sizeof(ruby_description)
-        + rb_strlen_lit(YJIT_DESCRIPTION)
+        + rb_strlen_lit(JIT_DESCRIPTION)
         + rb_strlen_lit(" +MN")
 #if USE_MMTK
         // This should be long enough for all plans we have.
@@ -215,7 +231,7 @@ define_ruby_description(const char *const jit_opt)
     memcpy(desc, ruby_description, n);
 # define append(s) (n += (int)strlcpy(desc + n, s, sizeof(desc) - n))
     if (*jit_opt) append(jit_opt);
-    RUBY_ASSERT(n <= ruby_description_opt_point + (int)rb_strlen_lit(YJIT_DESCRIPTION));
+    RUBY_ASSERT(n <= ruby_description_opt_point + (int)rb_strlen_lit(JIT_DESCRIPTION));
     if (ruby_mn_threads_enabled) append(" +MN");
     if (rb_ruby_prism_p()) append(" +PRISM");
     WHEN_USING_MMTK({
@@ -249,6 +265,7 @@ Init_ruby_description(ruby_cmdline_options_t *opt)
 {
     const char *const jit_opt =
         YJIT_OPTS_ON ? YJIT_DESCRIPTION :
+        ZJIT_OPTS_ON ? ZJIT_DESCRIPTION :
         "";
     define_ruby_description(jit_opt);
 }

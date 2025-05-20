@@ -430,8 +430,9 @@ ossl_sslctx_add_extra_chain_cert_i(RB_BLOCK_CALL_FUNC_ARGLIST(i, arg))
 
     GetSSLCTX(arg, ctx);
     x509 = DupX509CertPtr(i);
-    if(!SSL_CTX_add_extra_chain_cert(ctx, x509)){
-	ossl_raise(eSSLError, NULL);
+    if (!SSL_CTX_add_extra_chain_cert(ctx, x509)) {
+        X509_free(x509);
+        ossl_raise(eSSLError, "SSL_CTX_add_extra_chain_cert");
     }
 
     return i;
@@ -2080,14 +2081,13 @@ ossl_ssl_write_internal_safe(VALUE _args)
 static VALUE
 ossl_ssl_write_internal(VALUE self, VALUE str, VALUE opts)
 {
-    VALUE args[3] = {self, str, opts};
-    int state;
-    str = StringValue(str);
-
+    StringValue(str);
     int frozen = RB_OBJ_FROZEN(str);
     if (!frozen) {
-        str = rb_str_locktmp(str);
+        rb_str_locktmp(str);
     }
+    int state;
+    VALUE args[3] = {self, str, opts};
     VALUE result = rb_protect(ossl_ssl_write_internal_safe, (VALUE)args, &state);
     if (!frozen) {
         rb_str_unlocktmp(str);
