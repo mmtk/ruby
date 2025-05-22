@@ -1,4 +1,4 @@
-//! High level intermediary representation.
+//! High-level intermediary representation (IR) in static single-assignment (SSA) form.
 
 // We use the YARV bytecode constants which have a CRuby-style name
 #![allow(non_upper_case_globals)]
@@ -20,6 +20,9 @@ use std::{
 };
 use crate::hir_type::{Type, types};
 
+/// An index of an [`Insn`] in a [`Function`]. This is a popular
+/// type since this effectively acts as a pointer to an [`Insn`].
+/// See also: [`Function::find`].
 #[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Debug)]
 pub struct InsnId(pub usize);
 
@@ -35,6 +38,7 @@ impl std::fmt::Display for InsnId {
     }
 }
 
+/// The index of a [`Block`], which effectively acts like a pointer.
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub struct BlockId(pub usize);
 
@@ -309,11 +313,14 @@ impl PtrPrintMap {
     }
 }
 
+/// An instruction in the SSA IR. The output of an instruction is referred to by the index of
+/// the instruction ([`InsnId`]). SSA form enables this, and [`UnionFind`] ([`Function::find`])
+/// helps with editing.
 #[derive(Debug, Clone)]
 pub enum Insn {
     PutSelf,
     Const { val: Const },
-    // SSA block parameter. Also used for function parameters in the function's entry block.
+    /// SSA block parameter. Also used for function parameters in the function's entry block.
     Param { idx: usize },
 
     StringCopy { val: InsnId },
@@ -324,8 +331,8 @@ pub enum Insn {
     ArrayDup { val: InsnId, state: InsnId },
     ArrayMax { elements: Vec<InsnId>, state: InsnId },
 
-    // Check if the value is truthy and "return" a C boolean. In reality, we will likely fuse this
-    // with IfTrue/IfFalse in the backend to generate jcc.
+    /// Check if the value is truthy and "return" a C boolean. In reality, we will likely fuse this
+    /// with IfTrue/IfFalse in the backend to generate jcc.
     Test { val: InsnId },
     Defined { op_type: usize, obj: VALUE, pushval: VALUE, v: InsnId },
     GetConstantPath { ic: *const iseq_inline_constant_cache },
@@ -334,29 +341,29 @@ pub enum Insn {
     //SetIvar {},
     //GetIvar {},
 
-    // Own a FrameState so that instructions can look up their dominating FrameState when
-    // generating deopt side-exits and frame reconstruction metadata. Does not directly generate
-    // any code.
+    /// Own a FrameState so that instructions can look up their dominating FrameState when
+    /// generating deopt side-exits and frame reconstruction metadata. Does not directly generate
+    /// any code.
     Snapshot { state: FrameState },
 
-    // Unconditional jump
+    /// Unconditional jump
     Jump(BranchEdge),
 
-    // Conditional branch instructions
+    /// Conditional branch instructions
     IfTrue { val: InsnId, target: BranchEdge },
     IfFalse { val: InsnId, target: BranchEdge },
 
-    // Call a C function
-    // `name` is for printing purposes only
-    CCall { cfun: *const u8, args: Vec<InsnId>, name: ID, return_type: Type },
+    /// Call a C function
+    /// `name` is for printing purposes only
+    CCall { cfun: *const u8, args: Vec<InsnId>, name: ID, return_type: Type, elidable: bool },
 
-    // Send without block with dynamic dispatch
-    // Ignoring keyword arguments etc for now
+    /// Send without block with dynamic dispatch
+    /// Ignoring keyword arguments etc for now
     SendWithoutBlock { self_val: InsnId, call_info: CallInfo, cd: *const rb_call_data, args: Vec<InsnId>, state: InsnId },
     Send { self_val: InsnId, call_info: CallInfo, cd: *const rb_call_data, blockiseq: IseqPtr, args: Vec<InsnId>, state: InsnId },
     SendWithoutBlockDirect { self_val: InsnId, call_info: CallInfo, cd: *const rb_call_data, iseq: IseqPtr, args: Vec<InsnId>, state: InsnId },
 
-    // Control flow instructions
+    /// Control flow instructions
     Return { val: InsnId },
 
     /// Fixnum +, -, *, /, %, ==, !=, <, <=, >, >=
@@ -429,6 +436,7 @@ impl Insn {
             Insn::FixnumLe   { .. } => false,
             Insn::FixnumGt   { .. } => false,
             Insn::FixnumGe   { .. } => false,
+            Insn::CCall { elidable, .. } => !elidable,
             _ => true,
         }
     }
@@ -510,7 +518,7 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
             Insn::GuardBitEquals { val, expected, .. } => { write!(f, "GuardBitEquals {val}, {}", expected.print(self.ptr_map)) },
             Insn::PatchPoint(invariant) => { write!(f, "PatchPoint {}", invariant.print(self.ptr_map)) },
             Insn::GetConstantPath { ic } => { write!(f, "GetConstantPath {:p}", self.ptr_map.map_ptr(ic)) },
-            Insn::CCall { cfun, args, name, return_type: _ } => {
+            Insn::CCall { cfun, args, name, return_type: _, elidable: _ } => {
                 write!(f, "CCall {}@{:p}", name.contents_lossy(), self.ptr_map.map_ptr(cfun))?;
                 for arg in args {
                     write!(f, ", {arg}")?;
@@ -529,6 +537,7 @@ impl std::fmt::Display for Insn {
     }
 }
 
+/// An extended basic block in a [`Function`].
 #[derive(Default, Debug)]
 pub struct Block {
     params: Vec<InsnId>,
@@ -547,6 +556,7 @@ impl Block {
     }
 }
 
+/// Pretty printer for [`Function`].
 pub struct FunctionPrinter<'a> {
     fun: &'a Function,
     display_snapshot: bool,
@@ -659,6 +669,8 @@ impl<T: Copy + Into<usize> + PartialEq> UnionFind<T> {
     }
 }
 
+/// A [`Function`], which is analogous to a Ruby ISeq, is a control-flow graph of [`Block`]s
+/// containing instructions.
 #[derive(Debug)]
 pub struct Function {
     // ISEQ this function refers to
@@ -850,7 +862,7 @@ impl Function {
             },
             ArraySet { array, idx, val } => ArraySet { array: find!(*array), idx: *idx, val: find!(*val) },
             ArrayDup { val , state } => ArrayDup { val: find!(*val), state: *state },
-            CCall { cfun, args, name, return_type } => CCall { cfun: *cfun, args: args.iter().map(|arg| find!(*arg)).collect(), name: *name, return_type: *return_type },
+            &CCall { cfun, ref args, name, return_type, elidable } => CCall { cfun: cfun, args: args.iter().map(|arg| find!(*arg)).collect(), name: name, return_type: return_type, elidable },
             Defined { .. } => todo!("find(Defined)"),
             NewArray { elements, state } => NewArray { elements: find_vec!(*elements), state: find!(*state) },
             ArrayMax { elements, state } => ArrayMax { elements: find_vec!(*elements), state: find!(*state) },
@@ -1194,7 +1206,7 @@ impl Function {
 
                     // Filter for a leaf and GC free function
                     use crate::cruby_methods::FnProperties;
-                    let Some(FnProperties { leaf: true, no_gc: true, return_type }) =
+                    let Some(FnProperties { leaf: true, no_gc: true, return_type, elidable }) =
                         ZJITState::get_method_annotations().get_cfunc_properties(method)
                     else {
                         return Err(());
@@ -1212,7 +1224,7 @@ impl Function {
                         let cfun = unsafe { get_mct_func(cfunc) }.cast();
                         let mut cfunc_args = vec![self_val];
                         cfunc_args.append(&mut args);
-                        let ccall = fun.push_insn(block, Insn::CCall { cfun, args: cfunc_args, name: method_id, return_type });
+                        let ccall = fun.push_insn(block, Insn::CCall { cfun, args: cfunc_args, name: method_id, return_type, elidable });
                         fun.make_equal_to(send_insn_id, ccall);
                         return Ok(());
                     }
@@ -3829,6 +3841,44 @@ mod opt_tests {
               PatchPoint MethodRedefined(Array@0x1000, itself@0x1008)
               v7:BasicObject = CCall itself@0x1010, v2
               Return v7
+        "#]]);
+    }
+
+    #[test]
+    fn eliminate_kernel_itself() {
+        eval("
+            def test
+              x = [].itself
+              1
+            end
+        ");
+        assert_optimized_method_hir("test", expect![[r#"
+            fn test:
+            bb0():
+              PatchPoint MethodRedefined(Array@0x1000, itself@0x1008)
+              v6:Fixnum[1] = Const Value(1)
+              Return v6
+        "#]]);
+    }
+
+    #[test]
+    fn eliminate_module_name() {
+        eval("
+            module M; end
+            def test
+              x = M.name
+              1
+            end
+            test
+        ");
+        assert_optimized_method_hir("test", expect![[r#"
+            fn test:
+            bb0():
+              PatchPoint SingleRactorMode
+              PatchPoint StableConstantNames(0x1000, M)
+              PatchPoint MethodRedefined(Module@0x1008, name@0x1010)
+              v5:Fixnum[1] = Const Value(1)
+              Return v5
         "#]]);
     }
 

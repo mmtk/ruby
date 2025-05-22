@@ -43,7 +43,7 @@ The following bundled gems are promoted from default gems.
 * pstore 0.2.0
 * benchmark 0.4.0
 * logger 1.7.0
-* rdoc 6.13.1
+* rdoc 6.14.0
 * win32ole 1.9.2
 * irb 1.15.2
 * reline 0.6.1
@@ -85,6 +85,7 @@ The following bundled gems are updated.
 * net-smtp 0.5.1
 * rbs 3.9.4
 * bigdecimal 3.1.9
+* drb 2.2.3
 * syslog 0.3.0
 * csv 3.3.4
 * repl_type_completor 0.1.11
@@ -104,6 +105,11 @@ The following bundled gems are updated.
     * `CGI.escapeElement` and `CGI.unescapeElement`
 
     [[Feature #21258]]
+
+* With the move of `Set` from stdlib to core class, `set/sorted_set.rb` has
+  been removed, and `SortedSet` is no longer an autoloaded constant. Please
+  install the `sorted_set` gem and `require 'sorted_set'` to use `SortedSet`.
+  [[Feature #21287]]
 
 ## C API updates
 
@@ -130,3 +136,4 @@ The following bundled gems are updated.
 [Bug #21049]:     https://bugs.ruby-lang.org/issues/21049
 [Feature #21216]: https://bugs.ruby-lang.org/issues/21216
 [Feature #21258]: https://bugs.ruby-lang.org/issues/21258
+[Feature #21287]: https://bugs.ruby-lang.org/issues/21287
