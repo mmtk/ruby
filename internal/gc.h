@@ -244,6 +244,7 @@ void rb_mmtk_update_object_references(VALUE obj);
 void rb_mmtk_obj_free(VALUE obj);
 void rb_mmtk_run_finalizer(VALUE obj, VALUE table);
 void rb_mmtk_set_during_gc(bool is_during_gc);
+bool rb_mmtk_is_during_gc(void);
 void rb_mmtk_get_vanilla_times(uint64_t *mark, uint64_t *sweep);
 void rb_mmtk_gc_finalize_deferred_register(void);
 #endif

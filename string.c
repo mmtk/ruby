@@ -1144,7 +1144,9 @@ void
 rb_fstring_foreach_with_replace(st_foreach_check_callback_func *func, st_update_callback_func *replace, st_data_t arg)
 {
     // Assume locking and barrier (which there is no assert for)
+    WHEN_USING_MMTK_CONDITIONAL(!rb_mmtk_is_during_gc(), {
     ASSERT_vm_locking();
+    });
 
     VALUE table_obj = RUBY_ATOMIC_VALUE_LOAD(fstring_table_obj);
     if (!table_obj) {

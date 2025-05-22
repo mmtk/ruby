@@ -10380,6 +10380,13 @@ rb_mmtk_set_during_gc(bool is_during_gc)
     during_gc = is_during_gc ? 1 : 0;
 }
 
+bool
+rb_mmtk_is_during_gc(void)
+{
+    rb_objspace_t *objspace = rb_gc_get_objspace();
+    return during_gc;
+}
+
 void
 rb_mmtk_get_vanilla_times(uint64_t *mark, uint64_t *sweep)
 {
