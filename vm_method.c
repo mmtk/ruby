@@ -5,14 +5,6 @@
 #include "id_table.h"
 #include "yjit.h"
 
-#if USE_MMTK
-#include "internal/gc.h"
-#include "internal/mmtk_support.h"
-#endif
-
-// Conditional compilation macros for MMTk
-#include "internal/mmtk_macros.h"
-
 #define METHOD_DEBUG 0
 
 static int vm_redefinition_check_flag(VALUE klass);
@@ -1246,9 +1238,7 @@ lookup_overloaded_cme_i(st_data_t *key, st_data_t *value, st_data_t data, int ex
 static const rb_callable_method_entry_t *
 lookup_overloaded_cme(const rb_callable_method_entry_t *cme)
 {
-    WHEN_USING_MMTK_CONDITIONAL(!rb_mmtk_is_during_gc(), {
     ASSERT_vm_locking();
-    });
 
     const rb_callable_method_entry_t *monly_cme = NULL;
     st_update(overloaded_cme_table(), (st_data_t)cme, lookup_overloaded_cme_i, (st_data_t)&monly_cme);
