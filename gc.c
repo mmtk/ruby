@@ -2905,16 +2905,6 @@ mark_cc_entry_i(ID id, VALUE ccs_ptr, void *data)
     }
 }
 
-#if USE_MMTK
-static enum rb_id_table_iterator_result
-rb_mmtk_mark_cc_entry_i(VALUE ccs_ptr, void *data)
-{
-    struct rb_class_cc_entries *ccs = (struct rb_class_cc_entries *)ccs_ptr;
-    ID id = ccs->cme->called_id; // Just make the assertion successful.
-    return mark_cc_entry_i(id, ccs_ptr, data);
-}
-#endif
-
 static void
 mark_cc_tbl(rb_objspace_t *objspace, struct rb_id_table *tbl, VALUE klass)
 {
@@ -2924,14 +2914,7 @@ mark_cc_tbl(rb_objspace_t *objspace, struct rb_id_table *tbl, VALUE klass)
 
     args.objspace = objspace;
     args.klass = klass;
-    WHEN_USING_MMTK2({
-        // rb_id_table_foreach will access the global symbol table, which requires the GVL.
-        // But MMTk GC worker threads do not have EC which is required to acquire GIL.
-        // Since mark_cc_entry_i only uses the ID for assertion, we skip the assertion.
-        rb_id_table_foreach_values(tbl, rb_mmtk_mark_cc_entry_i, (void *)&args);
-    }, {
     rb_id_table_foreach(tbl, mark_cc_entry_i, (void *)&args);
-    })
 }
 
 static enum rb_id_table_iterator_result
