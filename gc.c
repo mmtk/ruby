@@ -2895,8 +2895,13 @@ mark_cc_entry_i(VALUE ccs_ptr, void *data)
         gc_mark_internal((VALUE)ccs->cme);
 
         for (int i=0; i<ccs->len; i++) {
+            WHEN_NOT_USING_MMTK({
+            // We can't do these assertions when using evacuating GC
+            // because they read child objects which are not yet traced,
+            // and may be concurrently moved.
             VM_ASSERT(((struct mark_cc_entry_args *)data)->klass == ccs->entries[i].cc->klass);
             VM_ASSERT(vm_cc_check_cme(ccs->entries[i].cc, ccs->cme));
+            })
 
             gc_mark_internal((VALUE)ccs->entries[i].cc);
         }
