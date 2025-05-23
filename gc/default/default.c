@@ -2972,7 +2972,7 @@ rb_mmtk_build_obj_array_i(MMTk_ObjectReference object, void *data)
 }
 
 void
-rb_mmtk_each_objects_safe(each_obj_callback *callback, void *data)
+rb_mmtk_each_object_safe(void (*func)(VALUE, void *), void *data)
 {
     // Allocate a tmpbuf object.  It's OK if it triggers GC now.
     volatile VALUE tmpbuf = rb_imemo_tmpbuf_auto_free_pointer();
@@ -3009,12 +3009,10 @@ rb_mmtk_each_objects_safe(each_obj_callback *callback, void *data)
     // If GC is triggered in `callback`, `tmpbuf` will keep elements of `array` alive.
     for (size_t i = 0; i < build_array_data.len; i++) {
         volatile VALUE object = array[i];
-        // This is the "object size" seen by the callback.  It's only the payload size.
-        size_t object_size = rb_mmtk_get_payload_size(object);
-        uintptr_t object_end = object + object_size;
 
         RUBY_DEBUG_LOG("Enumerating object: %p\n", (void*)object);
-        callback((void*)object, (void*)object_end, object_size, data);
+        func(object, data);
+
         RB_GC_GUARD(object);
 
         // Clear the element so that it no longer pins the object if it dies.
@@ -3032,6 +3030,31 @@ rb_mmtk_each_objects_safe(each_obj_callback *callback, void *data)
     rb_gc_adjust_memory_usage(-(ssize_t)(sizeof(VALUE) * build_array_data.capa));
 
     RB_GC_GUARD(tmpbuf);
+}
+
+struct rb_mmtk_each_objects_safe_i_data {
+    each_obj_callback *callback;
+    void *data;
+};
+
+static void
+rb_mmtk_each_objects_safe_i(VALUE object, void *data)
+{
+    struct rb_mmtk_each_objects_safe_i_data *each_object_data = (struct rb_mmtk_each_objects_safe_i_data*)data;
+    // This is the "object size" seen by the callback.  It's only the payload size.
+    size_t object_size = rb_mmtk_get_payload_size(object);
+    uintptr_t object_end = object + object_size;
+    each_object_data->callback((void*)object, (void*)object_end, object_size, each_object_data->data);
+}
+
+void
+rb_mmtk_each_objects_safe(each_obj_callback *callback, void *data)
+{
+    struct rb_mmtk_each_objects_safe_i_data each_object_data = {
+        .callback = callback,
+        .data = data,
+    };
+    rb_mmtk_each_object_safe(rb_mmtk_each_objects_safe_i, &each_object_data);
 }
 #endif
 
@@ -3517,6 +3540,11 @@ rb_gc_impl_shutdown_call_finalizer(void *objspace_ptr)
 void
 rb_gc_impl_each_object(void *objspace_ptr, void (*func)(VALUE obj, void *data), void *data)
 {
+    WHEN_USING_MMTK({
+        rb_mmtk_each_object_safe(func, data);
+        return;
+    })
+
     rb_objspace_t *objspace = objspace_ptr;
 
     for (size_t i = 0; i < rb_darray_size(objspace->heap_pages.sorted); i++) {
@@ -10241,6 +10269,17 @@ rb_mmtk_update_table_i(VALUE val, void *data)
         return ST_DELETE;
     }
 
+    return ST_REPLACE;
+}
+
+static int
+rb_mmtk_update_table_replace_i(VALUE *value, void *data)
+{
+    VALUE new_value = (VALUE)mmtk_get_forwarded_object((MMTk_ObjectReference)(*value));
+    if (new_value != 0) {
+        RUBY_DEBUG_LOG("Forwarding weak table key or value: %p -> %p\n", (void*)*value, (void*)new_value);
+        *value = new_value;
+    }
     return ST_CONTINUE;
 }
 
@@ -10258,7 +10297,7 @@ rb_mmtk_update_frozen_strings_table(void)
     size_t size1 = rb_mmtk_debug_get_num_fstrings();
 #endif
 
-    rb_gc_vm_weak_table_foreach(rb_mmtk_update_table_i, NULL, NULL, true, RB_GC_VM_FROZEN_STRINGS_TABLE);
+    rb_gc_vm_weak_table_foreach(rb_mmtk_update_table_i, rb_mmtk_update_table_replace_i, NULL, true, RB_GC_VM_FROZEN_STRINGS_TABLE);
 
 #if USE_RUBY_DEBUG_LOG
     size_t size2 = rb_mmtk_debug_get_num_fstrings();
@@ -10296,7 +10335,7 @@ rb_mmtk_update_finalizer_and_obj_id_tables(void)
     // We can update keys and values in place.
     // Note that the id2ref_tbl is lazily constructed,
     // but rb_gc_vm_weak_table_foreach will helps us checking if id2ref_tbl == NULL.
-    rb_gc_vm_weak_table_foreach(rb_mmtk_update_table_i, NULL, NULL, true, RB_GC_VM_ID2REF_TABLE);
+    rb_gc_vm_weak_table_foreach(rb_mmtk_update_table_i, rb_mmtk_update_table_replace_i, NULL, true, RB_GC_VM_ID2REF_TABLE);
 }
 
 void
