@@ -1303,7 +1303,7 @@ rb_mark_generic_ivar(VALUE obj)
 void
 rb_mmtk_update_generic_ivar(VALUE obj)
 {
-    struct gen_fields_tbl *fields_tbl = (struct gen_fields_tbl *)mmtk_get_givtbl_during_gc((MMTk_ObjectReference)obj);
+    struct gen_fields_tbl *fields_tbl = (struct gen_fields_tbl *)mmtk_get_gen_fields_tbl_during_gc((MMTk_ObjectReference)obj);
     if (fields_tbl != NULL) {
         if (rb_shape_obj_too_complex_p(obj)) {
             rb_gc_update_tbl_refs(fields_tbl->as.complex.table);
@@ -1317,22 +1317,22 @@ rb_mmtk_update_generic_ivar(VALUE obj)
 }
 
 void
-rb_mmtk_mv_generic_ivar(VALUE rsrc, VALUE dst)
+rb_mmtk_reinsert_generic_fields_tbl_entry(VALUE rsrc, VALUE dst)
 {
     st_data_t key = (st_data_t)rsrc;
-    st_data_t ivtbl;
+    st_data_t fields_tbl;
 
-    if (st_delete(generic_fields_tbl_no_ractor_check(rsrc), &key, &ivtbl))
-        st_insert(generic_fields_tbl_no_ractor_check(dst), (st_data_t)dst, ivtbl);
+    if (st_delete(generic_fields_tbl_no_ractor_check(rsrc), &key, &fields_tbl))
+        st_insert(generic_fields_tbl_no_ractor_check(dst), (st_data_t)dst, fields_tbl);
 }
 
 static int
-rb_mmtk_cleanup_generic_iv_tbl_check(st_data_t key, st_data_t value, st_data_t argp, int error)
+rb_mmtk_cleanup_generic_fields_tbl_check(st_data_t key, st_data_t value, st_data_t argp, int error)
 {
     MMTk_ObjectReference key_objref = (MMTk_ObjectReference)key;
-    // Delete gen_ivtbl for dead objects.
+    // Delete gen_fields_tbl for dead objects.
     if (!mmtk_is_live_object(key_objref)) {
-        struct gen_ivtbl *tbl = (struct gen_ivtbl*)value;
+        struct gen_fields_tbl *tbl = (struct gen_fields_tbl*)value;
         RUBY_ASSERT(tbl != NULL);
         xfree(tbl);
 
@@ -1349,15 +1349,15 @@ rb_mmtk_cleanup_generic_iv_tbl_check(st_data_t key, st_data_t value, st_data_t a
 }
 
 /**
- * Remove entries in generic_iv_tbl_ where the key is dead.
- * Only used when using MMTk.  In vanilla Ruby, the gen_ivtbl of an object is
- * removed from generic_iv_tbl_ in obj_free when the object dies.
+ * Remove entries in generic_fields_tbl_ where the key is dead.
+ * Only used when using MMTk.  In vanilla Ruby, the gen_fields_tbl of an object is
+ * removed from generic_fields_tbl_ in obj_free when the object dies.
  */
 void
-rb_mmtk_cleanup_generic_iv_tbl(void)
+rb_mmtk_cleanup_generic_fields_tbl(void)
 {
     st_foreach_with_replace(generic_fields_tbl_,
-                            rb_mmtk_cleanup_generic_iv_tbl_check,
+                            rb_mmtk_cleanup_generic_fields_tbl_check,
                             NULL,
                             0);
 }

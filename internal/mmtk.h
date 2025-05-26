@@ -80,16 +80,17 @@ typedef struct MMTk_RubyUpcalls {
     void (*scan_object_ruby_style)(MMTk_ObjectReference object);
     void (*call_gc_mark_children)(MMTk_ObjectReference object);
     void (*call_obj_free)(MMTk_ObjectReference object);
-    void (*cleanup_generic_iv_tbl)(void);
-    void *(*get_original_givtbl)(MMTk_ObjectReference object);
-    void (*move_givtbl)(MMTk_ObjectReference old_objref, MMTk_ObjectReference new_objref);
+    void (*cleanup_generic_fields_tbl)(void);
+    void *(*get_original_gen_fields_tbl)(MMTk_ObjectReference object);
+    void (*reinsert_generic_fields_tbl_entry)(MMTk_ObjectReference old_objref,
+                                              MMTk_ObjectReference new_objref);
     size_t (*vm_live_bytes)(void);
     void (*update_frozen_strings_table)(void);
     void (*update_finalizer_and_obj_id_tables)(void);
     void (*update_global_symbols_table)(void);
     void (*update_overloaded_cme_table)(void);
     void (*update_ci_table)(void);
-    struct st_table *(*get_generic_iv_tbl)(void);
+    struct st_table *(*get_generic_fields_tbl)(void);
     size_t (*get_num_fstrings)(void);
     struct st_table *(*get_finalizer_table)(void);
     struct st_table *(*get_id2ref_table)(void);
@@ -242,7 +243,7 @@ void mmtk_register_ppp(MMTk_ObjectReference object);
 
 void mmtk_register_ppps(const MMTk_ObjectReference *objects, size_t len);
 
-void *mmtk_get_givtbl_during_gc(MMTk_ObjectReference object);
+void *mmtk_get_gen_fields_tbl_during_gc(MMTk_ObjectReference object);
 
 size_t mmtk_get_vo_bit_log_region_size(void);
 

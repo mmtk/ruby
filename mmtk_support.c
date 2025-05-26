@@ -1742,7 +1742,7 @@ rb_mmtk_scan_roots_in_mutator_thread(MMTk_VMMutatorThread vm_mutator, MMTk_VMWor
 }
 
 static void*
-rb_mmtk_get_original_givtbl(MMTk_ObjectReference object) {
+rb_mmtk_get_original_gen_fields_tbl(MMTk_ObjectReference object) {
     VALUE obj = (VALUE)object;
 
     RUBY_ASSERT(FL_TEST(obj, FL_EXIVAR));
@@ -1752,18 +1752,18 @@ rb_mmtk_get_original_givtbl(MMTk_ObjectReference object) {
 struct st_table *rb_generic_fields_tbl_get(void); // Defined in variable.c
 
 st_table*
-rb_mmtk_get_generic_iv_tbl(void) {
+rb_mmtk_get_generic_fields_tbl(void) {
     return rb_generic_fields_tbl_get();
 }
 
-void rb_mmtk_mv_generic_ivar(VALUE src, VALUE dst); // Defined in variable.c
+void rb_mmtk_reinsert_generic_fields_tbl_entry(VALUE src, VALUE dst); // Defined in variable.c
 
 static void
-rb_mmtk_move_givtbl(MMTk_ObjectReference old_objref, MMTk_ObjectReference new_objref) {
-    rb_mmtk_mv_generic_ivar((VALUE)old_objref, (VALUE)new_objref);
+rb_mmtk_reinsert_generic_fields_tbl_entry_wrapper(MMTk_ObjectReference old_objref, MMTk_ObjectReference new_objref) {
+    rb_mmtk_reinsert_generic_fields_tbl_entry((VALUE)old_objref, (VALUE)new_objref);
 }
 
-void rb_mmtk_cleanup_generic_iv_tbl(void); // Defined in variable.c
+void rb_mmtk_cleanup_generic_fields_tbl(void); // Defined in variable.c
 void rb_mmtk_update_frozen_strings_table(void); // Defined in default.c
 void rb_mmtk_update_finalizer_and_obj_id_tables(void); // Defined in default.c
 void rb_mmtk_update_global_symbols_table(void); // Defined in gc.c
@@ -1799,16 +1799,16 @@ MMTk_RubyUpcalls ruby_upcalls = {
     rb_mmtk_scan_object_ruby_style,
     rb_mmtk_call_gc_mark_children,
     rb_mmtk_call_obj_free,
-    rb_mmtk_cleanup_generic_iv_tbl,
-    rb_mmtk_get_original_givtbl,
-    rb_mmtk_move_givtbl,
+    rb_mmtk_cleanup_generic_fields_tbl,
+    rb_mmtk_get_original_gen_fields_tbl,
+    rb_mmtk_reinsert_generic_fields_tbl_entry_wrapper,
     rb_mmtk_vm_live_bytes,
     rb_mmtk_update_frozen_strings_table,
     rb_mmtk_update_finalizer_and_obj_id_tables,
     rb_mmtk_update_global_symbols_table,
     rb_mmtk_update_overloaded_cme_table,
     rb_mmtk_update_ci_table,
-    rb_mmtk_get_generic_iv_tbl,
+    rb_mmtk_get_generic_fields_tbl,
     rb_mmtk_debug_get_num_fstrings,
     rb_mmtk_get_finalizer_table,
     rb_mmtk_get_id2ref_table,
