@@ -42,7 +42,8 @@ enum rb_gc_vm_weak_tables {
 #define RB_GC_VM_LOCK_NO_BARRIER() rb_gc_vm_lock_no_barrier(__FILE__, __LINE__)
 #define RB_GC_VM_UNLOCK_NO_BARRIER(lev) rb_gc_vm_unlock_no_barrier(lev, __FILE__, __LINE__)
 
-#if USE_MODULAR_GC
+// MMTk note: We expose those functions so that they can be called in mmtk_support.c
+#if USE_MODULAR_GC || USE_MMTK
 # define MODULAR_GC_FN
 #else
 // This takes advantage of internal linkage winning when appearing first.

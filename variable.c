@@ -1292,14 +1292,7 @@ rb_mmtk_update_generic_ivar(VALUE obj)
 {
     struct gen_fields_tbl *fields_tbl = (struct gen_fields_tbl *)mmtk_get_gen_fields_tbl_during_gc((MMTk_ObjectReference)obj);
     if (fields_tbl != NULL) {
-        if (rb_shape_obj_too_complex_p(obj)) {
-            rb_gc_update_tbl_refs(fields_tbl->as.complex.table);
-        }
-        else {
-            for (uint32_t i = 0; i < fields_tbl->as.shape.fields_count; i++) {
-                fields_tbl->as.shape.fields[i] = rb_gc_location(fields_tbl->as.shape.fields[i]);
-            }
-        }
+        // TODO: unimplemented
     }
 }
 

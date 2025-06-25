@@ -1661,7 +1661,7 @@ rb_mmtk_block_for_gc(MMTk_VMMutatorThread tls)
     // Note that the current ractor may not be the only mutator that requests GC.
     // The first mutator reached here will acquire the lock and initiate the VM barrier.
     // Subsequent mutators reached here will block until the GC finishes.
-    int lock_lev = rb_gc_vm_lock();
+    int lock_lev = RB_GC_VM_LOCK();
 
     if (rb_mmtk_global.start_the_world_count == my_count) {
         // If the GC count is the same, we are the first mutator reached here.
@@ -1693,7 +1693,7 @@ rb_mmtk_block_for_gc(MMTk_VMMutatorThread tls)
 
     // Release the VM lock.
     // Other Ractors will continue from rb_gc_vm_lock and find that the GC has finished.
-    rb_gc_vm_unlock(lock_lev);
+    RB_GC_VM_UNLOCK(lock_lev);
 
     // Trigger postponed job so that a mutator will start running pending final jobs soon.
     rb_mmtk_gc_finalize_deferred_register();
