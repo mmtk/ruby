@@ -1245,26 +1245,6 @@ rb_gen_fields_tbl_get(VALUE obj, ID id, VALUE *fields_obj)
     return r;
 }
 
-#if USE_MMTK
-// Get the gen_fields_tbl of an object during GC.
-// When using MMTk, this is called by a GC worker thread during transitive closure.
-// We can't acquire the VM lock in GC worker threads,
-// and we don't need to because we don't modify the generic_fields_tbl_ during transitive closure.
-struct gen_fields_tbl *
-rb_mmtk_gen_fields_tbl_get_during_gc(VALUE obj)
-{
-    RUBY_ASSERT(!RB_TYPE_P(obj, T_ICLASS));
-
-    st_data_t data;
-
-    if (st_lookup(generic_fields_tbl_, (st_data_t)obj, &data)) {
-        return (struct gen_fields_tbl *)data;
-    }
-
-    return NULL;
-}
-#endif
-
 int
 rb_ivar_generic_fields_tbl_lookup(VALUE obj, VALUE *fields_obj)
 {
@@ -1275,9 +1255,9 @@ void
 rb_mark_generic_ivar(VALUE obj)
 {
     WHEN_USING_MMTK({
-        // In MMTk, we only call this function when traversing.
-        // During GC, we call rb_mmtk_update_generic_ivar.
-        RUBY_ASSERT(GET_VM()->gc.mark_func_data != NULL);
+        // When using MMTk, if `obj` is moved, we scan `obj` after it is forwarded.
+        // But the `generic_fields_tbl_` contains its old address as the key.
+        obj = (VALUE)mmtk_get_backwarded_object((MMTk_ObjectReference)obj);
     })
 
     VALUE data;
@@ -1285,63 +1265,6 @@ rb_mark_generic_ivar(VALUE obj)
         rb_gc_mark_movable(data);
     }
 }
-
-#if USE_MMTK
-void
-rb_mmtk_update_generic_ivar(VALUE obj)
-{
-    struct gen_fields_tbl *fields_tbl = (struct gen_fields_tbl *)mmtk_get_gen_fields_tbl_during_gc((MMTk_ObjectReference)obj);
-    if (fields_tbl != NULL) {
-        // TODO: unimplemented
-    }
-}
-
-void
-rb_mmtk_reinsert_generic_fields_tbl_entry(VALUE rsrc, VALUE dst)
-{
-    st_data_t key = (st_data_t)rsrc;
-    st_data_t fields_tbl;
-
-    if (st_delete(generic_fields_tbl_no_ractor_check(rsrc), &key, &fields_tbl))
-        st_insert(generic_fields_tbl_no_ractor_check(dst), (st_data_t)dst, fields_tbl);
-}
-
-static int
-rb_mmtk_cleanup_generic_fields_tbl_check(st_data_t key, st_data_t value, st_data_t argp, int error)
-{
-    MMTk_ObjectReference key_objref = (MMTk_ObjectReference)key;
-    // Delete gen_fields_tbl for dead objects.
-    if (!mmtk_is_live_object(key_objref)) {
-        struct gen_fields_tbl *tbl = (struct gen_fields_tbl*)value;
-        RUBY_ASSERT(tbl != NULL);
-        xfree(tbl);
-
-        return ST_DELETE;
-    }
-
-    // Live objects should have been forwarded in mmtk-ruby.
-#if RUBY_DEBUG
-    MMTk_ObjectReference new_key = mmtk_get_forwarded_object(key_objref);
-    RUBY_ASSERT(new_key == NULL);
-#endif
-
-    return ST_CONTINUE;
-}
-
-/**
- * Remove entries in generic_fields_tbl_ where the key is dead.
- * Only used when using MMTk.  In vanilla Ruby, the gen_fields_tbl of an object is
- * removed from generic_fields_tbl_ in obj_free when the object dies.
- */
-void
-rb_mmtk_cleanup_generic_fields_tbl(void)
-{
-    st_foreach_with_replace(generic_fields_tbl_,
-                            rb_mmtk_cleanup_generic_fields_tbl_check,
-                            NULL,
-                            0);
-}
-#endif
 
 void
 rb_free_generic_ivar(VALUE obj)

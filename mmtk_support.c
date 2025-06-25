@@ -1741,14 +1741,6 @@ rb_mmtk_scan_roots_in_mutator_thread(MMTk_VMMutatorThread vm_mutator, MMTk_VMWor
     // We don't really need to do anything because all ractors and stacks are reachable from rb_vm_t.
 }
 
-static void*
-rb_mmtk_get_original_gen_fields_tbl(MMTk_ObjectReference object) {
-    VALUE obj = (VALUE)object;
-
-    RUBY_ASSERT(FL_TEST(obj, FL_EXIVAR));
-    return rb_mmtk_gen_fields_tbl_get_during_gc(obj);
-}
-
 struct st_table *rb_generic_fields_tbl_get(void); // Defined in variable.c
 
 st_table*
@@ -1756,14 +1748,13 @@ rb_mmtk_get_generic_fields_tbl(void) {
     return rb_generic_fields_tbl_get();
 }
 
-void rb_mmtk_reinsert_generic_fields_tbl_entry(VALUE src, VALUE dst); // Defined in variable.c
-
-static void
-rb_mmtk_reinsert_generic_fields_tbl_entry_wrapper(MMTk_ObjectReference old_objref, MMTk_ObjectReference new_objref) {
-    rb_mmtk_reinsert_generic_fields_tbl_entry((VALUE)old_objref, (VALUE)new_objref);
+bool
+rb_mmtk_has_exivar(MMTk_ObjectReference object)
+{
+    return rb_obj_exivar_p((VALUE)object);
 }
 
-void rb_mmtk_cleanup_generic_fields_tbl(void); // Defined in variable.c
+void rb_mmtk_update_generic_fields_table(void); // Defined in default.c
 void rb_mmtk_update_frozen_strings_table(void); // Defined in default.c
 void rb_mmtk_update_finalizer_and_obj_id_tables(void); // Defined in default.c
 void rb_mmtk_update_global_symbols_table(void); // Defined in gc.c
@@ -1799,10 +1790,9 @@ MMTk_RubyUpcalls ruby_upcalls = {
     rb_mmtk_scan_object_ruby_style,
     rb_mmtk_call_gc_mark_children,
     rb_mmtk_call_obj_free,
-    rb_mmtk_cleanup_generic_fields_tbl,
-    rb_mmtk_get_original_gen_fields_tbl,
-    rb_mmtk_reinsert_generic_fields_tbl_entry_wrapper,
     rb_mmtk_vm_live_bytes,
+    rb_mmtk_has_exivar,
+    rb_mmtk_update_generic_fields_table,
     rb_mmtk_update_frozen_strings_table,
     rb_mmtk_update_finalizer_and_obj_id_tables,
     rb_mmtk_update_global_symbols_table,

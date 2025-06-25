@@ -10291,6 +10291,16 @@ rb_mmtk_update_table_replace_i(VALUE *value, void *data)
 }
 
 void
+rb_mmtk_update_generic_fields_table(void)
+{
+    // The generic_fields_tbl_ maps each object to its imemo:fields object.
+    // Each key-value pair represents a strong edge from each key to its value.
+    // rb_gc_mark_children traces the edge from key to value as if it were a field of the key.
+    // We need to update both keys and values, and removed entries of dead keys.
+    rb_gc_vm_weak_table_foreach(rb_mmtk_update_table_i, rb_mmtk_update_table_replace_i, NULL, false, RB_GC_VM_GENERIC_FIELDS_TABLE);
+}
+
+void
 rb_mmtk_update_frozen_strings_table(void)
 {
     // The frozen strings table is a deduplicating table for frozen strings.

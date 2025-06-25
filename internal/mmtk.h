@@ -80,11 +80,9 @@ typedef struct MMTk_RubyUpcalls {
     void (*scan_object_ruby_style)(MMTk_ObjectReference object);
     void (*call_gc_mark_children)(MMTk_ObjectReference object);
     void (*call_obj_free)(MMTk_ObjectReference object);
-    void (*cleanup_generic_fields_tbl)(void);
-    void *(*get_original_gen_fields_tbl)(MMTk_ObjectReference object);
-    void (*reinsert_generic_fields_tbl_entry)(MMTk_ObjectReference old_objref,
-                                              MMTk_ObjectReference new_objref);
     size_t (*vm_live_bytes)(void);
+    bool (*has_exivar)(MMTk_ObjectReference object);
+    void (*update_generic_fields_table)(void);
     void (*update_frozen_strings_table)(void);
     void (*update_finalizer_and_obj_id_tables)(void);
     void (*update_global_symbols_table)(void);
@@ -243,7 +241,7 @@ void mmtk_register_ppp(MMTk_ObjectReference object);
 
 void mmtk_register_ppps(const MMTk_ObjectReference *objects, size_t len);
 
-void *mmtk_get_gen_fields_tbl_during_gc(MMTk_ObjectReference object);
+MMTk_ObjectReference mmtk_get_backwarded_object(MMTk_ObjectReference object);
 
 size_t mmtk_get_vo_bit_log_region_size(void);
 

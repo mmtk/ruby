@@ -3243,13 +3243,12 @@ rb_gc_mark_children(void *objspace, VALUE obj)
 {
     struct gc_mark_classext_foreach_arg foreach_args;
 
-    // When using MMTK, we rely on rb_gc_update_object_references to trace generic ivars.
-    // We still need to visit generic ivars in rb_gc_mark_children when traversing (not during GC).
-    WHEN_USING_MMTK_CONDITIONAL(GET_VM()->gc.mark_func_data != NULL, {
+    // MMTk note: CRuby now visits the associated imemo:fields object as if it were a child of
+    // `obj`.  By marking it here, MMTk will treat it as a child, too.  But we will not update the
+    // entries of `generic_fields_tbl_` until the weak reference processing phase.
     if (rb_obj_exivar_p(obj)) {
         rb_mark_generic_ivar(obj);
     }
-    })
 
     switch (BUILTIN_TYPE(obj)) {
       case T_FLOAT:
@@ -4381,13 +4380,10 @@ rb_mmtk_gc_ref_update_string(void * objspace, VALUE str)
 void
 rb_gc_update_object_references(void *objspace, VALUE obj)
 {
-    WHEN_USING_MMTK({
-        // When using MMTk, we eagerly trace and update the generic ivars when scanning an object.
-        // In the default GC, we update the global ivar table during weak ref processing.
-        if (FL_TEST(obj, FL_EXIVAR)) {
-            rb_mmtk_update_generic_ivar(obj);
-        }
-    })
+    // MMTk note: The generic_fields_tbl_ now maps each objects that needs off-object heap to an
+    // imemo:fileds object.  When using MMTk, we mark the associated fields object (in
+    // `rb_gc_mark_children`), but we don't eagerly update the generic_fields_tbl_.
+    // We do it like the default GC.  We update the generic_fields_tbl_ during weak ref processing.
 
     struct classext_foreach_args args;
 
