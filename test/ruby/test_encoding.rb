@@ -33,7 +33,7 @@ class TestEncoding < Test::Unit::TestCase
     encodings.each do |e|
       assert_raise(TypeError) { e.dup }
       assert_raise(TypeError) { e.clone }
-      assert_equal(e.object_id, Marshal.load(Marshal.dump(e)).object_id)
+      assert_same(e, Marshal.load(Marshal.dump(e)))
     end
   end
 
@@ -130,7 +130,7 @@ class TestEncoding < Test::Unit::TestCase
   def test_ractor_load_encoding
     assert_ractor("#{<<~"begin;"}\n#{<<~'end;'}")
     begin;
-      Ractor.new{}.take
+      Ractor.new{}.join
       $-w = nil
       Encoding.default_external = Encoding::ISO8859_2
       assert "[Bug #19562]"

@@ -7,7 +7,7 @@ use crate::state::ZJITState;
 use crate::{asm::CodeBlock, cruby::*, options::debug, virtualmem::CodePtr};
 use crate::invariants::{iseq_escapes_ep, track_no_ep_escape_assumption};
 use crate::backend::lir::{self, asm_comment, Assembler, Opnd, Target, CFP, C_ARG_OPNDS, C_RET_OPND, EC, SP};
-use crate::hir::{iseq_to_hir, Block, BlockId, BranchEdge, CallInfo};
+use crate::hir::{iseq_to_hir, Block, BlockId, BranchEdge, CallInfo, RangeType, SELF_PARAM_IDX, SpecialObjectType};
 use crate::hir::{Const, FrameState, Function, Insn, InsnId};
 use crate::hir_type::{types::Fixnum, Type};
 use crate::options::get_option;
@@ -248,21 +248,23 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
     }
 
     let out_opnd = match insn {
-        Insn::PutSelf => gen_putself(),
         Insn::Const { val: Const::Value(val) } => gen_const(*val),
         Insn::NewArray { elements, state } => gen_new_array(jit, asm, elements, &function.frame_state(*state)),
+        Insn::NewRange { low, high, flag, state } => gen_new_range(asm, opnd!(low), opnd!(high), *flag, &function.frame_state(*state)),
         Insn::ArrayDup { val, state } => gen_array_dup(asm, opnd!(val), &function.frame_state(*state)),
+        Insn::StringCopy { val, chilled } => gen_string_copy(asm, opnd!(val), *chilled),
         Insn::Param { idx } => unreachable!("block.insns should not have Insn::Param({idx})"),
         Insn::Snapshot { .. } => return Some(()), // we don't need to do anything for this instruction at the moment
         Insn::Jump(branch) => return gen_jump(jit, asm, branch),
         Insn::IfTrue { val, target } => return gen_if_true(jit, asm, opnd!(val), target),
         Insn::IfFalse { val, target } => return gen_if_false(jit, asm, opnd!(val), target),
-        Insn::SendWithoutBlock { call_info, cd, state, .. } => gen_send_without_block(jit, asm, call_info, *cd, &function.frame_state(*state))?,
-        Insn::SendWithoutBlockDirect { iseq, self_val, args, .. } => gen_send_without_block_direct(cb, jit, asm, *iseq, opnd!(self_val), args)?,
+        Insn::SendWithoutBlock { call_info, cd, state, self_val, args, .. } => gen_send_without_block(jit, asm, call_info, *cd, &function.frame_state(*state), self_val, args)?,
+        Insn::SendWithoutBlockDirect { cme, iseq, self_val, args, state, .. } => gen_send_without_block_direct(cb, jit, asm, *cme, *iseq, opnd!(self_val), args, &function.frame_state(*state))?,
+        Insn::InvokeBuiltin { bf, args, state } => gen_invokebuiltin(jit, asm, &function.frame_state(*state), bf, args)?,
         Insn::Return { val } => return Some(gen_return(asm, opnd!(val))?),
-        Insn::FixnumAdd { left, right, state } => gen_fixnum_add(asm, opnd!(left), opnd!(right), &function.frame_state(*state))?,
-        Insn::FixnumSub { left, right, state } => gen_fixnum_sub(asm, opnd!(left), opnd!(right), &function.frame_state(*state))?,
-        Insn::FixnumMult { left, right, state } => gen_fixnum_mult(asm, opnd!(left), opnd!(right), &function.frame_state(*state))?,
+        Insn::FixnumAdd { left, right, state } => gen_fixnum_add(jit, asm, opnd!(left), opnd!(right), &function.frame_state(*state))?,
+        Insn::FixnumSub { left, right, state } => gen_fixnum_sub(jit, asm, opnd!(left), opnd!(right), &function.frame_state(*state))?,
+        Insn::FixnumMult { left, right, state } => gen_fixnum_mult(jit, asm, opnd!(left), opnd!(right), &function.frame_state(*state))?,
         Insn::FixnumEq { left, right } => gen_fixnum_eq(asm, opnd!(left), opnd!(right))?,
         Insn::FixnumNeq { left, right } => gen_fixnum_neq(asm, opnd!(left), opnd!(right))?,
         Insn::FixnumLt { left, right } => gen_fixnum_lt(asm, opnd!(left), opnd!(right))?,
@@ -270,20 +272,65 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         Insn::FixnumGt { left, right } => gen_fixnum_gt(asm, opnd!(left), opnd!(right))?,
         Insn::FixnumGe { left, right } => gen_fixnum_ge(asm, opnd!(left), opnd!(right))?,
         Insn::Test { val } => gen_test(asm, opnd!(val))?,
-        Insn::GuardType { val, guard_type, state } => gen_guard_type(asm, opnd!(val), *guard_type, &function.frame_state(*state))?,
-        Insn::GuardBitEquals { val, expected, state } => gen_guard_bit_equals(asm, opnd!(val), *expected, &function.frame_state(*state))?,
+        Insn::GuardType { val, guard_type, state } => gen_guard_type(jit, asm, opnd!(val), *guard_type, &function.frame_state(*state))?,
+        Insn::GuardBitEquals { val, expected, state } => gen_guard_bit_equals(jit, asm, opnd!(val), *expected, &function.frame_state(*state))?,
         Insn::PatchPoint(_) => return Some(()), // For now, rb_zjit_bop_redefined() panics. TODO: leave a patch point and fix rb_zjit_bop_redefined()
         Insn::CCall { cfun, args, name: _, return_type: _, elidable: _ } => gen_ccall(jit, asm, *cfun, args)?,
+        Insn::GetIvar { self_val, id, state: _ } => gen_getivar(asm, opnd!(self_val), *id),
+        Insn::SetGlobal { id, val, state: _ } => gen_setglobal(asm, *id, opnd!(val)),
+        Insn::GetGlobal { id, state: _ } => gen_getglobal(asm, *id),
+        Insn::GetConstantPath { ic, state } => gen_get_constant_path(asm, *ic, &function.frame_state(*state)),
+        Insn::SetIvar { self_val, id, val, state: _ } => return gen_setivar(asm, opnd!(self_val), *id, opnd!(val)),
+        Insn::SideExit { state } => return gen_side_exit(jit, asm, &function.frame_state(*state)),
+        Insn::PutSpecialObject { value_type } => gen_putspecialobject(asm, *value_type),
+        Insn::AnyToString { val, str, state } => gen_anytostring(asm, opnd!(val), opnd!(str), &function.frame_state(*state))?,
         _ => {
             debug!("ZJIT: gen_function: unexpected insn {:?}", insn);
             return None;
         }
     };
 
+    assert!(insn.has_output(), "Cannot write LIR output of HIR instruction with no output");
+
     // If the instruction has an output, remember it in jit.opnds
     jit.opnds[insn_id.0] = Some(out_opnd);
 
     Some(())
+}
+
+fn gen_get_constant_path(asm: &mut Assembler, ic: *const iseq_inline_constant_cache, state: &FrameState) -> Opnd {
+    unsafe extern "C" {
+        fn rb_vm_opt_getconstant_path(ec: EcPtr, cfp: CfpPtr, ic: *const iseq_inline_constant_cache) -> VALUE;
+    }
+
+    // Save PC since the call can allocate an IC
+    gen_save_pc(asm, state);
+
+    let val = asm.ccall(
+        rb_vm_opt_getconstant_path as *const u8,
+        vec![EC, CFP, Opnd::const_ptr(ic as *const u8)],
+    );
+    val
+}
+
+fn gen_invokebuiltin(jit: &mut JITState, asm: &mut Assembler, state: &FrameState, bf: &rb_builtin_function, args: &Vec<InsnId>) -> Option<lir::Opnd> {
+    // Ensure we have enough room fit ec, self, and arguments
+    // TODO remove this check when we have stack args (we can use Time.new to test it)
+    if bf.argc + 2 > (C_ARG_OPNDS.len() as i32) {
+        return None;
+    }
+
+    gen_save_pc(asm, state);
+
+    let mut cargs = vec![EC];
+    for &arg in args.iter() {
+        let opnd = jit.get_opnd(arg)?;
+        cargs.push(opnd);
+    }
+
+    let val = asm.ccall(bf.func_ptr as *const u8, cargs);
+
+    Some(val)
 }
 
 /// Lowering for [`Insn::CCall`]. This is a low-level raw call that doesn't know
@@ -295,6 +342,62 @@ fn gen_ccall(jit: &mut JITState, asm: &mut Assembler, cfun: *const u8, args: &[I
     }
 
     Some(asm.ccall(cfun, lir_args))
+}
+
+/// Emit an uncached instance variable lookup
+fn gen_getivar(asm: &mut Assembler, recv: Opnd, id: ID) -> Opnd {
+    asm_comment!(asm, "call rb_ivar_get");
+    asm.ccall(
+        rb_ivar_get as *const u8,
+        vec![recv, Opnd::UImm(id.0)],
+    )
+}
+
+/// Emit an uncached instance variable store
+fn gen_setivar(asm: &mut Assembler, recv: Opnd, id: ID, val: Opnd) -> Option<()> {
+    asm_comment!(asm, "call rb_ivar_set");
+    asm.ccall(
+        rb_ivar_set as *const u8,
+        vec![recv, Opnd::UImm(id.0), val],
+    );
+    Some(())
+}
+
+/// Look up global variables
+fn gen_getglobal(asm: &mut Assembler, id: ID) -> Opnd {
+    asm_comment!(asm, "call rb_gvar_get");
+    asm.ccall(
+        rb_gvar_get as *const u8,
+        vec![Opnd::UImm(id.0)],
+    )
+}
+
+/// Set global variables
+fn gen_setglobal(asm: &mut Assembler, id: ID, val: Opnd) -> Opnd {
+    asm_comment!(asm, "call rb_gvar_set");
+    asm.ccall(
+        rb_gvar_set as *const u8,
+        vec![Opnd::UImm(id.0), val],
+    )
+}
+
+/// Side-exit into the interpreter
+fn gen_side_exit(jit: &mut JITState, asm: &mut Assembler, state: &FrameState) -> Option<()> {
+    asm.jmp(side_exit(jit, state)?);
+    Some(())
+}
+
+/// Emit a special object lookup
+fn gen_putspecialobject(asm: &mut Assembler, value_type: SpecialObjectType) -> Opnd {
+    // Get the EP of the current CFP and load it into a register
+    let ep_opnd = Opnd::mem(64, CFP, RUBY_OFFSET_CFP_EP);
+    let ep_reg = asm.load(ep_opnd);
+
+    asm_comment!(asm, "call rb_vm_get_special_object");
+    asm.ccall(
+        rb_vm_get_special_object as *const u8,
+        vec![ep_reg, Opnd::UImm(u64::from(value_type))],
+    )
 }
 
 /// Compile an interpreter entry block to be inserted into an ISEQ
@@ -311,7 +414,7 @@ fn gen_entry_prologue(asm: &mut Assembler, iseq: IseqPtr) {
         asm.cpush(SP);
     }
 
-    // EC and CFP are pased as arguments
+    // EC and CFP are passed as arguments
     asm.mov(EC, C_ARG_OPNDS[0]);
     asm.mov(CFP, C_ARG_OPNDS[1]);
 
@@ -323,13 +426,16 @@ fn gen_entry_prologue(asm: &mut Assembler, iseq: IseqPtr) {
 
 /// Assign method arguments to basic block arguments at JIT entry
 fn gen_method_params(asm: &mut Assembler, iseq: IseqPtr, entry_block: &Block) {
+    let self_param = gen_param(asm, SELF_PARAM_IDX);
+    asm.mov(self_param, Opnd::mem(VALUE_BITS, CFP, RUBY_OFFSET_CFP_SELF));
+
     let num_params = entry_block.params().len();
     if num_params > 0 {
         asm_comment!(asm, "set method params: {num_params}");
 
         // Allocate registers for basic block arguments
         let params: Vec<Opnd> = (0..num_params).map(|idx|
-            gen_param(asm, idx)
+            gen_param(asm, idx + 1) // +1 for self
         ).collect();
 
         // Assign local variables to the basic block arguments
@@ -371,11 +477,6 @@ fn gen_getlocal(asm: &mut Assembler, iseq: IseqPtr, local_idx: usize) -> lir::Op
         let offs = -(SIZEOF_VALUE_I32 * ep_offset);
         Opnd::mem(64, ep_reg, offs)
     }
-}
-
-/// Compile self in the current frame
-fn gen_putself() -> lir::Opnd {
-    Opnd::mem(VALUE_BITS, CFP, RUBY_OFFSET_CFP_SELF)
 }
 
 /// Compile a constant
@@ -443,10 +544,20 @@ fn gen_send_without_block(
     call_info: &CallInfo,
     cd: *const rb_call_data,
     state: &FrameState,
+    self_val: &InsnId,
+    args: &Vec<InsnId>,
 ) -> Option<lir::Opnd> {
-    // Spill the virtual stack onto the stack. They need to be marked by GC and may be caller-saved registers.
+    // Spill locals onto the stack.
+    // TODO: Don't spill locals eagerly; lazily reify frames
+    asm_comment!(asm, "spill locals");
+    for (idx, &insn_id) in state.locals().enumerate() {
+        asm.mov(Opnd::mem(64, SP, (-local_idx_to_ep_offset(jit.iseq, idx) - 1) * SIZEOF_VALUE_I32), jit.get_opnd(insn_id)?);
+    }
+    // Spill the receiver and the arguments onto the stack.
+    // They need to be on the interpreter stack to let the interpreter access them.
     // TODO: Avoid spilling operands that have been spilled before.
-    for (idx, &insn_id) in state.stack().enumerate() {
+    asm_comment!(asm, "spill receiver and arguments");
+    for (idx, &insn_id) in [*self_val].iter().chain(args.iter()).enumerate() {
         // Currently, we don't move the SP register. So it's equal to the base pointer.
         let stack_opnd = Opnd::mem(64, SP, idx as i32  * SIZEOF_VALUE_I32);
         asm.mov(stack_opnd, jit.get_opnd(insn_id)?);
@@ -454,7 +565,7 @@ fn gen_send_without_block(
 
     // Save PC and SP
     gen_save_pc(asm, state);
-    gen_save_sp(asm, state);
+    gen_save_sp(asm, 1 + args.len()); // +1 for receiver
 
     asm_comment!(asm, "call #{} with dynamic dispatch", call_info.method_name);
     unsafe extern "C" {
@@ -475,12 +586,39 @@ fn gen_send_without_block_direct(
     cb: &mut CodeBlock,
     jit: &mut JITState,
     asm: &mut Assembler,
+    cme: *const rb_callable_method_entry_t,
     iseq: IseqPtr,
     recv: Opnd,
     args: &Vec<InsnId>,
+    state: &FrameState,
 ) -> Option<lir::Opnd> {
+    // Save cfp->pc and cfp->sp for the caller frame
+    gen_save_pc(asm, state);
+    gen_save_sp(asm, state.stack().len() - args.len() - 1); // -1 for receiver
+
+    // Spill the virtual stack and the locals of the caller onto the stack
+    // TODO: Lazily materialize caller frames on side exits or when needed
+    asm_comment!(asm, "spill locals and stack");
+    for (idx, &insn_id) in state.locals().enumerate() {
+        asm.mov(Opnd::mem(64, SP, (-local_idx_to_ep_offset(jit.iseq, idx) - 1) * SIZEOF_VALUE_I32), jit.get_opnd(insn_id)?);
+    }
+    for (idx, &insn_id) in state.stack().enumerate() {
+        asm.mov(Opnd::mem(64, SP, idx as i32 * SIZEOF_VALUE_I32), jit.get_opnd(insn_id)?);
+    }
+
     // Set up the new frame
-    gen_push_frame(asm, recv);
+    // TODO: Lazily materialize caller frames on side exits or when needed
+    gen_push_frame(asm, args.len(), state, ControlFrame {
+        recv,
+        iseq,
+        cme,
+        frame_type: VM_FRAME_MAGIC_METHOD | VM_ENV_FLAG_LOCAL,
+    });
+
+    asm_comment!(asm, "switch to new SP register");
+    let local_size = unsafe { get_iseq_body_local_table_size(iseq) } as usize;
+    let new_sp = asm.add(SP, ((state.stack().len() + local_size - args.len() + VM_ENV_DATA_SIZE as usize) * SIZEOF_VALUE).into());
+    asm.mov(SP, new_sp);
 
     asm_comment!(asm, "switch to new CFP");
     let new_cfp = asm.sub(CFP, RUBY_SIZEOF_CONTROL_FRAME.into());
@@ -489,6 +627,7 @@ fn gen_send_without_block_direct(
 
     // Set up arguments
     let mut c_args: Vec<Opnd> = vec![];
+    c_args.push(recv);
     for &arg in args.iter() {
         c_args.push(jit.get_opnd(arg)?);
     }
@@ -499,7 +638,26 @@ fn gen_send_without_block_direct(
     jit.branch_iseqs.push((branch.clone(), iseq));
     // TODO(max): Add a PatchPoint here that can side-exit the function if the callee messed with
     // the frame's locals
-    Some(asm.ccall_with_branch(dummy_ptr, c_args, &branch))
+    let ret = asm.ccall_with_branch(dummy_ptr, c_args, &branch);
+
+    // If a callee side-exits, i.e. returns Qundef, propagate the return value to the caller.
+    // The caller will side-exit the callee into the interpreter.
+    // TODO: Let side exit code pop all JIT frames to optimize away this cmp + je.
+    asm.cmp(ret, Qundef.into());
+    asm.je(ZJITState::get_exit_trampoline().into());
+
+    Some(ret)
+}
+
+/// Compile a string resurrection
+fn gen_string_copy(asm: &mut Assembler, recv: Opnd, chilled: bool) -> Opnd {
+    asm_comment!(asm, "call rb_ec_str_resurrect");
+    // TODO: split rb_ec_str_resurrect into separate functions
+    let chilled = if chilled { Opnd::Imm(1) } else { Opnd::Imm(0) };
+    asm.ccall(
+        rb_ec_str_resurrect as *const u8,
+        vec![EC, recv, chilled],
+    )
 }
 
 /// Compile an array duplication instruction
@@ -508,11 +666,10 @@ fn gen_array_dup(
     val: lir::Opnd,
     state: &FrameState,
 ) -> lir::Opnd {
-    asm_comment!(asm, "call rb_ary_resurrect");
-
     // Save PC
     gen_save_pc(asm, state);
 
+    asm_comment!(asm, "call rb_ary_resurrect");
     asm.ccall(
         rb_ary_resurrect as *const u8,
         vec![val],
@@ -526,13 +683,12 @@ fn gen_new_array(
     elements: &Vec<InsnId>,
     state: &FrameState,
 ) -> lir::Opnd {
-    asm_comment!(asm, "call rb_ary_new");
-
     // Save PC
     gen_save_pc(asm, state);
 
     let length: ::std::os::raw::c_long = elements.len().try_into().expect("Unable to fit length of elements into c_long");
 
+    asm_comment!(asm, "call rb_ary_new");
     let new_array = asm.ccall(
         rb_ary_new_capa as *const u8,
         vec![lir::Opnd::Imm(length)],
@@ -541,6 +697,7 @@ fn gen_new_array(
     for i in 0..elements.len() {
         let insn_id = elements.get(i as usize).expect("Element should exist at index");
         let val = jit.get_opnd(*insn_id).unwrap();
+        asm_comment!(asm, "call rb_ary_push");
         asm.ccall(
             rb_ary_push as *const u8,
             vec![new_array, val]
@@ -548,6 +705,27 @@ fn gen_new_array(
     }
 
     new_array
+}
+
+/// Compile a new range instruction
+fn gen_new_range(
+    asm: &mut Assembler,
+    low: lir::Opnd,
+    high: lir::Opnd,
+    flag: RangeType,
+    state: &FrameState,
+) -> lir::Opnd {
+    // Save PC
+    gen_save_pc(asm, state);
+
+    asm_comment!(asm, "call rb_range_new");
+    // Call rb_range_new(low, high, flag)
+    let new_range = asm.ccall(
+        rb_range_new as *const u8,
+        vec![low, high, lir::Opnd::Imm(flag as i64)],
+    );
+
+    new_range
 }
 
 /// Compile code that exits from JIT code with a return value
@@ -567,27 +745,27 @@ fn gen_return(asm: &mut Assembler, val: lir::Opnd) -> Option<()> {
 }
 
 /// Compile Fixnum + Fixnum
-fn gen_fixnum_add(asm: &mut Assembler, left: lir::Opnd, right: lir::Opnd, state: &FrameState) -> Option<lir::Opnd> {
+fn gen_fixnum_add(jit: &mut JITState, asm: &mut Assembler, left: lir::Opnd, right: lir::Opnd, state: &FrameState) -> Option<lir::Opnd> {
     // Add left + right and test for overflow
     let left_untag = asm.sub(left, Opnd::Imm(1));
     let out_val = asm.add(left_untag, right);
-    asm.jo(Target::SideExit(state.clone()));
+    asm.jo(side_exit(jit, state)?);
 
     Some(out_val)
 }
 
 /// Compile Fixnum - Fixnum
-fn gen_fixnum_sub(asm: &mut Assembler, left: lir::Opnd, right: lir::Opnd, state: &FrameState) -> Option<lir::Opnd> {
+fn gen_fixnum_sub(jit: &mut JITState, asm: &mut Assembler, left: lir::Opnd, right: lir::Opnd, state: &FrameState) -> Option<lir::Opnd> {
     // Subtract left - right and test for overflow
     let val_untag = asm.sub(left, right);
-    asm.jo(Target::SideExit(state.clone()));
+    asm.jo(side_exit(jit, state)?);
     let out_val = asm.add(val_untag, Opnd::Imm(1));
 
     Some(out_val)
 }
 
 /// Compile Fixnum * Fixnum
-fn gen_fixnum_mult(asm: &mut Assembler, left: lir::Opnd, right: lir::Opnd, state: &FrameState) -> Option<lir::Opnd> {
+fn gen_fixnum_mult(jit: &mut JITState, asm: &mut Assembler, left: lir::Opnd, right: lir::Opnd, state: &FrameState) -> Option<lir::Opnd> {
     // Do some bitwise gymnastics to handle tag bits
     // x * y is translated to (x >> 1) * (y - 1) + 1
     let left_untag = asm.rshift(left, Opnd::UImm(1));
@@ -595,7 +773,7 @@ fn gen_fixnum_mult(asm: &mut Assembler, left: lir::Opnd, right: lir::Opnd, state
     let out_val = asm.mul(left_untag, right_untag);
 
     // Test for overflow
-    asm.jo_mul(Target::SideExit(state.clone()));
+    asm.jo_mul(side_exit(jit, state)?);
     let out_val = asm.add(out_val, Opnd::UImm(1));
 
     Some(out_val)
@@ -637,6 +815,17 @@ fn gen_fixnum_ge(asm: &mut Assembler, left: lir::Opnd, right: lir::Opnd) -> Opti
     Some(asm.csel_ge(Qtrue.into(), Qfalse.into()))
 }
 
+fn gen_anytostring(asm: &mut Assembler, val: lir::Opnd, str: lir::Opnd, state: &FrameState) -> Option<lir::Opnd> {
+    // Save PC
+    gen_save_pc(asm, state);
+
+    asm_comment!(asm, "call rb_obj_as_string_result");
+    Some(asm.ccall(
+        rb_obj_as_string_result as *const u8,
+        vec![str, val],
+    ))
+}
+
 /// Evaluate if a value is truthy
 /// Produces a CBool type (0 or 1)
 /// In Ruby, only nil and false are falsy
@@ -649,11 +838,11 @@ fn gen_test(asm: &mut Assembler, val: lir::Opnd) -> Option<lir::Opnd> {
 }
 
 /// Compile a type check with a side exit
-fn gen_guard_type(asm: &mut Assembler, val: lir::Opnd, guard_type: Type, state: &FrameState) -> Option<lir::Opnd> {
+fn gen_guard_type(jit: &mut JITState, asm: &mut Assembler, val: lir::Opnd, guard_type: Type, state: &FrameState) -> Option<lir::Opnd> {
     if guard_type.is_subtype(Fixnum) {
         // Check if opnd is Fixnum
         asm.test(val, Opnd::UImm(RUBY_FIXNUM_FLAG as u64));
-        asm.jz(Target::SideExit(state.clone()));
+        asm.jz(side_exit(jit, state)?);
     } else {
         unimplemented!("unsupported type: {guard_type}");
     }
@@ -661,9 +850,9 @@ fn gen_guard_type(asm: &mut Assembler, val: lir::Opnd, guard_type: Type, state: 
 }
 
 /// Compile an identity check with a side exit
-fn gen_guard_bit_equals(asm: &mut Assembler, val: lir::Opnd, expected: VALUE, state: &FrameState) -> Option<lir::Opnd> {
+fn gen_guard_bit_equals(jit: &mut JITState, asm: &mut Assembler, val: lir::Opnd, expected: VALUE, state: &FrameState) -> Option<lir::Opnd> {
     asm.cmp(val, Opnd::UImm(expected.into()));
-    asm.jnz(Target::SideExit(state.clone()));
+    asm.jnz(side_exit(jit, state)?);
     Some(val)
 }
 
@@ -678,42 +867,78 @@ fn gen_save_pc(asm: &mut Assembler, state: &FrameState) {
 }
 
 /// Save the current SP on the CFP
-fn gen_save_sp(asm: &mut Assembler, state: &FrameState) {
+fn gen_save_sp(asm: &mut Assembler, stack_size: usize) {
     // Update cfp->sp which will be read by the interpreter. We also have the SP register in JIT
     // code, and ZJIT's codegen currently assumes the SP register doesn't move, e.g. gen_param().
     // So we don't update the SP register here. We could update the SP register to avoid using
     // an extra register for asm.lea(), but you'll need to manage the SP offset like YJIT does.
-    asm_comment!(asm, "save SP to CFP: {}", state.stack_size());
-    let sp_addr = asm.lea(Opnd::mem(64, SP, state.stack_size() as i32 * SIZEOF_VALUE_I32));
+    asm_comment!(asm, "save SP to CFP: {}", stack_size);
+    let sp_addr = asm.lea(Opnd::mem(64, SP, stack_size as i32 * SIZEOF_VALUE_I32));
     let cfp_sp = Opnd::mem(64, CFP, RUBY_OFFSET_CFP_SP);
     asm.mov(cfp_sp, sp_addr);
 }
 
+/// Frame metadata written by gen_push_frame()
+struct ControlFrame {
+    recv: Opnd,
+    iseq: IseqPtr,
+    cme: *const rb_callable_method_entry_t,
+    frame_type: u32,
+}
+
 /// Compile an interpreter frame
-fn gen_push_frame(asm: &mut Assembler, recv: Opnd) {
-    // Write to a callee CFP
+fn gen_push_frame(asm: &mut Assembler, argc: usize, state: &FrameState, frame: ControlFrame) {
+    // Locals are written by the callee frame on side-exits or non-leaf calls
+
+    // See vm_push_frame() for details
+    asm_comment!(asm, "push cme, specval, frame type");
+    // ep[-2]: cref of cme
+    let local_size = unsafe { get_iseq_body_local_table_size(frame.iseq) } as i32;
+    let ep_offset = state.stack().len() as i32 + local_size - argc as i32 + VM_ENV_DATA_SIZE as i32 - 1;
+    asm.store(Opnd::mem(64, SP, (ep_offset - 2) * SIZEOF_VALUE_I32), VALUE::from(frame.cme).into());
+    // ep[-1]: block_handler or prev EP
+    // block_handler is not supported for now
+    asm.store(Opnd::mem(64, SP, (ep_offset - 1) * SIZEOF_VALUE_I32), VM_BLOCK_HANDLER_NONE.into());
+    // ep[0]: ENV_FLAGS
+    asm.store(Opnd::mem(64, SP, ep_offset * SIZEOF_VALUE_I32), frame.frame_type.into());
+
+    // Write to the callee CFP
     fn cfp_opnd(offset: i32) -> Opnd {
         Opnd::mem(64, CFP, offset - (RUBY_SIZEOF_CONTROL_FRAME as i32))
     }
 
     asm_comment!(asm, "push callee control frame");
-    asm.mov(cfp_opnd(RUBY_OFFSET_CFP_SELF), recv);
-    // TODO: Write more fields as needed
+    // cfp_opnd(RUBY_OFFSET_CFP_PC): written by the callee frame on side-exits or non-leaf calls
+    // cfp_opnd(RUBY_OFFSET_CFP_SP): written by the callee frame on side-exits or non-leaf calls
+    asm.mov(cfp_opnd(RUBY_OFFSET_CFP_ISEQ), VALUE::from(frame.iseq).into());
+    asm.mov(cfp_opnd(RUBY_OFFSET_CFP_SELF), frame.recv);
+    let ep = asm.lea(Opnd::mem(64, SP, ep_offset * SIZEOF_VALUE_I32));
+    asm.mov(cfp_opnd(RUBY_OFFSET_CFP_EP), ep);
+    asm.mov(cfp_opnd(RUBY_OFFSET_CFP_BLOCK_CODE), 0.into());
 }
 
 /// Return a register we use for the basic block argument at a given index
 fn param_reg(idx: usize) -> Reg {
     // To simplify the implementation, allocate a fixed register for each basic block argument for now.
     // TODO: Allow allocating arbitrary registers for basic block arguments
+    if idx >= ALLOC_REGS.len() {
+        unimplemented!(
+            "register spilling not yet implemented, too many basic block arguments ({}/{})",
+            idx + 1, ALLOC_REGS.len()
+        );
+    }
     ALLOC_REGS[idx]
 }
 
 /// Inverse of ep_offset_to_local_idx(). See ep_offset_to_local_idx() for details.
 fn local_idx_to_ep_offset(iseq: IseqPtr, local_idx: usize) -> i32 {
-    let local_table_size: i32 = unsafe { get_iseq_body_local_table_size(iseq) }
-        .try_into()
-        .unwrap();
-    local_table_size - local_idx as i32 - 1 + VM_ENV_DATA_SIZE as i32
+    let local_size = unsafe { get_iseq_body_local_table_size(iseq) };
+    local_size_and_idx_to_ep_offset(local_size as usize, local_idx)
+}
+
+/// Convert the number of locals and a local index to an offset in the EP
+pub fn local_size_and_idx_to_ep_offset(local_size: usize, local_idx: usize) -> i32 {
+    local_size as i32 - local_idx as i32 - 1 + VM_ENV_DATA_SIZE as i32
 }
 
 /// Convert ISEQ into High-level IR
@@ -727,6 +952,26 @@ fn compile_iseq(iseq: IseqPtr) -> Option<Function> {
     };
     function.optimize();
     Some(function)
+}
+
+/// Build a Target::SideExit out of a FrameState
+fn side_exit(jit: &mut JITState, state: &FrameState) -> Option<Target> {
+    let mut stack = Vec::new();
+    for &insn_id in state.stack() {
+        stack.push(jit.get_opnd(insn_id)?);
+    }
+
+    let mut locals = Vec::new();
+    for &insn_id in state.locals() {
+        locals.push(jit.get_opnd(insn_id)?);
+    }
+
+    let target = Target::SideExit {
+        pc: state.pc,
+        stack,
+        locals,
+    };
+    Some(target)
 }
 
 impl Assembler {

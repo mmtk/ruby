@@ -34,7 +34,6 @@ of each.
 ## Libraries
 
 - Bundler ([GitHub][bundler]): Manage your Ruby application's gem dependencies
-- CGI ([GitHub][cgi]): Support for the Common Gateway Interface protocol
 - Delegator ([GitHub][delegate]): Provides three abilities to delegate method calls to an object
 - DidYouMean ([GitHub][did_you_mean]): "Did you mean?" experience in Ruby
 - English ([GitHub][English]): Provides references to special global variables with less cryptic names
@@ -53,12 +52,12 @@ of each.
 - Prism ([GitHub][prism]): A portable, error-tolerant Ruby parser
 - Resolv ([GitHub][resolv]): Thread-aware DNS resolver library in Ruby
 - SecureRandom ([GitHub][securerandom]): Interface for a secure random number generator
-- [Set](rdoc-ref:Set) ([GitHub][set]): Provides a class to deal with collections of unordered, unique values
 - Shellwords ([GitHub][shellwords]): Manipulates strings with the word parsing rules of the UNIX Bourne shell
 - Singleton ([GitHub][singleton]): Implementation of the Singleton pattern for Ruby
 - Tempfile ([GitHub][tempfile]): A utility class for managing temporary files
 - Time ([GitHub][time]): Extends the Time class with methods for parsing and conversion
 - Timeout ([GitHub][timeout]): Auto-terminate potentially long-running operations in Ruby
+- TmpDir ([GitHub][tmpdir]): Extends the Dir class to manage the OS temporary file path
 - TSort ([GitHub][tsort]): Topological sorting using Tarjan's algorithm
 - UN ([GitHub][un]): Utilities to replace common UNIX commands
 - URI ([GitHub][uri]): A Ruby module providing support for Uniform Resource Identifiers
@@ -78,7 +77,6 @@ of each.
 - Psych ([GitHub][psych]): A YAML parser and emitter for Ruby
 - StringIO ([GitHub][stringio]): Pseudo-I/O on String objects
 - StringScanner ([GitHub][strscan]): Provides lexical scanning operations on a String
-- TmpDir ([GitHub][tmpdir]): Extends the Dir class to manage the OS temporary file path
 - Zlib ([GitHub][zlib]): Ruby interface for the zlib compression/decompression library
 
 # Bundled gems
@@ -137,7 +135,6 @@ of each.
 [benchmark]: https://github.com/ruby/benchmark
 [bigdecimal]: https://github.com/ruby/bigdecimal
 [bundler]: https://github.com/rubygems/rubygems
-[cgi]: https://github.com/ruby/cgi
 [csv]: https://github.com/ruby/csv
 [date]: https://github.com/ruby/date
 [debug]: https://github.com/ruby/debug
@@ -195,7 +192,6 @@ of each.
 [rinda]: https://github.com/ruby/rinda
 [rss]: https://github.com/ruby/rss
 [securerandom]: https://github.com/ruby/securerandom
-[set]: https://github.com/ruby/set
 [shellwords]: https://github.com/ruby/shellwords
 [singleton]: https://github.com/ruby/singleton
 [stringio]: https://github.com/ruby/stringio

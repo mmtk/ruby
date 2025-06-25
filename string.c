@@ -626,12 +626,7 @@ fstring_hash(VALUE str)
 static inline bool
 BARE_STRING_P(VALUE str)
 {
-    if (RBASIC_CLASS(str) != rb_cString) return false;
-
-    if (FL_TEST_RAW(str, FL_EXIVAR)) {
-        return rb_ivar_count(str) == 0;
-    }
-    return true;
+    return RBASIC_CLASS(str) == rb_cString && !rb_shape_obj_has_ivars(str);
 }
 
 static inline st_index_t
@@ -728,7 +723,7 @@ build_fstring(VALUE str, struct fstr_update_arg *arg)
     RUBY_ASSERT(RB_TYPE_P(str, T_STRING));
     RUBY_ASSERT(OBJ_FROZEN(str));
     RUBY_ASSERT(!FL_TEST_RAW(str, STR_FAKESTR));
-    RUBY_ASSERT(!FL_TEST_RAW(str, FL_EXIVAR));
+    RUBY_ASSERT(!rb_obj_exivar_p(str));
     RUBY_ASSERT(RBASIC_CLASS(str) == rb_cString);
     RUBY_ASSERT(!rb_objspace_garbage_object_p(str));
 
@@ -934,10 +929,8 @@ fstring_insert_on_resize(struct fstring_table_struct *table, VALUE hash_code, VA
 
 // Rebuilds the table
 static void
-fstring_try_resize(VALUE old_table_obj)
+fstring_try_resize_without_locking(VALUE old_table_obj)
 {
-    RB_VM_LOCK_ENTER();
-
     // Check if another thread has already resized
     if (RUBY_ATOMIC_VALUE_LOAD(fstring_table_obj) != old_table_obj) {
         goto end;
@@ -989,7 +982,14 @@ fstring_try_resize(VALUE old_table_obj)
 
 end:
     RB_GC_GUARD(old_table_obj);
-    RB_VM_LOCK_LEAVE();
+}
+
+static void
+fstring_try_resize(VALUE old_table_obj)
+{
+    RB_VM_LOCKING() {
+        fstring_try_resize_without_locking(old_table_obj);
+    }
 }
 
 static VALUE
@@ -1001,7 +1001,7 @@ fstring_find_or_insert(VALUE hash_code, VALUE value, struct fstr_update_arg *arg
     VALUE table_obj;
     struct fstring_table_struct *table;
 
-    retry:
+  retry:
     table_obj = RUBY_ATOMIC_VALUE_LOAD(fstring_table_obj);
     RUBY_ASSERT(table_obj);
     table = RTYPEDDATA_GET_DATA(table_obj);
@@ -1050,8 +1050,7 @@ fstring_find_or_insert(VALUE hash_code, VALUE value, struct fstr_update_arg *arg
         }
         else if (candidate == FSTRING_TABLE_MOVED) {
             // Wait
-            RB_VM_LOCK_ENTER();
-            RB_VM_LOCK_LEAVE();
+            RB_VM_LOCKING();
 
             goto retry;
         }
@@ -1209,6 +1208,7 @@ static VALUE
 setup_fake_str(struct RString *fake_str, const char *name, long len, int encidx)
 {
     fake_str->basic.flags = T_STRING|RSTRING_NOEMBED|STR_NOFREE|STR_FAKESTR;
+    RBASIC_SET_SHAPE_ID((VALUE)fake_str, ROOT_SHAPE_ID);
 
     if (!name) {
         RUBY_ASSERT_ALWAYS(len == 0);
@@ -2244,8 +2244,8 @@ rb_str_tmp_frozen_release(VALUE orig, VALUE tmp)
     if (STR_EMBED_P(tmp)) {
         RUBY_ASSERT(OBJ_FROZEN_RAW(tmp));
     }
-    else if (FL_TEST_RAW(orig, STR_SHARED) &&
-            !FL_TEST_RAW(orig, STR_TMPLOCK|RUBY_FL_FREEZE)) {
+    else if (FL_TEST_RAW(orig, STR_SHARED | STR_TMPLOCK) == STR_TMPLOCK &&
+            !OBJ_FROZEN_RAW(orig)) {
         VALUE shared = RSTRING(orig)->as.heap.aux.shared;
 
         if (shared == tmp && !FL_TEST_RAW(tmp, STR_BORROWED)) {
@@ -2682,7 +2682,7 @@ str_duplicate_setup_heap(VALUE klass, VALUE str, VALUE dup)
     if (FL_TEST_RAW(str, STR_SHARED)) {
         root = RSTRING(str)->as.heap.aux.shared;
     }
-    else if (UNLIKELY(!(flags & FL_FREEZE))) {
+    else if (UNLIKELY(!OBJ_FROZEN_RAW(str))) {
         root = str = str_new_frozen(klass, str);
         flags = FL_TEST_RAW(str, flag_mask);
     }
@@ -2745,7 +2745,7 @@ VALUE
 rb_str_dup_m(VALUE str)
 {
     if (LIKELY(BARE_STRING_P(str))) {
-        return str_duplicate(rb_obj_class(str), str);
+        return str_duplicate(rb_cString, str);
     }
     else {
         return rb_obj_dup(str);
@@ -4137,6 +4137,7 @@ RUBY_ALIAS_FUNCTION(rb_str_dup_frozen(VALUE str), rb_str_new_frozen, (str))
 VALUE
 rb_str_locktmp(VALUE str)
 {
+    rb_check_frozen(str);
     if (FL_TEST(str, STR_TMPLOCK)) {
         rb_raise(rb_eRuntimeError, "temporal locking already locked string");
     }
@@ -4147,6 +4148,7 @@ rb_str_locktmp(VALUE str)
 VALUE
 rb_str_unlocktmp(VALUE str)
 {
+    rb_check_frozen(str);
     if (!FL_TEST(str, STR_TMPLOCK)) {
         rb_raise(rb_eRuntimeError, "temporal unlocking already unlocked string");
     }
@@ -5422,43 +5424,69 @@ str_ensure_byte_pos(VALUE str, long pos)
 
 /*
  *  call-seq:
- *    byteindex(substring, offset = 0) -> integer or nil
- *    byteindex(regexp, offset = 0) -> integer or nil
+ *    byteindex(object, offset = 0) -> integer or nil
  *
- *  Returns the Integer byte-based index of the first occurrence of the given +substring+,
- *  or +nil+ if none found:
+ *  Returns the 0-based integer index of a substring of +self+
+ *  specified by +object+ (a string or Regexp) and +offset+,
+ *  or +nil+ if there is no such substring;
+ *  the returned index is the count of _bytes_ (not characters).
  *
- *    'foo'.byteindex('f') # => 0
- *    'foo'.byteindex('o') # => 1
- *    'foo'.byteindex('oo') # => 1
- *    'foo'.byteindex('ooo') # => nil
+ *  When +object+ is a string,
+ *  returns the index of the first found substring equal to +object+:
  *
- *  Returns the Integer byte-based index of the first match for the given Regexp +regexp+,
- *  or +nil+ if none found:
+ *    s = 'foo'          # => "foo"
+ *    s.size             # => 3 # Three 1-byte characters.
+      s.bytesize         # => 3 # Three bytes.
+ *    s.byteindex('f')   # => 0
+ *    s.byteindex('o')   # => 1
+ *    s.byteindex('oo')  # => 1
+ *    s.byteindex('ooo') # => nil
  *
- *    'foo'.byteindex(/f/) # => 0
- *    'foo'.byteindex(/o/) # => 1
- *    'foo'.byteindex(/oo/) # => 1
- *    'foo'.byteindex(/ooo/) # => nil
+ *  When +object+ is a Regexp,
+ *  returns the index of the first found substring matching +object+;
+ *  updates {Regexp-related global variables}[rdoc-ref:Regexp@Global+Variables]:
  *
- *  Integer argument +offset+, if given, specifies the byte-based position in the
- *  string to begin the search:
+ *    s = 'foo'
+ *    s.byteindex(/f/)   # => 0
+ *    $~                 # => #<MatchData "f">
+ *    s.byteindex(/o/)   # => 1
+ *    s.byteindex(/oo/)  # => 1
+ *    s.byteindex(/ooo/) # => nil
+ *    $~                 # => nil
  *
- *    'foo'.byteindex('o', 1) # => 1
- *    'foo'.byteindex('o', 2) # => 2
- *    'foo'.byteindex('o', 3) # => nil
+ *  \Integer argument +offset+, if given, specifies the 0-based index
+ *  of the byte where searching is to begin.
  *
- *  If +offset+ is negative, counts backward from the end of +self+:
+ *  When +offset+ is non-negative,
+ *  searching begins at byte position +offset+:
  *
- *    'foo'.byteindex('o', -1) # => 2
- *    'foo'.byteindex('o', -2) # => 1
- *    'foo'.byteindex('o', -3) # => 1
- *    'foo'.byteindex('o', -4) # => nil
+ *    s = 'foo'
+ *    s.byteindex('o', 1) # => 1
+ *    s.byteindex('o', 2) # => 2
+ *    s.byteindex('o', 3) # => nil
  *
- *  If +offset+ does not land on character (codepoint) boundary, +IndexError+ is
- *  raised.
+ *  When +offset+ is negative, counts backward from the end of +self+:
  *
- *  Related: String#index, String#byterindex.
+ *    s = 'foo'
+ *    s.byteindex('o', -1) # => 2
+ *    s.byteindex('o', -2) # => 1
+ *    s.byteindex('o', -3) # => 1
+ *    s.byteindex('o', -4) # => nil
+ *
+ *  Raises IndexError if the byte at +offset+ is not the first byte of a character:
+ *
+ *    s = "\uFFFF\uFFFF"       # => "\uFFFF\uFFFF"
+ *    s.size                   # => 2 # Two 3-byte characters.
+ *    s.bytesize               # => 6 # Six bytes.
+ *    s.byteindex("\uFFFF")    # => 0
+ *    s.byteindex("\uFFFF", 1) # Raises IndexError
+ *    s.byteindex("\uFFFF", 2) # Raises IndexError
+ *    s.byteindex("\uFFFF", 3) # => 3
+ *    s.byteindex("\uFFFF", 4) # Raises IndexError
+ *    s.byteindex("\uFFFF", 5) # Raises IndexError
+ *    s.byteindex("\uFFFF", 6) # => nil
+ *
+ *  Related: see {Querying}[rdoc-ref:String@Querying].
  */
 
 static VALUE
@@ -10232,11 +10260,15 @@ rb_str_split_m(int argc, VALUE *argv, VALUE str)
         }
     }
 
-#define SPLIT_STR(beg, len) (empty_count = split_string(result, str, beg, len, empty_count))
+#define SPLIT_STR(beg, len) ( \
+        empty_count = split_string(result, str, beg, len, empty_count), \
+        str_mod_check(str, str_start, str_len))
 
     beg = 0;
     char *ptr = RSTRING_PTR(str);
-    char *eptr = RSTRING_END(str);
+    char *const str_start = ptr;
+    const long str_len = RSTRING_LEN(str);
+    char *const eptr = str_start + str_len;
     if (split_type == SPLIT_TYPE_AWK) {
         char *bptr = ptr;
         int skip = 1;
@@ -10297,7 +10329,6 @@ rb_str_split_m(int argc, VALUE *argv, VALUE str)
         }
     }
     else if (split_type == SPLIT_TYPE_STRING) {
-        char *str_start = ptr;
         char *substr_start = ptr;
         char *sptr = RSTRING_PTR(spat);
         long slen = RSTRING_LEN(spat);
@@ -10314,6 +10345,7 @@ rb_str_split_m(int argc, VALUE *argv, VALUE str)
                 continue;
             }
             SPLIT_STR(substr_start - str_start, (ptr+end) - substr_start);
+            str_mod_check(spat, sptr, slen);
             ptr += end + slen;
             substr_start = ptr;
             if (!NIL_P(limit) && lim <= ++i) break;
@@ -10321,7 +10353,6 @@ rb_str_split_m(int argc, VALUE *argv, VALUE str)
         beg = ptr - str_start;
     }
     else if (split_type == SPLIT_TYPE_CHARS) {
-        char *str_start = ptr;
         int n;
 
         if (result) result = rb_ary_new_capa(RSTRING_LEN(str));
@@ -13773,3 +13804,4 @@ Init_String(void)
 
     rb_define_method(rb_cSymbol, "encoding", sym_encoding, 0);
 }
+

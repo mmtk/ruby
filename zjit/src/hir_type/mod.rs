@@ -1,8 +1,9 @@
 #![allow(non_upper_case_globals)]
 use crate::cruby::{Qfalse, Qnil, Qtrue, VALUE, RUBY_T_ARRAY, RUBY_T_STRING, RUBY_T_HASH};
-use crate::cruby::{rb_cInteger, rb_cFloat, rb_cArray, rb_cHash, rb_cString, rb_cSymbol, rb_cObject, rb_cTrueClass, rb_cFalseClass, rb_cNilClass};
+use crate::cruby::{rb_cInteger, rb_cFloat, rb_cArray, rb_cHash, rb_cString, rb_cSymbol, rb_cObject, rb_cTrueClass, rb_cFalseClass, rb_cNilClass, rb_cRange};
 use crate::cruby::ClassRelationship;
 use crate::cruby::get_class_name;
+use crate::cruby::rb_mRubyVMFrozenCore;
 use crate::hir::PtrPrintMap;
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -68,6 +69,7 @@ fn write_spec(f: &mut std::fmt::Formatter, printer: &TypePrinter) -> std::fmt::R
     let ty = printer.inner;
     match ty.spec {
         Specialization::Any | Specialization::Empty => { Ok(()) },
+        Specialization::Object(val) if val == unsafe { rb_mRubyVMFrozenCore } => write!(f, "[VMFrozenCore]"),
         Specialization::Object(val) => write!(f, "[{}]", val.print(printer.ptr_map)),
         Specialization::Type(val) => write!(f, "[class:{}]", get_class_name(val)),
         Specialization::TypeExact(val) => write!(f, "[class_exact:{}]", get_class_name(val)),
@@ -137,6 +139,10 @@ fn is_hash_exact(val: VALUE) -> bool {
     val.class_of() == unsafe { rb_cHash } || (val.class_of() == VALUE(0) && val.builtin_type() == RUBY_T_HASH)
 }
 
+fn is_range_exact(val: VALUE) -> bool {
+    val.class_of() == unsafe { rb_cRange }
+}
+
 impl Type {
     /// Create a `Type` from the given integer.
     pub const fn fixnum(val: i64) -> Type {
@@ -163,6 +169,11 @@ impl Type {
         else if val == Qnil { types::NilClassExact }
         else if val == Qtrue { types::TrueClassExact }
         else if val == Qfalse { types::FalseClassExact }
+        else if val.cme_p() {
+            // NB: Checking for CME has to happen before looking at class_of because that's not
+            // valid on imemo.
+            Type { bits: bits::CallableMethodEntry, spec: Specialization::Object(val) }
+        }
         else if val.class_of() == unsafe { rb_cInteger } {
             Type { bits: bits::Bignum, spec: Specialization::Object(val) }
         }
@@ -177,6 +188,9 @@ impl Type {
         }
         else if is_hash_exact(val) {
             Type { bits: bits::HashExact, spec: Specialization::Object(val) }
+        }
+        else if is_range_exact(val) {
+            Type { bits: bits::RangeExact, spec: Specialization::Object(val) }
         }
         else if is_string_exact(val) {
             Type { bits: bits::StringExact, spec: Specialization::Object(val) }
@@ -272,6 +286,7 @@ impl Type {
         if class == unsafe { rb_cInteger } { return true; }
         if class == unsafe { rb_cNilClass } { return true; }
         if class == unsafe { rb_cObject } { return true; }
+        if class == unsafe { rb_cRange } { return true; }
         if class == unsafe { rb_cString } { return true; }
         if class == unsafe { rb_cSymbol } { return true; }
         if class == unsafe { rb_cTrueClass } { return true; }
@@ -378,6 +393,7 @@ impl Type {
         if self.is_subtype(types::IntegerExact) { return Some(unsafe { rb_cInteger }); }
         if self.is_subtype(types::NilClassExact) { return Some(unsafe { rb_cNilClass }); }
         if self.is_subtype(types::ObjectExact) { return Some(unsafe { rb_cObject }); }
+        if self.is_subtype(types::RangeExact) { return Some(unsafe { rb_cRange }); }
         if self.is_subtype(types::StringExact) { return Some(unsafe { rb_cString }); }
         if self.is_subtype(types::SymbolExact) { return Some(unsafe { rb_cSymbol }); }
         if self.is_subtype(types::TrueClassExact) { return Some(unsafe { rb_cTrueClass }); }
@@ -679,6 +695,19 @@ mod tests {
             let left = Type::from_value(unsafe { rb_float_new(1.7976931348623157e+308) });
             let right = Type::from_value(unsafe { rb_float_new(1.7976931348623157e+308) });
             assert_bit_equal(left.union(right), types::HeapFloat);
+        });
+    }
+
+    #[test]
+    fn cme() {
+        use crate::cruby::{rb_callable_method_entry, ID};
+        crate::cruby::with_rubyvm(|| {
+            let cme = unsafe { rb_callable_method_entry(rb_cInteger, ID!(to_s)) };
+            assert!(!cme.is_null());
+            let cme_value: VALUE = cme.into();
+            let ty = Type::from_value(cme_value);
+            assert_subtype(ty, types::CallableMethodEntry);
+            assert!(ty.ruby_object_known());
         });
     }
 

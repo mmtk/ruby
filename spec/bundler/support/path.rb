@@ -75,6 +75,10 @@ module Spec
       @man_dir ||= lib_dir.join("bundler/man")
     end
 
+    def hax
+      @hax ||= spec_dir.join("support/hax.rb")
+    end
+
     def tracked_files
       @tracked_files ||= git_ls_files(tracked_files_glob)
     end
@@ -195,31 +199,31 @@ module Spec
     end
 
     def gem_repo1(*args)
-      tmp("gems/remote1", *args)
+      gem_path("remote1", *args)
     end
 
     def gem_repo_missing(*args)
-      tmp("gems/missing", *args)
+      gem_path("missing", *args)
     end
 
     def gem_repo2(*args)
-      tmp("gems/remote2", *args)
+      gem_path("remote2", *args)
     end
 
     def gem_repo3(*args)
-      tmp("gems/remote3", *args)
+      gem_path("remote3", *args)
     end
 
     def gem_repo4(*args)
-      tmp("gems/remote4", *args)
+      gem_path("remote4", *args)
     end
 
     def security_repo(*args)
-      tmp("gems/security_repo", *args)
+      gem_path("security_repo", *args)
     end
 
     def system_gem_path(*path)
-      tmp("gems/system", *path)
+      gem_path("system", *path)
     end
 
     def pristine_system_gem_path
@@ -232,6 +236,10 @@ module Spec
 
     def scoped_gem_path(base)
       base.join(Gem.ruby_engine, RbConfig::CONFIG["ruby_version"])
+    end
+
+    def gem_path(*args)
+      tmp("gems", *args)
     end
 
     def lib_path(*args)
@@ -261,7 +269,7 @@ module Spec
     def replace_version_file(version, dir: source_root)
       version_file = File.expand_path("lib/bundler/version.rb", dir)
       contents = File.read(version_file)
-      contents.sub!(/(^\s+VERSION\s*=\s*)"#{Gem::Version::VERSION_PATTERN}"/, %(\\1"#{version}"))
+      contents.sub!(/(^\s+VERSION\s*=\s*).*$/, %(\\1"#{version}"))
       File.open(version_file, "w") {|f| f << contents }
     end
 
@@ -278,6 +286,10 @@ module Spec
 
     def rake_path
       Dir["#{base_system_gems}/*/*/**/rake*.gem"].first
+    end
+
+    def rake_version
+      File.basename(rake_path).delete_prefix("rake-").delete_suffix(".gem")
     end
 
     def sinatra_dependency_paths

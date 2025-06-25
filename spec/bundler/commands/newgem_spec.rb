@@ -8,6 +8,9 @@ RSpec.describe "bundle gem" do
     expect(bundled_app("#{gem_name}/Rakefile")).to exist
     expect(bundled_app("#{gem_name}/lib/#{require_path}.rb")).to exist
     expect(bundled_app("#{gem_name}/lib/#{require_path}/version.rb")).to exist
+
+    expect(ignore_paths).to include("bin/")
+    expect(ignore_paths).to include("Gemfile")
   end
 
   def bundle_exec_rubocop
@@ -20,6 +23,12 @@ RSpec.describe "bundle gem" do
     prepare_gemspec(bundled_app(gem_name, "#{gem_name}.gemspec"))
     bundle "config set path #{standard_gems}", dir: bundled_app(gem_name)
     bundle "exec standardrb --debug", dir: bundled_app(gem_name)
+  end
+
+  def ignore_paths
+    generated = bundled_app("#{gem_name}/#{gem_name}.gemspec").read
+    matched = generated.match(/^\s+f\.start_with\?\(\*%w\[(?<ignored>.*)\]\)$/)
+    matched[:ignored]&.split(" ")
   end
 
   let(:generated_gemspec) { Bundler.load_gemspec_uncached(bundled_app(gem_name).join("#{gem_name}.gemspec")) }
@@ -153,7 +162,7 @@ RSpec.describe "bundle gem" do
   end
 
   shared_examples_for "--rubocop flag" do
-    context "is deprecated", bundler: "< 3" do
+    context "is deprecated", bundler: "2" do
       before do
         global_config "BUNDLE_GEM__LINTER" => nil
         bundle "gem #{gem_name} --rubocop"
@@ -181,11 +190,15 @@ RSpec.describe "bundle gem" do
       it "generates a default .rubocop.yml" do
         expect(bundled_app("#{gem_name}/.rubocop.yml")).to exist
       end
+
+      it "includes .rubocop.yml into ignore list" do
+        expect(ignore_paths).to include(".rubocop.yml")
+      end
     end
   end
 
   shared_examples_for "--no-rubocop flag" do
-    context "is deprecated", bundler: "< 3" do
+    context "is deprecated", bundler: "2" do
       define_negated_matcher :exclude, :include
 
       before do
@@ -209,6 +222,10 @@ RSpec.describe "bundle gem" do
 
       it "doesn't generate a default .rubocop.yml" do
         expect(bundled_app("#{gem_name}/.rubocop.yml")).to_not exist
+      end
+
+      it "does not add .rubocop.yml into ignore list" do
+        expect(ignore_paths).not_to include(".rubocop.yml")
       end
     end
   end
@@ -240,6 +257,10 @@ RSpec.describe "bundle gem" do
     it "generates a default .rubocop.yml" do
       expect(bundled_app("#{gem_name}/.rubocop.yml")).to exist
     end
+
+    it "includes .rubocop.yml into ignore list" do
+      expect(ignore_paths).to include(".rubocop.yml")
+    end
   end
 
   shared_examples_for "--linter=standard flag" do
@@ -266,6 +287,10 @@ RSpec.describe "bundle gem" do
 
     it "generates a default .standard.yml" do
       expect(bundled_app("#{gem_name}/.standard.yml")).to exist
+    end
+
+    it "includes .standard.yml into ignore list" do
+      expect(ignore_paths).to include(".standard.yml")
     end
   end
 
@@ -304,8 +329,16 @@ RSpec.describe "bundle gem" do
       expect(bundled_app("#{gem_name}/.rubocop.yml")).to_not exist
     end
 
+    it "does not add .rubocop.yml into ignore list" do
+      expect(ignore_paths).not_to include(".rubocop.yml")
+    end
+
     it "doesn't generate a default .standard.yml" do
       expect(bundled_app("#{gem_name}/.standard.yml")).to_not exist
+    end
+
+    it "does not add .standard.yml into ignore list" do
+      expect(ignore_paths).not_to include(".standard.yml")
     end
   end
 
@@ -353,7 +386,6 @@ RSpec.describe "bundle gem" do
 
   it "has no rubocop offenses when using --ext=rust and --linter=rubocop flag" do
     skip "ruby_core has an 'ast.rb' file that gets in the middle and breaks this spec" if ruby_core?
-    skip "RubyGems incompatible with Rust builder" if ::Gem::Version.new("3.3.11") > ::Gem.rubygems_version
 
     bundle "gem #{gem_name} --ext=rust --linter=rubocop"
     bundle_exec_rubocop
@@ -362,7 +394,6 @@ RSpec.describe "bundle gem" do
 
   it "has no rubocop offenses when using --ext=rust, --test=minitest, and --linter=rubocop flag" do
     skip "ruby_core has an 'ast.rb' file that gets in the middle and breaks this spec" if ruby_core?
-    skip "RubyGems incompatible with Rust builder" if ::Gem::Version.new("3.3.11") > ::Gem.rubygems_version
 
     bundle "gem #{gem_name} --ext=rust --test=minitest --linter=rubocop"
     bundle_exec_rubocop
@@ -371,7 +402,6 @@ RSpec.describe "bundle gem" do
 
   it "has no rubocop offenses when using --ext=rust, --test=rspec, and --linter=rubocop flag" do
     skip "ruby_core has an 'ast.rb' file that gets in the middle and breaks this spec" if ruby_core?
-    skip "RubyGems incompatible with Rust builder" if ::Gem::Version.new("3.3.11") > ::Gem.rubygems_version
 
     bundle "gem #{gem_name} --ext=rust --test=rspec --linter=rubocop"
     bundle_exec_rubocop
@@ -380,7 +410,6 @@ RSpec.describe "bundle gem" do
 
   it "has no rubocop offenses when using --ext=rust, --test=test-unit, and --linter=rubocop flag" do
     skip "ruby_core has an 'ast.rb' file that gets in the middle and breaks this spec" if ruby_core?
-    skip "RubyGems incompatible with Rust builder" if ::Gem::Version.new("3.3.11") > ::Gem.rubygems_version
 
     bundle "gem #{gem_name} --ext=rust --test=test-unit --linter=rubocop"
     bundle_exec_rubocop
@@ -402,6 +431,12 @@ RSpec.describe "bundle gem" do
       expect(bundled_app("#{gem_name}/spec/spec_helper.rb")).to_not exist
       expect(bundled_app("#{gem_name}/test/#{require_path}.rb")).to_not exist
       expect(bundled_app("#{gem_name}/test/test_helper.rb")).to_not exist
+    end
+
+    it "does not add any test framework files into ignore list" do
+      expect(ignore_paths).not_to include("test/")
+      expect(ignore_paths).not_to include(".rspec")
+      expect(ignore_paths).not_to include("spec/")
     end
   end
 
@@ -471,6 +506,10 @@ RSpec.describe "bundle gem" do
     it "doesn't create a .gitignore file" do
       expect(bundled_app("#{gem_name}/.gitignore")).to_not exist
     end
+
+    it "does not add .gitignore into ignore list" do
+      expect(ignore_paths).not_to include(".gitignore")
+    end
   end
 
   it "generates a valid gemspec" do
@@ -486,7 +525,7 @@ RSpec.describe "bundle gem" do
     system_gems gems, path: path, gem_repo: gem_repo2
     bundle "exec rake build", dir: bundled_app("newgem")
 
-    expect(last_command.stdboth).not_to include("ERROR")
+    expect(stdboth).not_to include("ERROR")
   end
 
   context "gem naming with relative paths" do
@@ -590,6 +629,24 @@ RSpec.describe "bundle gem" do
 
       expect(bundled_app("#{gem_name}/bin/setup").read).to start_with("#!")
       expect(bundled_app("#{gem_name}/bin/console").read).to start_with("#!")
+    end
+
+    it "includes bin/ into ignore list" do
+      bundle "gem #{gem_name}"
+
+      expect(ignore_paths).to include("bin/")
+    end
+
+    it "includes Gemfile into ignore list" do
+      bundle "gem #{gem_name}"
+
+      expect(ignore_paths).to include("Gemfile")
+    end
+
+    it "includes .gitignore into ignore list" do
+      bundle "gem #{gem_name}"
+
+      expect(ignore_paths).to include(".gitignore")
     end
 
     it "starts with version 0.1.0" do
@@ -743,6 +800,11 @@ RSpec.describe "bundle gem" do
         expect(bundled_app("#{gem_name}/spec/spec_helper.rb")).to exist
       end
 
+      it "includes .rspec and spec/ into ignore list" do
+        expect(ignore_paths).to include(".rspec")
+        expect(ignore_paths).to include("spec/")
+      end
+
       it "depends on a specific version of rspec in generated Gemfile" do
         allow(Bundler::SharedHelpers).to receive(:find_gemfile).and_return(bundled_app_gemfile)
         builder = Bundler::Dsl.new
@@ -771,6 +833,12 @@ RSpec.describe "bundle gem" do
         expect(bundled_app("#{gem_name}/gems.rb")).to exist
         expect(bundled_app("#{gem_name}/Gemfile")).to_not exist
       end
+
+      it "includes gems.rb and gems.locked into ignore list" do
+        expect(ignore_paths).to include("gems.rb")
+        expect(ignore_paths).to include("gems.locked")
+        expect(ignore_paths).not_to include("Gemfile")
+      end
     end
 
     context "init_gems_rb setting to false" do
@@ -782,6 +850,12 @@ RSpec.describe "bundle gem" do
       it "generates Gemfile instead of gems.rb" do
         expect(bundled_app("#{gem_name}/gems.rb")).to_not exist
         expect(bundled_app("#{gem_name}/Gemfile")).to exist
+      end
+
+      it "includes Gemfile into ignore list" do
+        expect(ignore_paths).to include("Gemfile")
+        expect(ignore_paths).not_to include("gems.rb")
+        expect(ignore_paths).not_to include("gems.locked")
       end
     end
 
@@ -796,6 +870,11 @@ RSpec.describe "bundle gem" do
         expect(bundled_app("#{gem_name}/spec/#{require_path}_spec.rb")).to exist
         expect(bundled_app("#{gem_name}/spec/spec_helper.rb")).to exist
       end
+
+      it "includes .rspec and spec/ into ignore list" do
+        expect(ignore_paths).to include(".rspec")
+        expect(ignore_paths).to include("spec/")
+      end
     end
 
     context "gem.test setting set to rspec and --test is set to minitest" do
@@ -807,6 +886,10 @@ RSpec.describe "bundle gem" do
       it "builds spec skeleton" do
         expect(bundled_app("#{gem_name}/#{minitest_test_file_path}")).to exist
         expect(bundled_app("#{gem_name}/test/test_helper.rb")).to exist
+      end
+
+      it "includes test/ into ignore list" do
+        expect(ignore_paths).to include("test/")
       end
     end
 
@@ -827,6 +910,10 @@ RSpec.describe "bundle gem" do
       it "builds spec skeleton" do
         expect(bundled_app("#{gem_name}/#{minitest_test_file_path}")).to exist
         expect(bundled_app("#{gem_name}/test/test_helper.rb")).to exist
+      end
+
+      it "includes test/ into ignore list" do
+        expect(ignore_paths).to include("test/")
       end
 
       it "requires the main file" do
@@ -885,6 +972,10 @@ RSpec.describe "bundle gem" do
       it "builds spec skeleton" do
         expect(bundled_app("#{gem_name}/test/#{require_path}_test.rb")).to exist
         expect(bundled_app("#{gem_name}/test/test_helper.rb")).to exist
+      end
+
+      it "includes test/ into ignore list" do
+        expect(ignore_paths).to include("test/")
       end
 
       it "requires the main file" do
@@ -949,6 +1040,11 @@ RSpec.describe "bundle gem" do
         expect(bundled_app("#{gem_name}/spec/spec_helper.rb")).to exist
       end
 
+      it "includes .rspec and spec/ into ignore list" do
+        expect(ignore_paths).to include(".rspec")
+        expect(ignore_paths).to include("spec/")
+      end
+
       it "hints that --test is already configured" do
         expect(out).to match("rspec is already configured, ignoring --test flag.")
       end
@@ -1004,54 +1100,62 @@ RSpec.describe "bundle gem" do
     end
 
     context "--ci with no argument" do
-      it "does not generate any CI config" do
+      before do
         bundle "gem #{gem_name}"
+      end
 
+      it "does not generate any CI config" do
         expect(bundled_app("#{gem_name}/.github/workflows/main.yml")).to_not exist
         expect(bundled_app("#{gem_name}/.gitlab-ci.yml")).to_not exist
         expect(bundled_app("#{gem_name}/.circleci/config.yml")).to_not exist
       end
+
+      it "does not add any CI config files into ignore list" do
+        expect(ignore_paths).not_to include(".github/")
+        expect(ignore_paths).not_to include(".gitlab-ci.yml")
+        expect(ignore_paths).not_to include(".circleci/")
+      end
     end
 
     context "--ci set to github" do
-      it "generates a GitHub Actions config file" do
+      before do
         bundle "gem #{gem_name} --ci=github"
+      end
 
+      it "generates a GitHub Actions config file" do
         expect(bundled_app("#{gem_name}/.github/workflows/main.yml")).to exist
       end
 
-      it "contained .gitlab-ci.yml into ignore list" do
-        bundle "gem #{gem_name} --ci=github"
-
-        expect(bundled_app("#{gem_name}/#{gem_name}.gemspec").read).to include(".git .github appveyor")
+      it "includes .github/ into ignore list" do
+        expect(ignore_paths).to include(".github/")
       end
     end
 
     context "--ci set to gitlab" do
-      it "generates a GitLab CI config file" do
+      before do
         bundle "gem #{gem_name} --ci=gitlab"
+      end
 
+      it "generates a GitLab CI config file" do
         expect(bundled_app("#{gem_name}/.gitlab-ci.yml")).to exist
       end
 
-      it "contained .gitlab-ci.yml into ignore list" do
-        bundle "gem #{gem_name} --ci=gitlab"
-
-        expect(bundled_app("#{gem_name}/#{gem_name}.gemspec").read).to include(".git .gitlab-ci.yml appveyor")
+      it "includes .gitlab-ci.yml into ignore list" do
+        expect(ignore_paths).to include(".gitlab-ci.yml")
       end
     end
 
     context "--ci set to circle" do
-      it "generates a CircleCI config file" do
+      before do
         bundle "gem #{gem_name} --ci=circle"
+      end
 
+      it "generates a CircleCI config file" do
         expect(bundled_app("#{gem_name}/.circleci/config.yml")).to exist
       end
 
-      it "contained .circleci into ignore list" do
-        bundle "gem #{gem_name} --ci=circle"
-
-        expect(bundled_app("#{gem_name}/#{gem_name}.gemspec").read).to include(".git .circleci appveyor")
+      it "includes .circleci/ into ignore list" do
+        expect(ignore_paths).to include(".circleci/")
       end
     end
 
@@ -1166,29 +1270,50 @@ RSpec.describe "bundle gem" do
     end
 
     context "--linter with no argument" do
-      it "does not generate any linter config" do
+      before do
         bundle "gem #{gem_name}"
+      end
 
+      it "does not generate any linter config" do
         expect(bundled_app("#{gem_name}/.rubocop.yml")).to_not exist
         expect(bundled_app("#{gem_name}/.standard.yml")).to_not exist
+      end
+
+      it "does not add any linter config files into ignore list" do
+        expect(ignore_paths).not_to include(".rubocop.yml")
+        expect(ignore_paths).not_to include(".standard.yml")
       end
     end
 
     context "--linter set to rubocop" do
-      it "generates a RuboCop config" do
+      before do
         bundle "gem #{gem_name} --linter=rubocop"
+      end
 
+      it "generates a RuboCop config" do
         expect(bundled_app("#{gem_name}/.rubocop.yml")).to exist
         expect(bundled_app("#{gem_name}/.standard.yml")).to_not exist
+      end
+
+      it "includes .rubocop.yml into ignore list" do
+        expect(ignore_paths).to include(".rubocop.yml")
+        expect(ignore_paths).not_to include(".standard.yml")
       end
     end
 
     context "--linter set to standard" do
-      it "generates a Standard config" do
+      before do
         bundle "gem #{gem_name} --linter=standard"
+      end
 
+      it "generates a Standard config" do
         expect(bundled_app("#{gem_name}/.standard.yml")).to exist
         expect(bundled_app("#{gem_name}/.rubocop.yml")).to_not exist
+      end
+
+      it "includes .standard.yml into ignore list" do
+        expect(ignore_paths).to include(".standard.yml")
+        expect(ignore_paths).not_to include(".rubocop.yml")
       end
     end
 
@@ -1204,33 +1329,52 @@ RSpec.describe "bundle gem" do
     end
 
     context "gem.linter setting set to none" do
-      it "doesn't generate any linter config" do
+      before do
         bundle "gem #{gem_name}"
+      end
 
+      it "doesn't generate any linter config" do
         expect(bundled_app("#{gem_name}/.rubocop.yml")).to_not exist
         expect(bundled_app("#{gem_name}/.standard.yml")).to_not exist
+      end
+
+      it "does not add any linter config files into ignore list" do
+        expect(ignore_paths).not_to include(".rubocop.yml")
+        expect(ignore_paths).not_to include(".standard.yml")
       end
     end
 
     context "gem.linter setting set to rubocop" do
-      it "generates a RuboCop config file" do
+      before do
         bundle "config set gem.linter rubocop"
         bundle "gem #{gem_name}"
+      end
 
+      it "generates a RuboCop config file" do
         expect(bundled_app("#{gem_name}/.rubocop.yml")).to exist
+      end
+
+      it "includes .rubocop.yml into ignore list" do
+        expect(ignore_paths).to include(".rubocop.yml")
       end
     end
 
     context "gem.linter setting set to standard" do
-      it "generates a Standard config file" do
+      before do
         bundle "config set gem.linter standard"
         bundle "gem #{gem_name}"
+      end
 
+      it "generates a Standard config file" do
         expect(bundled_app("#{gem_name}/.standard.yml")).to exist
+      end
+
+      it "includes .standard.yml into ignore list" do
+        expect(ignore_paths).to include(".standard.yml")
       end
     end
 
-    context "gem.rubocop setting set to true", bundler: "< 3" do
+    context "gem.rubocop setting set to true", bundler: "2" do
       before do
         global_config "BUNDLE_GEM__LINTER" => nil
         bundle "config set gem.rubocop true"
@@ -1239,6 +1383,10 @@ RSpec.describe "bundle gem" do
 
       it "generates rubocop config" do
         expect(bundled_app("#{gem_name}/.rubocop.yml")).to exist
+      end
+
+      it "includes .rubocop.yml into ignore list" do
+        expect(ignore_paths).to include(".rubocop.yml")
       end
 
       it "unsets gem.rubocop" do
@@ -1260,6 +1408,10 @@ RSpec.describe "bundle gem" do
 
       it "generates a RuboCop config file" do
         expect(bundled_app("#{gem_name}/.rubocop.yml")).to exist
+      end
+
+      it "includes .rubocop.yml into ignore list" do
+        expect(ignore_paths).to include(".rubocop.yml")
       end
 
       it "hints that --linter is already configured" do
@@ -1312,6 +1464,11 @@ RSpec.describe "bundle gem" do
       it "does not generate any linter config" do
         expect(bundled_app("#{gem_name}/.rubocop.yml")).to_not exist
         expect(bundled_app("#{gem_name}/.standard.yml")).to_not exist
+      end
+
+      it "does not add any linter config files into ignore list" do
+        expect(ignore_paths).not_to include(".rubocop.yml")
+        expect(ignore_paths).not_to include(".standard.yml")
       end
     end
 
@@ -1500,7 +1657,7 @@ RSpec.describe "bundle gem" do
     include_examples "generating a gem"
 
     context "--ext parameter with no value" do
-      context "is deprecated", bundler: "< 3" do
+      context "is deprecated", bundler: "2" do
         it "prints deprecation when used after gem name" do
           bundle ["gem", "--ext", gem_name].compact.join(" ")
           expect(err).to include "[DEPRECATED]"
@@ -1563,24 +1720,10 @@ RSpec.describe "bundle gem" do
       end
     end
 
-    context "--ext parameter set with rust and old RubyGems" do
-      it "fails in friendly way" do
-        if ::Gem::Version.new("3.3.11") <= ::Gem.rubygems_version
-          skip "RubyGems compatible with Rust builder"
-        end
-
-        expect do
-          bundle ["gem", gem_name, "--ext=rust"].compact.join(" ")
-        end.to raise_error(RuntimeError, /too old to build Rust extension/)
-      end
-    end
-
     context "--ext parameter set with rust" do
       let(:flags) { "--ext=rust" }
 
       before do
-        skip "RubyGems incompatible with Rust builder" if ::Gem::Version.new("3.3.11") > ::Gem.rubygems_version
-
         bundle ["gem", gem_name, flags].compact.join(" ")
       end
 

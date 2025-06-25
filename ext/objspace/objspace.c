@@ -504,6 +504,7 @@ count_imemo_objects(int argc, VALUE *argv, VALUE self)
         INIT_IMEMO_TYPE_ID(imemo_callinfo);
         INIT_IMEMO_TYPE_ID(imemo_callcache);
         INIT_IMEMO_TYPE_ID(imemo_constcache);
+        INIT_IMEMO_TYPE_ID(imemo_fields);
 #if USE_MMTK
         INIT_IMEMO_TYPE_ID(imemo_mmtk_strbuf);
         INIT_IMEMO_TYPE_ID(imemo_mmtk_objbuf);

@@ -2138,7 +2138,9 @@ class TestHashOnly < Test::Unit::TestCase
 
   def test_iterlevel_in_ivar_bug19589
     h = { a: nil }
-    hash_iter_recursion(h, 200)
+    # Recursion level should be over 127 to actually test iterlevel being set in an instance variable,
+    # but it should be under 131 not to overflow the stack under MN threads/ractors.
+    hash_iter_recursion(h, 130)
     assert true
   end
 
@@ -2353,6 +2355,11 @@ class TestHashOnly < Test::Unit::TestCase
     assert_raise(ArgumentError) do
       {a: 1}.each(&->(k, v) {})
     end
+  end
+
+  def test_bug_21357
+    h = {x: []}.merge(x: nil) { |_k, v1, _v2| v1 }
+    assert_equal({x: []}, h)
   end
 
   def test_any_hash_fixable

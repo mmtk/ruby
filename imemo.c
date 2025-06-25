@@ -3,6 +3,7 @@
 #include "id_table.h"
 #include "internal.h"
 #include "internal/imemo.h"
+#include "internal/st.h"
 #include "vm_callinfo.h"
 
 // conditional compilation macros for MMTk
@@ -32,12 +33,12 @@ rb_imemo_name(enum imemo_type type)
         IMEMO_NAME(svar);
         IMEMO_NAME(throw_data);
         IMEMO_NAME(tmpbuf);
+        IMEMO_NAME(fields);
         IMEMO_NAME(mmtk_strbuf);
         IMEMO_NAME(mmtk_objbuf);
 #undef IMEMO_NAME
-      default:
-        rb_bug("unreachable");
     }
+    rb_bug("unreachable");
 }
 
 /* =========================================================================
@@ -114,6 +115,108 @@ rb_imemo_tmpbuf_parser_heap(void *buf, rb_imemo_tmpbuf_t *old_heap, size_t cnt)
     return tmpbuf;
 }
 
+static VALUE
+imemo_fields_new(VALUE klass, size_t capa)
+{
+    size_t embedded_size = offsetof(struct rb_fields, as.embed) + capa * sizeof(VALUE);
+    if (rb_gc_size_allocatable_p(embedded_size)) {
+        VALUE fields = rb_imemo_new(imemo_fields, klass, embedded_size);
+        RUBY_ASSERT(IMEMO_TYPE_P(fields, imemo_fields));
+        return fields;
+    }
+    else {
+        VALUE fields = rb_imemo_new(imemo_fields, klass, sizeof(struct rb_fields));
+        FL_SET_RAW(fields, OBJ_FIELD_EXTERNAL);
+        IMEMO_OBJ_FIELDS(fields)->as.external.ptr = ALLOC_N(VALUE, capa);
+        return fields;
+    }
+}
+
+VALUE
+rb_imemo_fields_new(VALUE klass, size_t capa)
+{
+    return imemo_fields_new(klass, capa);
+}
+
+static VALUE
+imemo_fields_new_complex(VALUE klass, size_t capa)
+{
+    VALUE fields = imemo_fields_new(klass, sizeof(struct rb_fields));
+    IMEMO_OBJ_FIELDS(fields)->as.complex.table = st_init_numtable_with_size(capa);
+    return fields;
+}
+
+VALUE
+rb_imemo_fields_new_complex(VALUE klass, size_t capa)
+{
+    return imemo_fields_new_complex(klass, capa);
+}
+
+static int
+imemo_fields_trigger_wb_i(st_data_t key, st_data_t value, st_data_t arg)
+{
+    VALUE field_obj = (VALUE)arg;
+    RB_OBJ_WRITTEN(field_obj, Qundef, (VALUE)value);
+    return ST_CONTINUE;
+}
+
+static int
+imemo_fields_complex_wb_i(st_data_t key, st_data_t value, st_data_t arg)
+{
+    RB_OBJ_WRITTEN((VALUE)arg, Qundef, (VALUE)value);
+    return ST_CONTINUE;
+}
+
+VALUE
+rb_imemo_fields_new_complex_tbl(VALUE klass, st_table *tbl)
+{
+    VALUE fields = imemo_fields_new(klass, sizeof(struct rb_fields));
+    IMEMO_OBJ_FIELDS(fields)->as.complex.table = tbl;
+    st_foreach(tbl, imemo_fields_trigger_wb_i, (st_data_t)fields);
+    return fields;
+}
+
+VALUE
+rb_imemo_fields_clone(VALUE fields_obj)
+{
+    shape_id_t shape_id = RBASIC_SHAPE_ID(fields_obj);
+    VALUE clone;
+
+    if (rb_shape_too_complex_p(shape_id)) {
+        clone = rb_imemo_fields_new_complex(CLASS_OF(fields_obj), 0);
+        RBASIC_SET_SHAPE_ID(clone, shape_id);
+        st_table *src_table = rb_imemo_fields_complex_tbl(fields_obj);
+        st_table *dest_table = rb_imemo_fields_complex_tbl(clone);
+        st_replace(dest_table, src_table);
+        st_foreach(dest_table, imemo_fields_complex_wb_i, (st_data_t)clone);
+    }
+    else {
+        clone = imemo_fields_new(CLASS_OF(fields_obj), RSHAPE_CAPACITY(shape_id));
+        RBASIC_SET_SHAPE_ID(clone, shape_id);
+        VALUE *fields = rb_imemo_fields_ptr(clone);
+        attr_index_t fields_count = RSHAPE_LEN(shape_id);
+        MEMCPY(fields, rb_imemo_fields_ptr(fields_obj), VALUE, fields_count);
+        for (attr_index_t i = 0; i < fields_count; i++) {
+            RB_OBJ_WRITTEN(clone, Qundef, fields[i]);
+        }
+    }
+
+    return clone;
+}
+
+void
+rb_imemo_fields_clear(VALUE fields_obj)
+{
+    // When replacing an imemo/fields by another one, we must clear
+    // its shape so that gc.c:obj_free_object_id won't be called.
+    if (rb_shape_obj_too_complex_p(fields_obj)) {
+        RBASIC_SET_SHAPE_ID(fields_obj, ROOT_TOO_COMPLEX_SHAPE_ID);
+    }
+    else {
+        RBASIC_SET_SHAPE_ID(fields_obj, ROOT_SHAPE_ID);
+    }
+}
+
 /* =========================================================================
  * memsize
  * ========================================================================= */
@@ -160,6 +263,14 @@ rb_imemo_memsize(VALUE obj)
       case imemo_tmpbuf:
         size += ((rb_imemo_tmpbuf_t *)obj)->cnt * sizeof(VALUE);
 
+        break;
+      case imemo_fields:
+        if (rb_shape_obj_too_complex_p(obj)) {
+            size += st_memsize(IMEMO_OBJ_FIELDS(obj)->as.complex.table);
+        }
+        else if (FL_TEST_RAW(obj, OBJ_FIELD_EXTERNAL)) {
+            size += RSHAPE_CAPACITY(RBASIC_SHAPE_ID(obj)) * sizeof(VALUE);
+        }
         break;
 #if USE_MMTK
       case imemo_mmtk_strbuf:
@@ -484,7 +595,27 @@ rb_imemo_mark_and_move(VALUE obj, bool reference_updating)
 
         break;
       }
+      case imemo_fields: {
+        rb_gc_mark_and_move((VALUE *)&RBASIC(obj)->klass);
 
+        if (rb_shape_obj_too_complex_p(obj)) {
+            st_table *tbl = rb_imemo_fields_complex_tbl(obj);
+            if (reference_updating) {
+                rb_gc_ref_update_table_values_only(tbl);
+            }
+            else {
+                rb_mark_tbl_no_pin(tbl);
+            }
+        }
+        else {
+            VALUE *fields = rb_imemo_fields_ptr(obj);
+            attr_index_t len = RSHAPE_LEN(RBASIC_SHAPE_ID(obj));
+            for (attr_index_t i = 0; i < len; i++) {
+                rb_gc_mark_and_move(&fields[i]);
+            }
+        }
+        break;
+      }
 #if USE_MMTK
       case imemo_mmtk_strbuf: {
         // imemo_mmtk_strbuf is only used by mmtk.
@@ -505,7 +636,6 @@ rb_imemo_mark_and_move(VALUE obj, bool reference_updating)
         break;
       }
 #endif
-
       default:
         rb_bug("unreachable");
     }
@@ -599,6 +729,17 @@ rb_cc_tbl_free(struct rb_id_table *cc_tbl, VALUE klass)
     rb_id_table_free(cc_tbl);
 }
 
+static inline void
+imemo_fields_free(struct rb_fields *fields)
+{
+    if (rb_shape_obj_too_complex_p((VALUE)fields)) {
+        st_free_table(fields->as.complex.table);
+    }
+    else if (FL_TEST_RAW((VALUE)fields, OBJ_FIELD_EXTERNAL)) {
+        xfree(fields->as.external.ptr);
+    }
+}
+
 void
 rb_imemo_free(VALUE obj)
 {
@@ -662,6 +803,7 @@ rb_imemo_free(VALUE obj)
         break;
       case imemo_svar:
         RB_DEBUG_COUNTER_INC(obj_imemo_svar);
+
         break;
       case imemo_throw_data:
         RB_DEBUG_COUNTER_INC(obj_imemo_throw_data);
@@ -671,6 +813,10 @@ rb_imemo_free(VALUE obj)
         xfree(((rb_imemo_tmpbuf_t *)obj)->ptr);
         RB_DEBUG_COUNTER_INC(obj_imemo_tmpbuf);
 
+        break;
+      case imemo_fields:
+        imemo_fields_free(IMEMO_OBJ_FIELDS(obj));
+        RB_DEBUG_COUNTER_INC(obj_imemo_fields);
         break;
 
 #if USE_MMTK

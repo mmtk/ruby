@@ -33,7 +33,7 @@ require 'securerandom'
 
 class Resolv
 
-  VERSION = "0.6.0"
+  VERSION = "0.6.1"
 
   ##
   # Looks up the first IP address for +name+.
@@ -2601,7 +2601,7 @@ class Resolv
         end
 
         ##
-        # Flags for this proprty:
+        # Flags for this property:
         # - Bit 0 : 0 = not critical, 1 = critical
 
         attr_reader :flags

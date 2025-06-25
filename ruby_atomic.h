@@ -26,7 +26,7 @@
 #define ATOMIC_VALUE_EXCHANGE(var, val) RUBY_ATOMIC_VALUE_EXCHANGE(var, val)
 
 static inline rb_atomic_t
-rbimpl_atomic_load_relaxed(rb_atomic_t *ptr)
+rbimpl_atomic_load_relaxed(volatile rb_atomic_t *ptr)
 {
 #if defined(HAVE_GCC_ATOMIC_BUILTINS)
     return __atomic_load_n(ptr, __ATOMIC_RELAXED);
@@ -35,5 +35,39 @@ rbimpl_atomic_load_relaxed(rb_atomic_t *ptr)
 #endif
 }
 #define ATOMIC_LOAD_RELAXED(var) rbimpl_atomic_load_relaxed(&(var))
+
+typedef RBIMPL_ALIGNAS(8) uint64_t rbimpl_atomic_uint64_t;
+
+static inline uint64_t
+rbimpl_atomic_u64_load_relaxed(const volatile rbimpl_atomic_uint64_t *value)
+{
+#if defined(HAVE_GCC_ATOMIC_BUILTINS_64)
+    return __atomic_load_n(value, __ATOMIC_RELAXED);
+#elif defined(_WIN32)
+    uint64_t val = *value;
+    return InterlockedCompareExchange64(RBIMPL_CAST((uint64_t *)value), val, val);
+#elif defined(__sun) && defined(HAVE_ATOMIC_H) && (defined(_LP64) || defined(_I32LPx))
+    uint64_t val = *value;
+    return atomic_cas_64(value, val, val);
+#else
+    return *value;
+#endif
+}
+#define ATOMIC_U64_LOAD_RELAXED(var) rbimpl_atomic_u64_load_relaxed(&(var))
+
+static inline void
+rbimpl_atomic_u64_set_relaxed(volatile rbimpl_atomic_uint64_t *address, uint64_t value)
+{
+#if defined(HAVE_GCC_ATOMIC_BUILTINS_64)
+    __atomic_store_n(address, value, __ATOMIC_RELAXED);
+#elif defined(_WIN32)
+    InterlockedExchange64(address, value);
+#elif defined(__sun) && defined(HAVE_ATOMIC_H) && (defined(_LP64) || defined(_I32LPx))
+    atomic_swap_64(address, value);
+#else
+    *address = value;
+#endif
+}
+#define ATOMIC_U64_SET_RELAXED(var, val) rbimpl_atomic_u64_set_relaxed(&(var), val)
 
 #endif

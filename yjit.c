@@ -533,13 +533,6 @@ rb_str_neq_internal(VALUE str1, VALUE str2)
     return rb_str_eql_internal(str1, str2) == Qtrue ? Qfalse : Qtrue;
 }
 
-// YJIT needs this function to never allocate and never raise
-VALUE
-rb_yarv_ary_entry_internal(VALUE ary, long offset)
-{
-    return rb_ary_entry_internal(ary, offset);
-}
-
 extern VALUE rb_ary_unshift_m(int argc, VALUE *argv, VALUE ary);
 
 VALUE
@@ -745,21 +738,19 @@ rb_yjit_vm_unlock(unsigned int *recursive_lock_level, const char *file, int line
 void
 rb_yjit_compile_iseq(const rb_iseq_t *iseq, rb_execution_context_t *ec, bool jit_exception)
 {
-    RB_VM_LOCK_ENTER();
-    rb_vm_barrier();
+    RB_VM_LOCKING() {    rb_vm_barrier();
 
-    // Compile a block version starting at the current instruction
-    uint8_t *rb_yjit_iseq_gen_entry_point(const rb_iseq_t *iseq, rb_execution_context_t *ec, bool jit_exception); // defined in Rust
-    uintptr_t code_ptr = (uintptr_t)rb_yjit_iseq_gen_entry_point(iseq, ec, jit_exception);
+        // Compile a block version starting at the current instruction
+        uint8_t *rb_yjit_iseq_gen_entry_point(const rb_iseq_t *iseq, rb_execution_context_t *ec, bool jit_exception); // defined in Rust
+        uintptr_t code_ptr = (uintptr_t)rb_yjit_iseq_gen_entry_point(iseq, ec, jit_exception);
 
-    if (jit_exception) {
-        iseq->body->jit_exception = (rb_jit_func_t)code_ptr;
-    }
-    else {
-        iseq->body->jit_entry = (rb_jit_func_t)code_ptr;
-    }
-
-    RB_VM_LOCK_LEAVE();
+        if (jit_exception) {
+            iseq->body->jit_exception = (rb_jit_func_t)code_ptr;
+        }
+        else {
+            iseq->body->jit_entry = (rb_jit_func_t)code_ptr;
+        }
+}
 }
 
 // GC root for interacting with the GC
@@ -780,7 +771,31 @@ VALUE
 rb_object_shape_count(void)
 {
     // next_shape_id starts from 0, so it's the same as the count
-    return ULONG2NUM((unsigned long)GET_SHAPE_TREE()->next_shape_id);
+    return ULONG2NUM((unsigned long)rb_shape_tree.next_shape_id);
+}
+
+bool
+rb_yjit_shape_too_complex_p(shape_id_t shape_id)
+{
+    return rb_shape_too_complex_p(shape_id);
+}
+
+bool
+rb_yjit_shape_obj_too_complex_p(VALUE obj)
+{
+    return rb_shape_obj_too_complex_p(obj);
+}
+
+attr_index_t
+rb_yjit_shape_capacity(shape_id_t shape_id)
+{
+    return RSHAPE_CAPACITY(shape_id);
+}
+
+attr_index_t
+rb_yjit_shape_index(shape_id_t shape_id)
+{
+    return RSHAPE_INDEX(shape_id);
 }
 
 // Assert that we have the VM lock. Relevant mostly for multi ractor situations.
@@ -860,3 +875,4 @@ static VALUE yjit_c_builtin_p(rb_execution_context_t *ec, VALUE self) { return Q
 
 // Preprocessed yjit.rb generated during build
 #include "yjit.rbinc"
+

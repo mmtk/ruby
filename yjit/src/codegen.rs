@@ -2904,9 +2904,8 @@ fn gen_get_ivar(
 
     let ivar_index = unsafe {
         let shape_id = comptime_receiver.shape_id_of();
-        let shape = rb_shape_lookup(shape_id);
-        let mut ivar_index: u32 = 0;
-        if rb_shape_get_iv_index(shape, ivar_name, &mut ivar_index) {
+        let mut ivar_index: u16 = 0;
+        if rb_shape_get_iv_index(shape_id, ivar_name, &mut ivar_index) {
             Some(ivar_index as usize)
         } else {
             None
@@ -3107,9 +3106,8 @@ fn gen_set_ivar(
     let shape_too_complex = comptime_receiver.shape_too_complex();
     let ivar_index = if !shape_too_complex {
         let shape_id = comptime_receiver.shape_id_of();
-        let shape = unsafe { rb_shape_lookup(shape_id) };
-        let mut ivar_index: u32 = 0;
-        if unsafe { rb_shape_get_iv_index(shape, ivar_name, &mut ivar_index) } {
+        let mut ivar_index: u16 = 0;
+        if unsafe { rb_shape_get_iv_index(shape_id, ivar_name, &mut ivar_index) } {
             Some(ivar_index as usize)
         } else {
             None
@@ -3121,27 +3119,27 @@ fn gen_set_ivar(
     // The current shape doesn't contain this iv, we need to transition to another shape.
     let mut new_shape_too_complex = false;
     let new_shape = if !shape_too_complex && receiver_t_object && ivar_index.is_none() {
-        let current_shape = comptime_receiver.shape_of();
+        let current_shape_id = comptime_receiver.shape_id_of();
         let next_shape_id = unsafe { rb_shape_transition_add_ivar_no_warnings(comptime_receiver, ivar_name) };
-        let next_shape = unsafe { rb_shape_lookup(next_shape_id) };
 
         // If the VM ran out of shapes, or this class generated too many leaf,
         // it may be de-optimized into OBJ_TOO_COMPLEX_SHAPE (hash-table).
-        new_shape_too_complex = unsafe { rb_shape_too_complex_p(next_shape) };
+        new_shape_too_complex = unsafe { rb_yjit_shape_too_complex_p(next_shape_id) };
         if new_shape_too_complex {
             Some((next_shape_id, None, 0_usize))
         } else {
-            let current_capacity = unsafe { (*current_shape).capacity };
+            let current_capacity = unsafe { rb_yjit_shape_capacity(current_shape_id) };
+            let next_capacity = unsafe { rb_yjit_shape_capacity(next_shape_id) };
 
             // If the new shape has a different capacity, or is TOO_COMPLEX, we'll have to
             // reallocate it.
-            let needs_extension = unsafe { (*current_shape).capacity != (*next_shape).capacity };
+            let needs_extension = next_capacity != current_capacity;
 
             // We can write to the object, but we need to transition the shape
-            let ivar_index = unsafe { (*current_shape).next_field_index } as usize;
+            let ivar_index = unsafe { rb_yjit_shape_index(next_shape_id) } as usize;
 
             let needs_extension = if needs_extension {
-                Some((current_capacity, unsafe { (*next_shape).capacity }))
+                Some((current_capacity, next_capacity))
             } else {
                 None
             };
@@ -3397,9 +3395,8 @@ fn gen_definedivar(
 
     let shape_id = comptime_receiver.shape_id_of();
     let ivar_exists = unsafe {
-        let shape = rb_shape_lookup(shape_id);
-        let mut ivar_index: u32 = 0;
-        rb_shape_get_iv_index(shape, ivar_name, &mut ivar_index)
+        let mut ivar_index: u16 = 0;
+        rb_shape_get_iv_index(shape_id, ivar_name, &mut ivar_index)
     };
 
     // Guard heap object (recv_opnd must be used before stack_pop)
@@ -6278,16 +6275,12 @@ fn jit_rb_str_dup(
 
     jit_prepare_call_with_gc(jit, asm);
 
-    // Check !FL_ANY_RAW(str, FL_EXIVAR), which is part of BARE_STRING_P.
     let recv_opnd = asm.stack_pop(1);
     let recv_opnd = asm.load(recv_opnd);
-    let flags_opnd = Opnd::mem(64, recv_opnd, RUBY_OFFSET_RBASIC_FLAGS);
-    asm.test(flags_opnd, Opnd::Imm(RUBY_FL_EXIVAR as i64));
-    asm.jnz(Target::side_exit(Counter::send_str_dup_exivar));
 
     // Call rb_str_dup
     let stack_ret = asm.stack_push(Type::CString);
-    let ret_opnd = asm.ccall(rb_str_dup as *const u8, vec![recv_opnd]);
+    let ret_opnd = asm.ccall(rb_str_dup_m as *const u8, vec![recv_opnd]);
     asm.mov(stack_ret, ret_opnd);
 
     true

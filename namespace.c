@@ -47,31 +47,19 @@ static bool tmp_dir_has_dirsep;
 # define DIRSEP "/"
 #endif
 
-static int namespace_availability = 0;
+bool ruby_namespace_enabled = false; // extern
+bool ruby_namespace_init_done = false; // extern
 
 VALUE rb_resolve_feature_path(VALUE klass, VALUE fname);
 static VALUE rb_namespace_inspect(VALUE obj);
-
-int
-rb_namespace_available(void)
-{
-    const char *env;
-    if (namespace_availability) {
-        return namespace_availability > 0 ? 1 : 0;
-    }
-    env = getenv("RUBY_NAMESPACE");
-    if (env && strlen(env) > 0) {
-        if (strcmp(env, "1") == 0) {
-            namespace_availability = 1;
-            return 1;
-        }
-    }
-    namespace_availability = -1;
-    return 0;
-}
-
 static void namespace_push(rb_thread_t *th, VALUE namespace);
 static VALUE namespace_pop(VALUE th_value);
+
+void
+rb_namespace_init_done(void)
+{
+    ruby_namespace_init_done = true;
+}
 
 void
 rb_namespace_enable_builtin(void)
@@ -280,120 +268,15 @@ rb_definition_namespace(void)
     return ns;
 }
 
-VALUE
-rb_current_namespace_details(VALUE opt)
-{
-    const rb_callable_method_entry_t *cme;
-    VALUE str, part, nsobj;
-    char buf[2048];
-    const char *path;
-    int calling = 1;
-    long i;
-    rb_execution_context_t *ec = GET_EC();
-    rb_control_frame_t *cfp = ec->cfp;
-    rb_thread_t *th = rb_ec_thread_ptr(ec);
-    const rb_namespace_t *ns = rb_current_namespace();
-    rb_vm_t *vm = GET_VM();
-    VALUE require_stack = vm->require_stack;
-
-    str = rb_namespace_inspect(ns ? ns->ns_object : Qfalse);
-    if (NIL_P(opt)) return str;
-
-    rb_str_cat_cstr(str, "\n");
-
-    part = rb_namespace_inspect(th->ns ? th->ns->ns_object : Qfalse);
-    snprintf(buf, 2048, "main:%s, th->ns:%s, th->nss:%ld, rstack:%ld\n",
-             main_namespace ? "t" : "f",
-             RSTRING_PTR(part),
-             th->namespaces ? RARRAY_LEN(th->namespaces) : 0,
-             require_stack ? RARRAY_LEN(require_stack) : 0);
-    RB_GC_GUARD(part);
-    rb_str_cat_cstr(str, buf);
-
-    if (th->namespaces && RARRAY_LEN(th->namespaces) > 0) {
-        for (i=0; i<RARRAY_LEN(th->namespaces); i++) {
-            nsobj = RARRAY_AREF(th->namespaces, i);
-            part = rb_namespace_inspect(nsobj);
-            snprintf(buf, 2048, "  th->nss[%ld] %s\n", i, RSTRING_PTR(part));
-            RB_GC_GUARD(part);
-            rb_str_cat_cstr(str, buf);
-        }
-    }
-
-
-    rb_str_cat_cstr(str, "calls:\n");
-
-    while (calling && cfp) {
-        const rb_namespace_t *proc_ns;
-        VALUE bh;
-        if (VM_FRAME_NS_SWITCH_P(cfp)) {
-            bh = rb_vm_frame_block_handler(cfp);
-            if (bh && vm_block_handler_type(bh) == block_handler_type_proc) {
-                proc_ns = block_proc_namespace(VM_BH_TO_PROC(bh));
-                if (NAMESPACE_USER_P(ns)) {
-                    part = rb_namespace_inspect(proc_ns->ns_object);
-                    snprintf(buf, 2048, " cfp->ns:%s", RSTRING_PTR(part));
-                    RB_GC_GUARD(part);
-                    calling = 0;
-                    break;
-                }
-            }
-        }
-        cme = rb_vm_frame_method_entry(cfp);
-        if (cme && cme->def) {
-            if (cme->def->type == VM_METHOD_TYPE_ISEQ)
-                path = RSTRING_PTR(pathobj_path(cme->def->body.iseq.iseqptr->body->location.pathobj));
-            else
-                path = "(cfunc)";
-            ns = cme->def->ns;
-            if (ns) {
-                part = rb_namespace_inspect(ns->ns_object);
-                if (!namespace_ignore_builtin_primitive_methods_p(ns, cme->def)) {
-                    snprintf(buf, 2048, " cfp cme->def id:%s, ns:%s, exprim:t, path:%s\n",
-                             rb_id2name(cme->def->original_id),
-                             RSTRING_PTR(part),
-                             path);
-                    RB_GC_GUARD(part);
-                    rb_str_cat_cstr(str, buf);
-                    calling = 0;
-                    break;
-                }
-                else {
-                    snprintf(buf, 2048, " cfp cme->def id:%s, ns:%s, exprim:f, path:%s\n",
-                             rb_id2name(cme->def->original_id),
-                             RSTRING_PTR(part),
-                             path);
-                    RB_GC_GUARD(part);
-                    rb_str_cat_cstr(str, buf);
-                }
-            }
-            else {
-                snprintf(buf, 2048, " cfp cme->def id:%s, ns:null, path:%s\n",
-                         rb_id2name(cme->def->original_id),
-                         path);
-                rb_str_cat_cstr(str, buf);
-            }
-            cfp = RUBY_VM_PREVIOUS_CONTROL_FRAME(cfp);
-        }
-        else {
-            calling = 0;
-        }
-    }
-    rb_str_cat_cstr(str, ".\n");
-    return str;
-}
-
 static long namespace_id_counter = 0;
 
 static long
 namespace_generate_id(void)
 {
     long id;
-    RB_VM_LOCK_ENTER();
-    {
+    RB_VM_LOCKING() {
         id = ++namespace_id_counter;
     }
-    RB_VM_LOCK_LEAVE();
     return id;
 }
 
@@ -554,9 +437,6 @@ namespace_initialize(VALUE namespace)
     // constant table from any view of every (including main) namespace.
     // If a code in the namespace adds a constant, the constant will be visible even from root/main.
     RCLASS_SET_PRIME_CLASSEXT_WRITABLE(namespace, true);
-
-    // fallback to ivptr for ivars from shapes to manipulate the constant table
-    rb_evict_ivars_to_hash(namespace);
 
     // Get a clean constant table of Object even by writable one
     // because ns was just created, so it has not touched any constants yet.
@@ -1140,6 +1020,18 @@ namespace_define_loader_method(const char *name)
 }
 
 void
+Init_enable_namespace(void)
+{
+    const char *env = getenv("RUBY_NAMESPACE");
+    if (env && strlen(env) == 1 && env[0] == '1') {
+        ruby_namespace_enabled = true;
+    }
+    else {
+        ruby_namespace_init_done = true;
+    }
+}
+
+void
 Init_Namespace(void)
 {
     tmp_dir = system_tmpdir();
@@ -1163,7 +1055,6 @@ Init_Namespace(void)
 
     rb_define_singleton_method(rb_cNamespace, "enabled?", rb_namespace_s_getenabled, 0);
     rb_define_singleton_method(rb_cNamespace, "current", rb_namespace_current, 0);
-    rb_define_singleton_method(rb_cNamespace, "current_details", rb_current_namespace_details, 0);
     rb_define_singleton_method(rb_cNamespace, "is_builtin?", rb_namespace_s_is_builtin_p, 1);
 
     rb_define_method(rb_cNamespace, "load_path", rb_namespace_load_path, 0);

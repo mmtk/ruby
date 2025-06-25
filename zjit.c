@@ -162,20 +162,18 @@ void rb_zjit_profile_disable(const rb_iseq_t *iseq);
 void
 rb_zjit_compile_iseq(const rb_iseq_t *iseq, rb_execution_context_t *ec, bool jit_exception)
 {
-    RB_VM_LOCK_ENTER();
-    rb_vm_barrier();
+    RB_VM_LOCKING() {    rb_vm_barrier();
 
-    // Convert ZJIT instructions back to bare instructions
-    rb_zjit_profile_disable(iseq);
+        // Convert ZJIT instructions back to bare instructions
+        rb_zjit_profile_disable(iseq);
 
-    // Compile a block version starting at the current instruction
-    uint8_t *rb_zjit_iseq_gen_entry_point(const rb_iseq_t *iseq, rb_execution_context_t *ec); // defined in Rust
-    uintptr_t code_ptr = (uintptr_t)rb_zjit_iseq_gen_entry_point(iseq, ec);
+        // Compile a block version starting at the current instruction
+        uint8_t *rb_zjit_iseq_gen_entry_point(const rb_iseq_t *iseq, rb_execution_context_t *ec); // defined in Rust
+        uintptr_t code_ptr = (uintptr_t)rb_zjit_iseq_gen_entry_point(iseq, ec);
 
-    // TODO: support jit_exception
-    iseq->body->jit_entry = (rb_jit_func_t)code_ptr;
-
-    RB_VM_LOCK_LEAVE();
+        // TODO: support jit_exception
+        iseq->body->jit_entry = (rb_jit_func_t)code_ptr;
+}
 }
 
 extern VALUE *rb_vm_base_ptr(struct rb_control_frame_struct *cfp);
@@ -330,6 +328,12 @@ rb_zjit_print_exception(void)
     rb_set_errinfo(Qnil);
     assert(RTEST(exception));
     rb_warn("Ruby error: %"PRIsVALUE"", rb_funcall(exception, rb_intern("full_message"), 0));
+}
+
+bool
+rb_zjit_shape_obj_too_complex_p(VALUE obj)
+{
+    return rb_shape_obj_too_complex_p(obj);
 }
 
 // Preprocessed zjit.rb generated during build

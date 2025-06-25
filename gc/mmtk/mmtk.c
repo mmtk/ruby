@@ -129,7 +129,7 @@ rb_mmtk_block_for_gc(MMTk_VMMutatorThread mutator)
     struct objspace *objspace = rb_gc_get_objspace();
 
     size_t starting_gc_count = objspace->gc_count;
-    int lock_lev = rb_gc_vm_lock();
+    int lock_lev = RB_GC_VM_LOCK();
     int err;
     if ((err = pthread_mutex_lock(&objspace->mutex)) != 0) {
         rb_bug("ERROR: cannot lock objspace->mutex: %s", strerror(err));
@@ -173,7 +173,7 @@ rb_mmtk_block_for_gc(MMTk_VMMutatorThread mutator)
     if ((err = pthread_mutex_unlock(&objspace->mutex)) != 0) {
         rb_bug("ERROR: cannot release objspace->mutex: %s", strerror(err));
     }
-    rb_gc_vm_unlock(lock_lev);
+    RB_GC_VM_UNLOCK(lock_lev);
 }
 
 static size_t
@@ -453,6 +453,7 @@ rb_gc_impl_init(void)
 {
     VALUE gc_constants = rb_hash_new();
     rb_hash_aset(gc_constants, ID2SYM(rb_intern("BASE_SLOT_SIZE")), SIZET2NUM(sizeof(VALUE) * 5));
+    rb_hash_aset(gc_constants, ID2SYM(rb_intern("RBASIC_SIZE")), SIZET2NUM(sizeof(struct RBasic)));
     rb_hash_aset(gc_constants, ID2SYM(rb_intern("RVALUE_OVERHEAD")), INT2NUM(0));
     rb_hash_aset(gc_constants, ID2SYM(rb_intern("RVARGC_MAX_ALLOCATE_SIZE")), LONG2FIX(640));
     // Pretend we have 5 size pools
@@ -749,6 +750,8 @@ rb_gc_impl_writebarrier(void *objspace_ptr, VALUE a, VALUE b)
 {
     struct MMTk_ractor_cache *cache = rb_gc_get_ractor_newobj_cache();
 
+    if (SPECIAL_CONST_P(b)) return;
+
     mmtk_object_reference_write_post(cache->mutator, (MMTk_ObjectReference)a);
 }
 
@@ -924,7 +927,7 @@ rb_gc_impl_define_finalizer(void *objspace_ptr, VALUE obj, VALUE block)
 
     RBASIC(obj)->flags |= FL_FINALIZE;
 
-    int lev = rb_gc_vm_lock();
+    int lev = RB_GC_VM_LOCK();
 
     if (st_lookup(objspace->finalizer_table, obj, &data)) {
         table = (VALUE)data;
@@ -937,7 +940,7 @@ rb_gc_impl_define_finalizer(void *objspace_ptr, VALUE obj, VALUE block)
             for (i = 0; i < len; i++) {
                 VALUE recv = RARRAY_AREF(table, i);
                 if (rb_equal(recv, block)) {
-                    rb_gc_vm_unlock(lev);
+                    RB_GC_VM_UNLOCK(lev);
                     return recv;
                 }
             }
@@ -951,7 +954,7 @@ rb_gc_impl_define_finalizer(void *objspace_ptr, VALUE obj, VALUE block)
         st_add_direct(objspace->finalizer_table, obj, table);
     }
 
-    rb_gc_vm_unlock(lev);
+    RB_GC_VM_UNLOCK(lev);
 
     return block;
 }
@@ -963,9 +966,9 @@ rb_gc_impl_undefine_finalizer(void *objspace_ptr, VALUE obj)
 
     st_data_t data = obj;
 
-    int lev = rb_gc_vm_lock();
+    int lev = RB_GC_VM_LOCK();
     st_delete(objspace->finalizer_table, &data, 0);
-    rb_gc_vm_unlock(lev);
+    RB_GC_VM_UNLOCK(lev);
 
     FL_UNSET(obj, FL_FINALIZE);
 }
@@ -979,7 +982,7 @@ rb_gc_impl_copy_finalizer(void *objspace_ptr, VALUE dest, VALUE obj)
 
     if (!FL_TEST(obj, FL_FINALIZE)) return;
 
-    int lev = rb_gc_vm_lock();
+    int lev = RB_GC_VM_LOCK();
     if (RB_LIKELY(st_lookup(objspace->finalizer_table, obj, &data))) {
         table = rb_ary_dup((VALUE)data);
         RARRAY_ASET(table, 0, rb_obj_id(dest));
@@ -989,7 +992,7 @@ rb_gc_impl_copy_finalizer(void *objspace_ptr, VALUE dest, VALUE obj)
     else {
         rb_bug("rb_gc_copy_finalizer: FL_FINALIZE set but not found in finalizer_table: %s", rb_obj_info(obj));
     }
-    rb_gc_vm_unlock(lev);
+    RB_GC_VM_UNLOCK(lev);
 }
 
 static int

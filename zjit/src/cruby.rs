@@ -133,6 +133,7 @@ unsafe extern "C" {
     pub fn rb_str_setbyte(str: VALUE, index: VALUE, value: VALUE) -> VALUE;
     pub fn rb_vm_splat_array(flag: VALUE, ary: VALUE) -> VALUE;
     pub fn rb_vm_concat_array(ary1: VALUE, ary2st: VALUE) -> VALUE;
+    pub fn rb_vm_get_special_object(reg_ep: *const VALUE, value_type: vm_special_object_type) -> VALUE;
     pub fn rb_vm_concat_to_array(ary1: VALUE, ary2st: VALUE) -> VALUE;
     pub fn rb_vm_defined(
         ec: EcPtr,
@@ -213,6 +214,7 @@ pub use rb_vm_ci_flag as vm_ci_flag;
 pub use rb_vm_ci_kwarg as vm_ci_kwarg;
 pub use rb_METHOD_ENTRY_VISI as METHOD_ENTRY_VISI;
 pub use rb_RCLASS_ORIGIN as RCLASS_ORIGIN;
+pub use rb_vm_get_special_object as vm_get_special_object;
 
 /// Helper so we can get a Rust string for insn_name()
 pub fn insn_name(opcode: usize) -> String {
@@ -478,23 +480,11 @@ impl VALUE {
     }
 
     pub fn shape_too_complex(self) -> bool {
-        unsafe { rb_shape_obj_too_complex_p(self) }
+        unsafe { rb_zjit_shape_obj_too_complex_p(self) }
     }
 
     pub fn shape_id_of(self) -> u32 {
         unsafe { rb_obj_shape_id(self) }
-    }
-
-    pub fn shape_of(self) -> *mut rb_shape {
-        unsafe {
-            let shape = rb_shape_lookup(self.shape_id_of());
-
-            if shape.is_null() {
-                panic!("Shape should not be null");
-            } else {
-                shape
-            }
-        }
     }
 
     pub fn embedded_p(self) -> bool {
@@ -571,6 +561,11 @@ impl VALUE {
         }
 
         ptr
+    }
+
+    pub fn cme_p(self) -> bool {
+        if self == VALUE(0) { return false; }
+        unsafe { rb_IMEMO_TYPE_P(self, imemo_ment) == 1 }
     }
 
     /// Assert that `self` is a method entry in debug builds
@@ -1043,8 +1038,8 @@ pub mod test_utils {
     }
 
     /// Get the ISeq of a specified method
-    pub fn get_method_iseq(name: &str) -> *const rb_iseq_t {
-        let wrapped_iseq = eval(&format!("RubyVM::InstructionSequence.of(method(:{}))", name));
+    pub fn get_method_iseq(recv: &str, name: &str) -> *const rb_iseq_t {
+        let wrapped_iseq = eval(&format!("RubyVM::InstructionSequence.of({}.method(:{}))", recv, name));
         unsafe { rb_iseqw_to_iseq(wrapped_iseq) }
     }
 

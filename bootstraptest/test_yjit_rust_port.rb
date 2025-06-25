@@ -376,7 +376,7 @@ assert_equal 'ok', %q{
   r = Ractor.new do
     'ok'
   end
-  r.take
+  r.value
 }
 
 # Passed arguments to Ractor.new will be a block parameter
@@ -386,7 +386,7 @@ assert_equal 'ok', %q{
   r = Ractor.new 'ok' do |msg|
     msg
   end
-  r.take
+  r.value
 }
 
 # Pass multiple arguments to Ractor.new
@@ -395,7 +395,7 @@ assert_equal 'ok', %q{
   r =  Ractor.new 'ping', 'pong' do |msg, msg2|
     [msg, msg2]
   end
-  'ok' if r.take == ['ping', 'pong']
+  'ok' if r.value == ['ping', 'pong']
 }
 
 # Ractor#send passes an object with copy to a Ractor
@@ -405,7 +405,7 @@ assert_equal 'ok', %q{
     msg = Ractor.receive
   end
   r.send 'ok'
-  r.take
+  r.value
 }
 
 assert_equal '[1, 2, 3]', %q{

@@ -31,6 +31,20 @@ class TestZJIT < Test::Unit::TestCase
     }
   end
 
+  def test_putstring
+    assert_compiles '""', %q{
+      def test = "#{""}"
+      test
+    }, insns: [:putstring]
+  end
+
+  def test_putchilldedstring
+    assert_compiles '""', %q{
+      def test = ""
+      test
+    }, insns: [:putchilledstring]
+  end
+
   def test_leave_param
     assert_compiles '5', %q{
       def test(n) = n
@@ -59,6 +73,21 @@ class TestZJIT < Test::Unit::TestCase
       def test3 = baz(4, 1)
 
       [test1, test2, test3]
+    }
+  end
+
+  def test_invokebuiltin
+    assert_compiles '["."]', %q{
+      def test = Dir.glob(".")
+      test
+    }
+  end
+
+  def test_invokebuiltin_delegate
+    assert_compiles '[[], true]', %q{
+      def test = [].clone(freeze: true)
+      r = test
+      [r, r.frozen?]
     }
   end
 
@@ -94,6 +123,51 @@ class TestZJIT < Test::Unit::TestCase
     }, call_threshold: 2
   end
 
+  def test_opt_plus_type_guard_exit
+    assert_compiles '[3, 3.0]', %q{
+      def test(a) = 1 + a
+      test(1) # profile opt_plus
+      [test(2), test(2.0)]
+    }, call_threshold: 2
+  end
+
+  def test_opt_plus_type_guard_exit_with_locals
+    assert_compiles '[6, 6.0]', %q{
+      def test(a)
+        local = 3
+        1 + a + local
+      end
+      test(1) # profile opt_plus
+      [test(2), test(2.0)]
+    }, call_threshold: 2
+  end
+
+  def test_opt_plus_type_guard_nested_exit
+    assert_compiles '[4, 4.0]', %q{
+      def side_exit(n) = 1 + n
+      def jit_frame(n) = 1 + side_exit(n)
+      def entry(n) = jit_frame(n)
+      entry(2) # profile send
+      [entry(2), entry(2.0)]
+    }, call_threshold: 2
+  end
+
+  def test_opt_plus_type_guard_nested_exit_with_locals
+    assert_compiles '[9, 9.0]', %q{
+      def side_exit(n)
+        local = 2
+        1 + n + local
+      end
+      def jit_frame(n)
+        local = 3
+        1 + side_exit(n) + local
+      end
+      def entry(n) = jit_frame(n)
+      entry(2) # profile send
+      [entry(2), entry(2.0)]
+    }, call_threshold: 2
+  end
+
   # Test argument ordering
   def test_opt_minus
     assert_compiles '2', %q{
@@ -112,7 +186,6 @@ class TestZJIT < Test::Unit::TestCase
   end
 
   def test_opt_mult_overflow
-    omit 'side exits are not implemented yet'
     assert_compiles '[6, -6, 9671406556917033397649408, -9671406556917033397649408, 21267647932558653966460912964485513216]', %q{
       def test(a, b)
         a * b
@@ -134,7 +207,7 @@ class TestZJIT < Test::Unit::TestCase
       def test(a, b) = a == b
       test(0, 2) # profile opt_eq
       [test(1, 1), test(0, 1)]
-    }, call_threshold: 2
+    }, insns: [:opt_eq], call_threshold: 2
   end
 
   def test_opt_neq_dynamic
@@ -144,7 +217,7 @@ class TestZJIT < Test::Unit::TestCase
       def test(a, b) = a != b
       test(0, 2) # profile opt_neq
       [test(1, 1), test(0, 1)]
-    }, call_threshold: 1
+    }, insns: [:opt_neq], call_threshold: 1
   end
 
   def test_opt_neq_fixnum
@@ -160,7 +233,7 @@ class TestZJIT < Test::Unit::TestCase
       def test(a, b) = a < b
       test(2, 3) # profile opt_lt
       [test(0, 1), test(0, 0), test(1, 0)]
-    }, call_threshold: 2
+    }, insns: [:opt_lt], call_threshold: 2
   end
 
   def test_opt_lt_with_literal_lhs
@@ -168,7 +241,7 @@ class TestZJIT < Test::Unit::TestCase
       def test(n) = 2 < n
       test(2) # profile opt_lt
       [test(1), test(2), test(3)]
-    }, call_threshold: 2
+    }, insns: [:opt_lt], call_threshold: 2
   end
 
   def test_opt_le
@@ -176,7 +249,7 @@ class TestZJIT < Test::Unit::TestCase
       def test(a, b) = a <= b
       test(2, 3) # profile opt_le
       [test(0, 1), test(0, 0), test(1, 0)]
-    }, call_threshold: 2
+    }, insns: [:opt_le], call_threshold: 2
   end
 
   def test_opt_gt
@@ -184,7 +257,49 @@ class TestZJIT < Test::Unit::TestCase
       def test(a, b) = a > b
       test(2, 3) # profile opt_gt
       [test(0, 1), test(0, 0), test(1, 0)]
-    }, call_threshold: 2
+    }, insns: [:opt_gt], call_threshold: 2
+  end
+
+  def test_opt_empty_p
+    assert_compiles('[false, false, true]', <<~RUBY, insns: [:opt_empty_p])
+      def test(x) = x.empty?
+      return test([1]), test("1"), test({})
+    RUBY
+  end
+
+  def test_opt_succ
+    assert_compiles('[0, "B"]', <<~RUBY, insns: [:opt_succ])
+      def test(obj) = obj.succ
+      return test(-1), test("A")
+    RUBY
+  end
+
+  def test_opt_and
+    assert_compiles('[1, [3, 2, 1]]', <<~RUBY, insns: [:opt_and])
+      def test(x, y) = x & y
+      return test(0b1101, 3), test([3, 2, 1, 4], [8, 1, 2, 3])
+    RUBY
+  end
+
+  def test_opt_or
+    assert_compiles('[11, [3, 2, 1]]', <<~RUBY, insns: [:opt_or])
+      def test(x, y) = x | y
+      return test(0b1000, 3), test([3, 2, 1], [1, 2, 3])
+    RUBY
+  end
+
+  def test_opt_not
+    assert_compiles('[true, true, false]', <<~RUBY, insns: [:opt_not])
+      def test(obj) = !obj
+      return test(nil), test(false), test(0)
+    RUBY
+  end
+
+  def test_opt_regexpmatch2
+    assert_compiles('[1, nil]', <<~RUBY, insns: [:opt_regexpmatch2])
+      def test(haystack) = /needle/ =~ haystack
+      return test("kneedle"), test("")
+    RUBY
   end
 
   def test_opt_ge
@@ -192,14 +307,42 @@ class TestZJIT < Test::Unit::TestCase
       def test(a, b) = a >= b
       test(2, 3) # profile opt_ge
       [test(0, 1), test(0, 0), test(1, 0)]
-    }, call_threshold: 2
+    }, insns: [:opt_ge], call_threshold: 2
+  end
+
+  def test_opt_hash_freeze
+    assert_compiles '{}', <<~RUBY, insns: [:opt_hash_freeze]
+      def test = {}.freeze
+      test
+    RUBY
+  end
+
+  def test_opt_ary_freeze
+    assert_compiles '[]', <<~RUBY, insns: [:opt_ary_freeze]
+      def test = [].freeze
+      test
+    RUBY
+  end
+
+  def test_opt_str_freeze
+    assert_compiles '""', <<~RUBY, insns: [:opt_str_freeze]
+      def test = "".freeze
+      test
+    RUBY
+  end
+
+  def test_opt_str_uminus
+    assert_compiles '""', <<~RUBY, insns: [:opt_str_uminus]
+      def test = -""
+      test
+    RUBY
   end
 
   def test_new_array_empty
     assert_compiles '[]', %q{
       def test = []
       test
-    }
+    }, insns: [:newarray]
   end
 
   def test_new_array_nonempty
@@ -224,6 +367,27 @@ class TestZJIT < Test::Unit::TestCase
     assert_compiles '[1, 2, 3]', %q{
       def test = [1,2,3]
       test
+    }
+  end
+
+  def test_new_range_inclusive
+    assert_compiles '1..5', %q{
+      def test(a, b) = a..b
+      test(1, 5)
+    }
+  end
+
+  def test_new_range_exclusive
+    assert_compiles '1...5', %q{
+      def test(a, b) = a...b
+      test(1, 5)
+    }
+  end
+
+  def test_new_range_with_literal
+    assert_compiles '3..10', %q{
+      def test(n) = n..10
+      test(3)
     }
   end
 
@@ -487,6 +651,121 @@ class TestZJIT < Test::Unit::TestCase
     }, call_threshold: 5, num_profiles: 3
   end
 
+  def test_opt_aref_with
+    assert_compiles ':ok', %q{
+      def aref_with(hash) = hash["key"]
+
+      aref_with({ "key" => :ok })
+    }
+  end
+
+  def test_putself
+    assert_compiles '3', %q{
+      class Integer
+        def minus(a)
+          self - a
+        end
+      end
+      5.minus(2)
+    }
+  end
+
+  def test_getinstancevariable
+    assert_compiles 'nil', %q{
+      def test() = @foo
+
+      test()
+    }
+    assert_compiles '3', %q{
+      @foo = 3
+      def test() = @foo
+
+      test()
+    }
+  end
+
+  def test_setinstancevariable
+    assert_compiles '1', %q{
+      def test() = @foo = 1
+
+      test()
+      @foo
+    }
+  end
+
+  def test_uncached_getconstant_path
+    assert_compiles RUBY_COPYRIGHT.dump, %q{
+      def test = RUBY_COPYRIGHT
+      test
+    }, call_threshold: 1, insns: [:opt_getconstant_path]
+  end
+
+  def test_getconstant_path_autoload
+    # A constant-referencing expression can run arbitrary code through Kernel#autoload.
+    Dir.mktmpdir('autoload') do |tmpdir|
+      autoload_path = File.join(tmpdir, 'test_getconstant_path_autoload.rb')
+      File.write(autoload_path, 'X = RUBY_COPYRIGHT')
+
+      assert_compiles RUBY_COPYRIGHT.dump, %Q{
+        Object.autoload(:X, #{File.realpath(autoload_path).inspect})
+        def test = X
+        test
+      }, call_threshold: 1, insns: [:opt_getconstant_path]
+    end
+  end
+
+  def test_dupn
+    assert_compiles '[[1], [1, 1], :rhs, [nil, :rhs]]', <<~RUBY, insns: [:dupn]
+      def test(array) = (array[1, 2] ||= :rhs)
+
+      one = [1, 1]
+      start_empty = []
+      [test(one), one, test(start_empty), start_empty]
+    RUBY
+  end
+
+  def test_send_backtrace
+    backtrace = [
+      "-e:2:in 'Object#jit_frame1'",
+      "-e:3:in 'Object#entry'",
+      "-e:5:in 'block in <main>'",
+      "-e:6:in '<main>'",
+    ]
+    assert_compiles backtrace.inspect, %q{
+      def jit_frame2 = caller     # 1
+      def jit_frame1 = jit_frame2 # 2
+      def entry = jit_frame1      # 3
+      entry # profile send        # 4
+      entry                       # 5
+    }, call_threshold: 2
+  end
+
+  def test_putspecialobject_vm_core_and_cbase
+    assert_compiles '10', %q{
+      def test
+        alias bar test
+        10
+      end
+
+      test
+      bar
+    }, insns: [:putspecialobject]
+  end
+
+  def test_putspecialobject_const_base
+    assert_compiles '1', %q{
+      Foo = 1
+
+      def test = Foo
+
+      # First call: populates the constant cache
+      test
+      # Second call: triggers ZJIT compilation with warm cache
+      # RubyVM::ZJIT.assert_compiles will panic if this fails to compile
+      test
+    }, call_threshold: 2
+  end
+
   # tool/ruby_vm/views/*.erb relies on the zjit instructions a) being contiguous and
   # b) being reliably ordered after all the other instructions.
   def test_instruction_order
@@ -504,26 +783,43 @@ class TestZJIT < Test::Unit::TestCase
 
   # Assert that every method call in `test_script` can be compiled by ZJIT
   # at a given call_threshold
-  def assert_compiles(expected, test_script, **opts)
+  def assert_compiles(expected, test_script, insns: [], **opts)
     pipe_fd = 3
 
     script = <<~RUBY
-      _test_proc = -> {
-        RubyVM::ZJIT.assert_compiles
-        #{test_script}
+      ret_val = (_test_proc = -> { RubyVM::ZJIT.assert_compiles; #{test_script.lstrip} }).call
+      result = {
+        ret_val:,
+        #{ unless insns.empty?
+          'insns: RubyVM::InstructionSequence.of(_test_proc).enum_for(:each_child).map(&:to_a)'
+        end}
       }
-      result = _test_proc.call
-      IO.open(#{pipe_fd}).write(result.inspect)
+      IO.open(#{pipe_fd}).write(Marshal.dump(result))
     RUBY
 
-    status, out, err, actual = eval_with_jit(script, pipe_fd:, **opts)
+    status, out, err, result = eval_with_jit(script, pipe_fd:, **opts)
 
     message = "exited with status #{status.to_i}"
     message << "\nstdout:\n```\n#{out}```\n" unless out.empty?
     message << "\nstderr:\n```\n#{err}```\n" unless err.empty?
     assert status.success?, message
 
-    assert_equal expected, actual
+    result = Marshal.load(result)
+    assert_equal expected, result.fetch(:ret_val).inspect
+
+    unless insns.empty?
+      iseqs = result.fetch(:insns)
+      iseqs.filter! { it[9] == :method } # ISeq type
+      assert_equal 1, iseqs.size, "Opcode assertions tests must define exactly one method"
+      iseq_insns = iseqs.first.last
+
+      expected_insns = Set.new(insns)
+      iseq_insns.each do
+        next unless it.is_a?(Array)
+        expected_insns.delete(it.first)
+      end
+      assert(expected_insns.empty?, -> { "Not present in ISeq: #{expected_insns.to_a}" })
+    end
   end
 
   # Run a Ruby process with ZJIT options and a pipe for writing test results

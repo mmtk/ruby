@@ -293,19 +293,24 @@ impl Assembler
                             let opnd1 = asm.load(*src);
                             asm.mov(*dest, opnd1);
                         },
-                        (Opnd::Mem(_), Opnd::UImm(value)) => {
-                            // 32-bit values will be sign-extended
-                            if imm_num_bits(*value as i64) > 32 {
+                        (Opnd::Mem(Mem { num_bits, .. }), Opnd::UImm(value)) => {
+                            // For 64 bit destinations, 32-bit values will be sign-extended
+                            if *num_bits == 64 && imm_num_bits(*value as i64) > 32 {
                                 let opnd1 = asm.load(*src);
                                 asm.mov(*dest, opnd1);
                             } else {
                                 asm.mov(*dest, *src);
                             }
                         },
-                        (Opnd::Mem(_), Opnd::Imm(value)) => {
-                            if imm_num_bits(*value) > 32 {
+                        (Opnd::Mem(Mem { num_bits, .. }), Opnd::Imm(value)) => {
+                            // For 64 bit destinations, 32-bit values will be sign-extended
+                            if *num_bits == 64 && imm_num_bits(*value) > 32 {
                                 let opnd1 = asm.load(*src);
                                 asm.mov(*dest, opnd1);
+                            } else if uimm_num_bits(*value as u64) <= *num_bits {
+                                // If the bit string is short enough for the destination, use the unsigned representation.
+                                // Note that 64-bit and negative values are ruled out.
+                                asm.mov(*dest, Opnd::UImm(*value as u64));
                             } else {
                                 asm.mov(*dest, *src);
                             }
@@ -665,7 +670,7 @@ impl Assembler
                 // Conditional jump to a label
                 Insn::Jmp(target) => {
                     match *target {
-                        Target::CodePtr(code_ptr) | Target::SideExitPtr(code_ptr) => jmp_ptr(cb, code_ptr),
+                        Target::CodePtr(code_ptr) => jmp_ptr(cb, code_ptr),
                         Target::Label(label) => jmp_label(cb, label),
                         Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_side_exits"),
                     }
@@ -673,7 +678,7 @@ impl Assembler
 
                 Insn::Je(target) => {
                     match *target {
-                        Target::CodePtr(code_ptr) | Target::SideExitPtr(code_ptr) => je_ptr(cb, code_ptr),
+                        Target::CodePtr(code_ptr) => je_ptr(cb, code_ptr),
                         Target::Label(label) => je_label(cb, label),
                         Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_side_exits"),
                     }
@@ -681,7 +686,7 @@ impl Assembler
 
                 Insn::Jne(target) => {
                     match *target {
-                        Target::CodePtr(code_ptr) | Target::SideExitPtr(code_ptr) => jne_ptr(cb, code_ptr),
+                        Target::CodePtr(code_ptr) => jne_ptr(cb, code_ptr),
                         Target::Label(label) => jne_label(cb, label),
                         Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_side_exits"),
                     }
@@ -689,7 +694,7 @@ impl Assembler
 
                 Insn::Jl(target) => {
                     match *target {
-                        Target::CodePtr(code_ptr) | Target::SideExitPtr(code_ptr) => jl_ptr(cb, code_ptr),
+                        Target::CodePtr(code_ptr) => jl_ptr(cb, code_ptr),
                         Target::Label(label) => jl_label(cb, label),
                         Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_side_exits"),
                     }
@@ -697,7 +702,7 @@ impl Assembler
 
                 Insn::Jg(target) => {
                     match *target {
-                        Target::CodePtr(code_ptr) | Target::SideExitPtr(code_ptr) => jg_ptr(cb, code_ptr),
+                        Target::CodePtr(code_ptr) => jg_ptr(cb, code_ptr),
                         Target::Label(label) => jg_label(cb, label),
                         Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_side_exits"),
                     }
@@ -705,7 +710,7 @@ impl Assembler
 
                 Insn::Jge(target) => {
                     match *target {
-                        Target::CodePtr(code_ptr) | Target::SideExitPtr(code_ptr) => jge_ptr(cb, code_ptr),
+                        Target::CodePtr(code_ptr) => jge_ptr(cb, code_ptr),
                         Target::Label(label) => jge_label(cb, label),
                         Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_side_exits"),
                     }
@@ -713,7 +718,7 @@ impl Assembler
 
                 Insn::Jbe(target) => {
                     match *target {
-                        Target::CodePtr(code_ptr) | Target::SideExitPtr(code_ptr) => jbe_ptr(cb, code_ptr),
+                        Target::CodePtr(code_ptr) => jbe_ptr(cb, code_ptr),
                         Target::Label(label) => jbe_label(cb, label),
                         Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_side_exits"),
                     }
@@ -721,7 +726,7 @@ impl Assembler
 
                 Insn::Jb(target) => {
                     match *target {
-                        Target::CodePtr(code_ptr) | Target::SideExitPtr(code_ptr) => jb_ptr(cb, code_ptr),
+                        Target::CodePtr(code_ptr) => jb_ptr(cb, code_ptr),
                         Target::Label(label) => jb_label(cb, label),
                         Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_side_exits"),
                     }
@@ -729,7 +734,7 @@ impl Assembler
 
                 Insn::Jz(target) => {
                     match *target {
-                        Target::CodePtr(code_ptr) | Target::SideExitPtr(code_ptr) => jz_ptr(cb, code_ptr),
+                        Target::CodePtr(code_ptr) => jz_ptr(cb, code_ptr),
                         Target::Label(label) => jz_label(cb, label),
                         Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_side_exits"),
                     }
@@ -737,7 +742,7 @@ impl Assembler
 
                 Insn::Jnz(target) => {
                     match *target {
-                        Target::CodePtr(code_ptr) | Target::SideExitPtr(code_ptr) => jnz_ptr(cb, code_ptr),
+                        Target::CodePtr(code_ptr) => jnz_ptr(cb, code_ptr),
                         Target::Label(label) => jnz_label(cb, label),
                         Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_side_exits"),
                     }
@@ -746,7 +751,7 @@ impl Assembler
                 Insn::Jo(target) |
                 Insn::JoMul(target) => {
                     match *target {
-                        Target::CodePtr(code_ptr) | Target::SideExitPtr(code_ptr) => jo_ptr(cb, code_ptr),
+                        Target::CodePtr(code_ptr) => jo_ptr(cb, code_ptr),
                         Target::Label(label) => jo_label(cb, label),
                         Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_side_exits"),
                     }
@@ -831,6 +836,7 @@ impl Assembler
     pub fn compile_with_regs(self, cb: &mut CodeBlock, regs: Vec<Reg>) -> Option<(CodePtr, Vec<u32>)> {
         let asm = self.x86_split();
         let mut asm = asm.alloc_regs(regs);
+        asm.compile_side_exits()?;
 
         // Create label instances in the code block
         for (idx, name) in asm.label_names.iter().enumerate() {
@@ -853,20 +859,17 @@ impl Assembler
     }
 }
 
-/*
 #[cfg(test)]
 mod tests {
-    use crate::disasm::assert_disasm;
-    #[cfg(feature = "disasm")]
-    use crate::disasm::{unindent, disasm_addr_range};
-
+    use crate::assertions::assert_disasm;
     use super::*;
 
     fn setup_asm() -> (Assembler, CodeBlock) {
-        (Assembler::new(0), CodeBlock::new_dummy(1024))
+        (Assembler::new(), CodeBlock::new_dummy())
     }
 
     #[test]
+    #[ignore]
     fn test_emit_add_lt_32_bits() {
         let (mut asm, mut cb) = setup_asm();
 
@@ -877,6 +880,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_emit_add_gt_32_bits() {
         let (mut asm, mut cb) = setup_asm();
 
@@ -887,6 +891,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_emit_and_lt_32_bits() {
         let (mut asm, mut cb) = setup_asm();
 
@@ -897,6 +902,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_emit_and_gt_32_bits() {
         let (mut asm, mut cb) = setup_asm();
 
@@ -951,6 +957,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_emit_or_lt_32_bits() {
         let (mut asm, mut cb) = setup_asm();
 
@@ -961,6 +968,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_emit_or_gt_32_bits() {
         let (mut asm, mut cb) = setup_asm();
 
@@ -971,6 +979,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_emit_sub_lt_32_bits() {
         let (mut asm, mut cb) = setup_asm();
 
@@ -981,6 +990,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_emit_sub_gt_32_bits() {
         let (mut asm, mut cb) = setup_asm();
 
@@ -1011,6 +1021,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_emit_xor_lt_32_bits() {
         let (mut asm, mut cb) = setup_asm();
 
@@ -1021,6 +1032,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_emit_xor_gt_32_bits() {
         let (mut asm, mut cb) = setup_asm();
 
@@ -1044,6 +1056,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_merge_lea_mem() {
         let (mut asm, mut cb) = setup_asm();
 
@@ -1058,6 +1071,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_replace_cmp_0() {
         let (mut asm, mut cb) = setup_asm();
 
@@ -1210,6 +1224,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_reorder_c_args_with_insn_out() {
         let (mut asm, mut cb) = setup_asm();
 
@@ -1253,15 +1268,16 @@ mod tests {
 
         asm.compile_with_num_regs(&mut cb, 1);
 
-        assert_disasm!(cb, "48837b1001b804000000480f4f03488903", {"
+        assert_disasm!(cb, "48837b1001bf04000000480f4f3b48893b", {"
             0x0: cmp qword ptr [rbx + 0x10], 1
-            0x5: mov eax, 4
-            0xa: cmovg rax, qword ptr [rbx]
-            0xe: mov qword ptr [rbx], rax
+            0x5: mov edi, 4
+            0xa: cmovg rdi, qword ptr [rbx]
+            0xe: mov qword ptr [rbx], rdi
         "});
     }
 
     #[test]
+    #[ignore]
     fn test_csel_split() {
         let (mut asm, mut cb) = setup_asm();
 
@@ -1278,6 +1294,19 @@ mod tests {
             0x13: mov qword ptr [rbx], rax
         "});
     }
-}
 
-*/
+    #[test]
+    fn test_mov_m32_imm32() {
+        let (mut asm, mut cb) = setup_asm();
+
+        let shape_opnd = Opnd::mem(32, C_RET_OPND, 0);
+        asm.mov(shape_opnd, Opnd::UImm(0x8000_0001));
+        asm.mov(shape_opnd, Opnd::Imm(0x8000_0001));
+
+        asm.compile_with_num_regs(&mut cb, 0);
+        assert_disasm!(cb, "c70001000080c70001000080", {"
+            0x0: mov dword ptr [rax], 0x80000001
+            0x6: mov dword ptr [rax], 0x80000001
+        "});
+    }
+}

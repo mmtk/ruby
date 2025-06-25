@@ -492,17 +492,19 @@ docs: srcs-doc $(DOCTARGETS)
 pkgconfig-data: $(ruby_pc)
 $(ruby_pc): $(srcdir)/template/ruby.pc.in config.status
 
+INSTALL_ALL = all
+
 install-all: pre-install-all do-install-all post-install-all
 pre-install-all:: all pre-install-local pre-install-ext pre-install-gem pre-install-doc
 do-install-all: pre-install-all $(DOT_WAIT) docs
-	$(INSTRUBY) --make="$(MAKE)" $(INSTRUBY_ARGS) --install=all $(INSTALL_DOC_OPTS)
+	$(INSTRUBY) --make="$(MAKE)" $(INSTRUBY_ARGS) --install=$(INSTALL_ALL) $(INSTALL_DOC_OPTS)
 post-install-all:: post-install-local post-install-ext post-install-gem post-install-doc
 	@$(NULLCMD)
 
 install-nodoc: pre-install-nodoc do-install-nodoc post-install-nodoc
 pre-install-nodoc:: pre-install-local pre-install-ext pre-install-gem
 do-install-nodoc: main pre-install-nodoc
-	$(INSTRUBY) --make="$(MAKE)" $(INSTRUBY_ARGS) --install=all --exclude=doc
+	$(INSTRUBY) --make="$(MAKE)" $(INSTRUBY_ARGS) --install=$(INSTALL_ALL) --exclude=doc
 post-install-nodoc:: post-install-local post-install-ext post-install-gem
 
 install-local: pre-install-local do-install-local post-install-local
@@ -577,7 +579,7 @@ what-where-all: no-install-all
 no-install-all: pre-no-install-all dont-install-all post-no-install-all
 pre-no-install-all:: pre-no-install-local pre-no-install-ext pre-no-install-doc
 dont-install-all: $(PROGRAM)
-	$(INSTRUBY) -n --make="$(MAKE)" $(INSTRUBY_ARGS) --install=all $(INSTALL_DOC_OPTS)
+	$(INSTRUBY) -n --make="$(MAKE)" $(INSTRUBY_ARGS) --install=$(INSTALL_ALL) $(INSTALL_DOC_OPTS)
 post-no-install-all:: post-no-install-local post-no-install-ext post-no-install-doc
 	@$(NULLCMD)
 
@@ -1427,8 +1429,8 @@ run: yes-fake miniruby$(EXEEXT) PHONY
 runruby: $(PROGRAM) PHONY
 	RUBY_ON_BUG='gdb -x $(srcdir)/.gdbinit -p' $(RUNRUBY) $(RUNOPT0) $(TESTRUN_SCRIPT) $(RUNOPT)
 
-runirb: $(PROGRAM) PHONY
-	RUBY_ON_BUG='gdb -x $(srcdir)/.gdbinit -p' $(RUNRUBY) $(RUNOPT0) -r irb -e 'IRB.start("make runirb")' $(RUNOPT)
+runirb: $(PROGRAM) update-default-gemspecs
+	RUBY_ON_BUG='gdb -x $(srcdir)/.gdbinit -p' $(RUNRUBY) $(RUNOPT0) -rrubygems -r irb -e 'IRB.start("make runirb")' $(RUNOPT)
 
 parse: yes-fake miniruby$(EXEEXT) PHONY
 	$(BTESTRUBY) --dump=parsetree_with_comment,insns $(TESTRUN_SCRIPT)
@@ -1562,18 +1564,6 @@ extract-gems$(sequential): PHONY
 
 extract-gems$(sequential): $(HAVE_GIT:yes=clone-bundled-gems-src)
 
-clone-bundled-gems-src: PHONY
-	$(Q) $(BASERUBY) -C "$(srcdir)" \
-	    -Itool/lib -rbundled_gem -answ \
-	    -e 'BEGIN {git = $$git}' \
-	    -e 'gem, _, repo, rev = *$$F' \
-	    -e 'next if !rev or /^#/=~gem' \
-	    -e 'gemdir = "gems/src/#{gem}"' \
-	    -e 'BundledGem.checkout(gemdir, repo, rev, git: git)' \
-	    -e 'BundledGem.dummy_gemspec("#{gemdir}/#{gem}.gemspec")' \
-	    -- -git="$(GIT)" \
-	    gems/bundled_gems
-
 outdate-bundled-gems: PHONY
 	$(Q) $(BASERUBY) $(tooldir)/$@.rb --make="$(MAKE)" --mflags="$(MFLAGS)" \
 	--ruby-platform=$(arch) --ruby-version=$(ruby_version) \
@@ -1623,7 +1613,8 @@ yes-install-for-test-bundled-gems: yes-update-default-gemspecs
 		"sinatra" "rack" "tilt" "mustermann" "base64" "compact_index" "rack-test" "logger" "kpeg" "tracer"
 
 test-bundled-gems-fetch: yes-test-bundled-gems-fetch
-yes-test-bundled-gems-fetch:
+yes-test-bundled-gems-fetch: clone-bundled-gems-src
+clone-bundled-gems-src: PHONY
 	$(Q) $(BASERUBY) -C $(srcdir)/gems ../tool/fetch-bundled_gems.rb BUNDLED_GEMS="$(BUNDLED_GEMS)" src bundled_gems
 no-test-bundled-gems-fetch:
 
@@ -1696,8 +1687,7 @@ test-bundler: $(TEST_RUNNABLE)-test-bundler
 yes-test-bundler: $(PREPARE_BUNDLER)
 	$(gnumake_recursive)$(XRUBY) \
 		-r./$(arch)-fake \
-		-e "exec(*ARGV)" -- \
-		$(XRUBY) -C $(srcdir) -Ispec/bundler -Ispec/lib .bundle/bin/rspec \
+		-C $(srcdir) -Ispec/bundler -Ispec/lib spec/bin/rspec \
 		-r spec_helper $(RSPECOPTS) spec/bundler/$(BUNDLER_SPECS)
 no-test-bundler:
 
@@ -8134,6 +8124,7 @@ imemo.$(OBJEXT): $(top_srcdir)/internal/namespace.h
 imemo.$(OBJEXT): $(top_srcdir)/internal/sanitizers.h
 imemo.$(OBJEXT): $(top_srcdir)/internal/serial.h
 imemo.$(OBJEXT): $(top_srcdir)/internal/set_table.h
+imemo.$(OBJEXT): $(top_srcdir)/internal/st.h
 imemo.$(OBJEXT): $(top_srcdir)/internal/static_assert.h
 imemo.$(OBJEXT): $(top_srcdir)/internal/variable.h
 imemo.$(OBJEXT): $(top_srcdir)/internal/vm.h
@@ -14308,6 +14299,7 @@ process.$(OBJEXT): {$(VPATH)}onigmo.h
 process.$(OBJEXT): {$(VPATH)}oniguruma.h
 process.$(OBJEXT): {$(VPATH)}process.c
 process.$(OBJEXT): {$(VPATH)}ractor.h
+process.$(OBJEXT): {$(VPATH)}ractor_core.h
 process.$(OBJEXT): {$(VPATH)}ruby_assert.h
 process.$(OBJEXT): {$(VPATH)}ruby_atomic.h
 process.$(OBJEXT): {$(VPATH)}rubyparser.h
@@ -14535,6 +14527,7 @@ ractor.$(OBJEXT): {$(VPATH)}ractor.c
 ractor.$(OBJEXT): {$(VPATH)}ractor.h
 ractor.$(OBJEXT): {$(VPATH)}ractor.rbinc
 ractor.$(OBJEXT): {$(VPATH)}ractor_core.h
+ractor.$(OBJEXT): {$(VPATH)}ractor_sync.c
 ractor.$(OBJEXT): {$(VPATH)}ruby_assert.h
 ractor.$(OBJEXT): {$(VPATH)}ruby_atomic.h
 ractor.$(OBJEXT): {$(VPATH)}rubyparser.h
@@ -15369,6 +15362,8 @@ re.$(OBJEXT): {$(VPATH)}missing.h
 re.$(OBJEXT): {$(VPATH)}node.h
 re.$(OBJEXT): {$(VPATH)}onigmo.h
 re.$(OBJEXT): {$(VPATH)}oniguruma.h
+re.$(OBJEXT): {$(VPATH)}ractor.h
+re.$(OBJEXT): {$(VPATH)}ractor_core.h
 re.$(OBJEXT): {$(VPATH)}re.c
 re.$(OBJEXT): {$(VPATH)}re.h
 re.$(OBJEXT): {$(VPATH)}regenc.h
@@ -15384,6 +15379,7 @@ re.$(OBJEXT): {$(VPATH)}thread_$(THREAD_MODEL).h
 re.$(OBJEXT): {$(VPATH)}thread_native.h
 re.$(OBJEXT): {$(VPATH)}util.h
 re.$(OBJEXT): {$(VPATH)}vm_core.h
+re.$(OBJEXT): {$(VPATH)}vm_debug.h
 re.$(OBJEXT): {$(VPATH)}vm_opts.h
 regcomp.$(OBJEXT): $(hdrdir)/ruby.h
 regcomp.$(OBJEXT): $(hdrdir)/ruby/ruby.h
@@ -17033,6 +17029,7 @@ set.$(OBJEXT): $(top_srcdir)/internal/array.h
 set.$(OBJEXT): $(top_srcdir)/internal/basic_operators.h
 set.$(OBJEXT): $(top_srcdir)/internal/bits.h
 set.$(OBJEXT): $(top_srcdir)/internal/compilers.h
+set.$(OBJEXT): $(top_srcdir)/internal/error.h
 set.$(OBJEXT): $(top_srcdir)/internal/gc.h
 set.$(OBJEXT): $(top_srcdir)/internal/hash.h
 set.$(OBJEXT): $(top_srcdir)/internal/imemo.h
@@ -17042,6 +17039,7 @@ set.$(OBJEXT): $(top_srcdir)/internal/sanitizers.h
 set.$(OBJEXT): $(top_srcdir)/internal/serial.h
 set.$(OBJEXT): $(top_srcdir)/internal/set_table.h
 set.$(OBJEXT): $(top_srcdir)/internal/static_assert.h
+set.$(OBJEXT): $(top_srcdir)/internal/string.h
 set.$(OBJEXT): $(top_srcdir)/internal/symbol.h
 set.$(OBJEXT): $(top_srcdir)/internal/variable.h
 set.$(OBJEXT): $(top_srcdir)/internal/vm.h
