@@ -41,6 +41,13 @@ extern int madvise(caddr_t, size_t, int);
 #include "id_table.h"
 #include "ractor_core.h"
 
+#if USE_MMTK
+#include "internal/mmtk_support.h"
+#endif
+
+// Conditional compilation macros for MMTk
+#include "internal/mmtk_macros.h"
+
 static const int DEBUG = 0;
 
 #define RB_PAGE_SIZE (pagesize)
@@ -773,7 +780,12 @@ static void
 fiber_pool_stack_release(struct fiber_pool_stack * stack)
 {
     struct fiber_pool * pool = stack->pool;
-    RB_VM_LOCK_ENTER();
+    unsigned int lev;
+    // When using MMTk, GC worker threads will reach here when freeing a Fiber object.
+    // MMTk GC worker threads cannot hold the GVL.
+    WHEN_USING_MMTK_CONDITIONAL(!rb_during_gc(), {
+    RB_VM_LOCK_ENTER_LEV(&lev);
+    });
     {
         struct fiber_pool_vacancy * vacancy = fiber_pool_vacancy_pointer(stack->base, stack->size);
 
@@ -810,7 +822,9 @@ fiber_pool_stack_release(struct fiber_pool_stack * stack)
         }
 #endif
     }
-    RB_VM_LOCK_LEAVE();
+    WHEN_USING_MMTK_CONDITIONAL(!rb_during_gc(), {
+    RB_VM_LOCK_LEAVE_LEV(&lev);
+    });
 }
 
 static inline void
