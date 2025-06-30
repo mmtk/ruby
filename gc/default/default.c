@@ -7763,6 +7763,8 @@ gc_update_references(rb_objspace_t *objspace)
 {
     objspace->flags.during_reference_updating = true;
 
+    rb_gc_before_updating();
+
     struct heap_page *page = NULL;
 
     for (int i = 0; i < HEAP_COUNT; i++) {
@@ -7796,6 +7798,8 @@ gc_update_references(rb_objspace_t *objspace)
             table
         );
     }
+
+    rb_gc_after_updating();
 
     objspace->flags.during_reference_updating = false;
 }
