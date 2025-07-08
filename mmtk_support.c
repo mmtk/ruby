@@ -10,6 +10,7 @@
 #include "internal/variable.h"
 #include "ruby/ruby.h"
 #include "ractor_core.h"
+#include "symbol.h"
 #include "vm_core.h"
 #include "ruby/st.h"
 #ifndef _WIN32
@@ -1199,6 +1200,170 @@ rb_mmtk_update_weak_table(st_table *table,
     }
 }
 
+// Copied from mmtk.c
+int
+rb_mmtk_update_table_i(VALUE val, void *data)
+{
+    if (!mmtk_is_reachable((MMTk_ObjectReference)val)) {
+        return ST_DELETE;
+    }
+
+    return ST_REPLACE;
+}
+
+int
+rb_mmtk_update_table_replace_i(VALUE *value, void *data)
+{
+    VALUE new_value = (VALUE)mmtk_get_forwarded_object((MMTk_ObjectReference)(*value));
+    if (new_value != 0) {
+        RUBY_DEBUG_LOG("Forwarding weak table key or value: %p -> %p\n", (void*)*value, (void*)new_value);
+        *value = new_value;
+    }
+    return ST_CONTINUE;
+}
+
+/////////////// BEGIN: Concrete global weak tables ////////////////
+// Note: Follow the order of `rb_gc_vm_weak_table_foreach` in `gc.c`
+
+//////// CI table
+
+size_t
+rb_mmtk_get_ci_table_size(void)
+{
+    return GET_VM()->ci_table->num_entries;
+}
+
+void
+rb_mmtk_update_ci_table(void)
+{
+    // The CI table is a deduplicating table for callinfo.
+    // Used as a HashSet (key always equals value).
+    // Compared and hashed by callinfo fields.  Two CIs are equal if all fields are equal.
+    rb_mmtk_st_update_dedup_table(GET_VM()->ci_table);
+}
+
+//////// Overloaded CME table
+
+size_t
+rb_mmtk_get_overloaded_cme_table_size(void)
+{
+    return GET_VM()->overloaded_cme_table->num_entries;
+}
+
+static void
+rb_mmtk_on_overloaded_cme_delete(st_data_t key, st_data_t value, void *arg)
+{
+#if USE_RUBY_DEBUG_LOG
+    RUBY_DEBUG_LOG("Deleting from overloaded_cme_table: %p -> %p", (void*)key, (void*)value);
+#endif
+}
+
+void
+rb_mmtk_update_overloaded_cme_table(void)
+{
+    // The overloaded CME table.  It has both weak keys and weak values.
+    rb_mmtk_update_weak_table(GET_VM()->overloaded_cme_table,
+                              true,
+                              true, // Currently values are pinned.
+                              rb_mmtk_on_overloaded_cme_delete,
+                              NULL);
+}
+
+//////// Global symbols table
+
+extern rb_symbols_t ruby_global_symbols;
+
+size_t
+rb_mmtk_get_global_symbols_table_size(void)
+{
+    return ruby_global_symbols.str_sym->num_entries;
+}
+
+void
+rb_mmtk_update_global_symbols_table(void)
+{
+    // String-to-symbol table.
+    // Keys are the strings, hasshed by content (rb_str_hash).
+    // Values are symbol objects.  A symbol holds a reference to its
+    // corresponding string, so if the value is live, the key must be live.
+    // We need to remove entries for dead symbols.
+    rb_mmtk_update_weak_table(ruby_global_symbols.str_sym,
+                              false,
+                              RB_MMTK_VALUES_WEAK_REF,
+                              NULL,
+                              NULL);
+}
+
+//////// Finalizer and id2ref tables
+
+// Defined in default.c.  The finalizer table is private to the default GC.
+size_t rb_mmtk_get_finalizer_table_size(void);
+
+// Defined in gc.c.  The id2ref table is a static variable in gc.c.
+size_t rb_mmtk_get_id2ref_table_size(void);
+
+// Defined in default.c.  The finalizer table is private to the default GC.
+void rb_mmtk_update_finalizer_and_obj_id_tables(void);
+
+//////// Generic fields table
+
+// Defined in variable.c
+struct st_table *rb_generic_fields_tbl_get(void);
+
+size_t
+rb_mmtk_get_generic_fields_tbl_size(void) {
+    return rb_generic_fields_tbl_get()->num_entries;
+}
+
+void
+rb_mmtk_update_generic_fields_table(void)
+{
+    // The generic_fields_tbl_ maps each object to its imemo:fields object.
+    // Each key-value pair represents a strong edge from each key to its value.
+    // rb_gc_mark_children traces the edge from key to value as if it were a field of the key.
+    // We need to update both keys and values, and removed entries of dead keys.
+    rb_gc_vm_weak_table_foreach(rb_mmtk_update_table_i, rb_mmtk_update_table_replace_i, NULL, false, RB_GC_VM_GENERIC_FIELDS_TABLE);
+}
+
+//////// Frozen strings table
+
+size_t
+rb_mmtk_get_frozen_strings_table_size(void)
+{
+    return rb_mmtk_debug_get_num_fstrings();
+}
+
+void
+rb_mmtk_update_frozen_strings_table(void)
+{
+    // The frozen strings table is a deduplicating table for frozen strings.
+    // It is now implemented as a special data structure `fstring_table_struct`.
+    // We just use the default implementation to clean it up.
+    // TODO: See if we need to parallelize it.
+    // Since the default implementation simply does a linear scan, it is trivial to parallelize.
+
+    rb_gc_vm_weak_table_foreach(rb_mmtk_update_table_i, rb_mmtk_update_table_replace_i, NULL, true, RB_GC_VM_FROZEN_STRINGS_TABLE);
+}
+
+//////// CC refinement table
+
+size_t
+rb_mmtk_get_cc_refinement_table_size(void)
+{
+    return GET_VM()->cc_refinement_table->num_entries;
+}
+
+void
+rb_mmtk_update_cc_refinement_table(void)
+{
+    // We just use the default implementation to clean it up.
+
+    rb_gc_vm_weak_table_foreach(rb_mmtk_update_table_i, rb_mmtk_update_table_replace_i, NULL, true, RB_GC_VM_CC_REFINEMENT_TABLE);
+}
+
+
+/////////////// END: Concrete global weak tables ////////////////
+
 ////////////////////////////////////////////////////////////////////////////////
 // String buffer implementation
 ////////////////////////////////////////////////////////////////////////////////
@@ -1745,12 +1910,6 @@ rb_mmtk_scan_roots_in_mutator_thread(MMTk_VMMutatorThread vm_mutator, MMTk_VMWor
     // We don't really need to do anything because all ractors and stacks are reachable from rb_vm_t.
 }
 
-struct st_table *rb_generic_fields_tbl_get(void); // Defined in variable.c
-
-st_table*
-rb_mmtk_get_generic_fields_tbl(void) {
-    return rb_generic_fields_tbl_get();
-}
 
 bool
 rb_mmtk_has_exivar(MMTk_ObjectReference object)
@@ -1758,19 +1917,10 @@ rb_mmtk_has_exivar(MMTk_ObjectReference object)
     return rb_obj_exivar_p((VALUE)object);
 }
 
-void rb_mmtk_update_generic_fields_table(void); // Defined in default.c
-void rb_mmtk_update_frozen_strings_table(void); // Defined in default.c
-void rb_mmtk_update_finalizer_and_obj_id_tables(void); // Defined in default.c
-void rb_mmtk_update_global_symbols_table(void); // Defined in gc.c
-void rb_mmtk_update_overloaded_cme_table(void); // Defined in default.c
-void rb_mmtk_update_ci_table(void); // Defined in default.c
-
-st_table* rb_mmtk_get_frozen_strings_table(void); // Defined in default.c
-st_table* rb_mmtk_get_finalizer_table(void); // Defined in default.c
-st_table* rb_mmtk_get_id2ref_table(void); // Defined in default.c
-st_table* rb_mmtk_get_global_symbols_table(void); // Defined in gc.c
-st_table* rb_mmtk_get_overloaded_cme_table(void); // Defined in default.c
-st_table* rb_mmtk_get_ci_table(void); // Defined in default.c
+st_table*
+rb_mmtk_get_global_symbols_table(void) {
+    return ruby_global_symbols.str_sym;
+}
 
 MMTk_RubyUpcalls ruby_upcalls = {
     rb_mmtk_init_gc_worker_thread,
@@ -1796,19 +1946,25 @@ MMTk_RubyUpcalls ruby_upcalls = {
     rb_mmtk_call_obj_free,
     rb_mmtk_vm_live_bytes,
     rb_mmtk_has_exivar,
-    rb_mmtk_update_generic_fields_table,
-    rb_mmtk_update_frozen_strings_table,
-    rb_mmtk_update_finalizer_and_obj_id_tables,
-    rb_mmtk_update_global_symbols_table,
-    rb_mmtk_update_overloaded_cme_table,
+    // Simple table size query and update functions
+    rb_mmtk_get_ci_table_size,
     rb_mmtk_update_ci_table,
-    rb_mmtk_get_generic_fields_tbl,
-    rb_mmtk_debug_get_num_fstrings,
-    rb_mmtk_get_finalizer_table,
-    rb_mmtk_get_id2ref_table,
+    rb_mmtk_get_overloaded_cme_table_size,
+    rb_mmtk_update_overloaded_cme_table,
+    rb_mmtk_get_global_symbols_table_size,
+    rb_mmtk_update_global_symbols_table,
+    rb_mmtk_get_finalizer_table_size,
+    rb_mmtk_get_id2ref_table_size,
+    rb_mmtk_update_finalizer_and_obj_id_tables,
+    rb_mmtk_get_generic_fields_tbl_size,
+    rb_mmtk_update_generic_fields_table,
+    rb_mmtk_get_frozen_strings_table_size,
+    rb_mmtk_update_frozen_strings_table,
+    rb_mmtk_get_cc_refinement_table_size,
+    rb_mmtk_update_cc_refinement_table,
+    // Get tables for specialized processing
     rb_mmtk_get_global_symbols_table,
-    rb_mmtk_get_overloaded_cme_table,
-    rb_mmtk_get_ci_table,
+    // Detailed table info queries and operations
     rb_mmtk_st_get_num_entries,
     rb_mmtk_st_get_size_info,
     rb_mmtk_st_update_entries_range,

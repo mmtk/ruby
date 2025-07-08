@@ -10251,9 +10251,7 @@ rb_gc_impl_init(void)
 }
 
 #if USE_MMTK
-
 /////////////// BEGIN: Global table updating ////////////////
-
 static void
 rb_mmtk_on_finalizer_table_delete(st_data_t key, st_data_t value, void *arg)
 {
@@ -10264,68 +10262,11 @@ rb_mmtk_on_finalizer_table_delete(st_data_t key, st_data_t value, void *arg)
     rb_mmtk_make_finalize_job(obj, finalizer_array);
 }
 
-static void
-rb_mmtk_on_overloaded_cme_delete(st_data_t key, st_data_t value, void *arg)
+size_t
+rb_mmtk_get_finalizer_table_size(void)
 {
-#if USE_RUBY_DEBUG_LOG
-    RUBY_DEBUG_LOG("Deleting from overloaded_cme_table: %p -> %p", (void*)key, (void*)value);
-#endif
-}
-
-// Copied from mmtk.c
-static int
-rb_mmtk_update_table_i(VALUE val, void *data)
-{
-    if (!mmtk_is_reachable((MMTk_ObjectReference)val)) {
-        return ST_DELETE;
-    }
-
-    return ST_REPLACE;
-}
-
-static int
-rb_mmtk_update_table_replace_i(VALUE *value, void *data)
-{
-    VALUE new_value = (VALUE)mmtk_get_forwarded_object((MMTk_ObjectReference)(*value));
-    if (new_value != 0) {
-        RUBY_DEBUG_LOG("Forwarding weak table key or value: %p -> %p\n", (void*)*value, (void*)new_value);
-        *value = new_value;
-    }
-    return ST_CONTINUE;
-}
-
-void
-rb_mmtk_update_generic_fields_table(void)
-{
-    // The generic_fields_tbl_ maps each object to its imemo:fields object.
-    // Each key-value pair represents a strong edge from each key to its value.
-    // rb_gc_mark_children traces the edge from key to value as if it were a field of the key.
-    // We need to update both keys and values, and removed entries of dead keys.
-    rb_gc_vm_weak_table_foreach(rb_mmtk_update_table_i, rb_mmtk_update_table_replace_i, NULL, false, RB_GC_VM_GENERIC_FIELDS_TABLE);
-}
-
-void
-rb_mmtk_update_frozen_strings_table(void)
-{
-    // The frozen strings table is a deduplicating table for frozen strings.
-    // It is now implemented as a special data structure `fstring_table_struct`.
-    // We just use the default implementation to clean it up.
-    // TODO: See if we need to parallelize it.
-    // Since the default implementation simply does a linear scan, it is trivial to parallelize.
-
-
-#if USE_RUBY_DEBUG_LOG
-    size_t size1 = rb_mmtk_debug_get_num_fstrings();
-#endif
-
-    rb_gc_vm_weak_table_foreach(rb_mmtk_update_table_i, rb_mmtk_update_table_replace_i, NULL, true, RB_GC_VM_FROZEN_STRINGS_TABLE);
-
-#if USE_RUBY_DEBUG_LOG
-    size_t size2 = rb_mmtk_debug_get_num_fstrings();
-#endif
-
-    RUBY_DEBUG_LOG("fstring table size: %zu -> %zu.  Removed: %zu\n",
-        size1, size2, size1-size2);
+    rb_objspace_t *objspace = rb_gc_get_objspace();
+    return finalizer_table->num_entries;
 }
 
 void
@@ -10357,57 +10298,6 @@ rb_mmtk_update_finalizer_and_obj_id_tables(void)
     // Note that the id2ref_tbl is lazily constructed,
     // but rb_gc_vm_weak_table_foreach will helps us checking if id2ref_tbl == NULL.
     rb_gc_vm_weak_table_foreach(rb_mmtk_update_table_i, rb_mmtk_update_table_replace_i, NULL, true, RB_GC_VM_ID2REF_TABLE);
-}
-
-void
-rb_mmtk_update_overloaded_cme_table(void)
-{
-    // The overloaded CME table.  It has both weak keys and weak values.
-    rb_mmtk_update_weak_table(GET_VM()->overloaded_cme_table,
-                              true,
-                              true, // Currently values are pinned.
-                              rb_mmtk_on_overloaded_cme_delete,
-                              NULL);
-}
-
-void
-rb_mmtk_update_ci_table(void)
-{
-    // The CI table is a deduplicating table for callinfo.
-    // Used as a HashSet (key always equals value).
-    // Compared and hashed by callinfo fields.  Two CIs are equal if all fields are equal.
-
-#if USE_RUBY_DEBUG_LOG
-    size_t size1 = GET_VM()->ci_table->num_entries;
-#endif
-
-    rb_mmtk_st_update_dedup_table(GET_VM()->ci_table);
-
-#if USE_RUBY_DEBUG_LOG
-    size_t size2 = GET_VM()->ci_table->num_entries;
-#endif
-
-    RUBY_DEBUG_LOG("CI table size: %zu -> %zu.  Removed: %zu\n",
-        size1, size2, size1-size2);
-}
-
-st_table*
-rb_mmtk_get_finalizer_table(void)
-{
-    rb_objspace_t *objspace = rb_gc_get_objspace();
-    return finalizer_table;
-}
-
-st_table*
-rb_mmtk_get_overloaded_cme_table(void)
-{
-    return GET_VM()->overloaded_cme_table;
-}
-
-st_table*
-rb_mmtk_get_ci_table(void)
-{
-    return GET_VM()->ci_table;
 }
 /////////////// END: Global table updating ////////////////
 

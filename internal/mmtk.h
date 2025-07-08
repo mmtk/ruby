@@ -82,19 +82,22 @@ typedef struct MMTk_RubyUpcalls {
     void (*call_obj_free)(MMTk_ObjectReference object);
     size_t (*vm_live_bytes)(void);
     bool (*has_exivar)(MMTk_ObjectReference object);
-    void (*update_generic_fields_table)(void);
-    void (*update_frozen_strings_table)(void);
-    void (*update_finalizer_and_obj_id_tables)(void);
-    void (*update_global_symbols_table)(void);
-    void (*update_overloaded_cme_table)(void);
+    size_t (*get_ci_table_size)(void);
     void (*update_ci_table)(void);
-    struct st_table *(*get_generic_fields_tbl)(void);
-    size_t (*get_num_fstrings)(void);
-    struct st_table *(*get_finalizer_table)(void);
-    struct st_table *(*get_id2ref_table)(void);
+    size_t (*get_overloaded_cme_table_size)(void);
+    void (*update_overloaded_cme_table)(void);
+    size_t (*get_global_symbols_table_size)(void);
+    void (*update_global_symbols_table)(void);
+    size_t (*get_finalizer_table_size)(void);
+    size_t (*get_id2ref_table_size)(void);
+    void (*update_finalizer_and_obj_id_tables)(void);
+    size_t (*get_generic_fields_tbl_size)(void);
+    void (*update_generic_fields_table)(void);
+    size_t (*get_frozen_strings_table_size)(void);
+    void (*update_frozen_strings_table)(void);
+    size_t (*get_cc_refinement_table_size)(void);
+    void (*update_cc_refinement_table)(void);
     struct st_table *(*get_global_symbols_table)(void);
-    struct st_table *(*get_overloaded_cme_table)(void);
-    struct st_table *(*get_ci_table)(void);
     size_t (*st_get_num_entries)(const struct st_table *table);
     void (*st_get_size_info)(const struct st_table *table,
                              size_t *entries_start,

@@ -127,6 +127,10 @@ rb_mmtk_update_weak_table(st_table *table,
 
 void rb_mmtk_update_global_weak_tables(void);
 
+// Copied from mmtk.c.  Used by some table-updating functions elsewhere.
+int rb_mmtk_update_table_i(VALUE val, void *data);
+int rb_mmtk_update_table_replace_i(VALUE *value, void *data);
+
 // String buffer implementation
 rb_mmtk_strbuf_t *rb_mmtk_new_strbuf(size_t capa);
 char* rb_mmtk_strbuf_to_chars(rb_mmtk_strbuf_t* strbuf);

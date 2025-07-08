@@ -3211,10 +3211,13 @@ rb_mmtk_scan_global_symbols_roots(void)
     rb_sym_global_symbols_mark();
 }
 
-st_table*
-rb_mmtk_get_id2ref_table(void)
+size_t rb_mmtk_get_id2ref_table_size(void)
 {
-    return id2ref_tbl;
+    if (id2ref_tbl) {
+        return id2ref_tbl->num_entries;
+    } else {
+        return 0;
+    }
 }
 #endif
 
@@ -4337,27 +4340,6 @@ rb_gc_update_vm_references(void *objspace)
 }
 
 #if USE_MMTK
-void
-rb_mmtk_update_global_symbols_table(void)
-{
-    // String-to-symbol table.
-    // Keys are the strings, hasshed by content (rb_str_hash).
-    // Values are symbol objects.  A symbol holds a reference to its
-    // corresponding string, so if the value is live, the key must be live.
-    // We need to remove entries for dead symbols.
-    rb_mmtk_update_weak_table(global_symbols.str_sym,
-                              false,
-                              RB_MMTK_VALUES_WEAK_REF,
-                              NULL,
-                              NULL);
-}
-
-st_table*
-rb_mmtk_get_global_symbols_table(void)
-{
-    return global_symbols.str_sym;
-}
-
 static void
 rb_mmtk_gc_ref_update_string(void * objspace, VALUE str)
 {
