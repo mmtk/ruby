@@ -6578,12 +6578,11 @@ gc_writebarrier_incremental(VALUE a, VALUE b, rb_objspace_t *objspace)
 void
 rb_gc_impl_writebarrier(void *objspace_ptr, VALUE a, VALUE b)
 {
-#if USE_MMTK
-    // Define the MMTK_WB_ASSERT_VO macro in the compiler command line to enable the assertions.
-    // Whenever writing an object field using the write barrier, it will assert the source object
-    // and the new value are valid objects.
+    WHEN_USING_MMTK({
+        // Define the MMTK_WB_ASSERT_VO macro in the compiler command line to enable the assertions.
+        // Whenever writing an object field using the write barrier, it will assert the source object
+        // and the new value are valid objects.
 #ifdef MMTK_WB_ASSERT_VO
-    if (rb_mmtk_enabled_p()) {
         if (!rb_mmtk_is_valid_objref(a)) {
             rb_bug("a is not MMTk object: %p", (void*)a);
         }
@@ -6592,13 +6591,12 @@ rb_gc_impl_writebarrier(void *objspace_ptr, VALUE a, VALUE b)
                 rb_bug("b is not MMTk object: %p", (void*)b);
             }
         }
-    }
 #endif
-    if (rb_mmtk_enabled_p() && rb_mmtk_use_barrier) {
-        rb_mmtk_object_reference_write_post(rb_mmtk_get_mutator_local(), (MMTk_ObjectReference)a);
+        if (rb_mmtk_use_barrier) {
+            rb_mmtk_object_reference_write_post(rb_mmtk_get_mutator_local(), (MMTk_ObjectReference)a);
+        }
         return;
-    }
-#endif
+    })
 
     rb_objspace_t *objspace = objspace_ptr;
 
@@ -6715,20 +6713,18 @@ rb_gc_impl_active_gc_name(void)
 void
 rb_gc_impl_writebarrier_remember(void *objspace_ptr, VALUE obj)
 {
-#if USE_MMTK
-    // Define the MMTK_WB_ASSERT_VO macro in the compiler command line to enable the assertions.
+    WHEN_USING_MMTK({
+        // Define the MMTK_WB_ASSERT_VO macro in the compiler command line to enable the assertions.
 #ifdef MMTK_WB_ASSERT_VO
-    if (rb_mmtk_enabled_p()) {
         if (!rb_mmtk_is_valid_objref(obj)) {
             rb_bug("Attempt to remember invalid invalid objref: %p", (void*)obj);
         }
-    }
 #endif
-    if (rb_mmtk_enabled_p() && rb_mmtk_use_barrier) {
-        rb_mmtk_object_reference_write_post(rb_mmtk_get_mutator_local(), (MMTk_ObjectReference)obj);
+        if (rb_mmtk_use_barrier) {
+            rb_mmtk_object_reference_write_post(rb_mmtk_get_mutator_local(), (MMTk_ObjectReference)obj);
+        }
         return;
-    }
-#endif
+    })
 
     rb_objspace_t *objspace = objspace_ptr;
 
