@@ -1765,8 +1765,6 @@ rb_mmtk_stop_the_world(MMTk_VMWorkerThread _tls)
     rb_mmtk_use_mmtk_global(rb_mmtk_wait_until_ractors_stopped, NULL);
 
     rb_mmtk_set_during_gc(true);
-
-    rb_gc_before_updating();
 }
 
 static void
@@ -1781,8 +1779,6 @@ static void
 rb_mmtk_resume_mutators(MMTk_VMWorkerThread tls)
 {
     rb_mmtk_assert_mmtk_worker();
-
-    rb_gc_after_updating();
 
     rb_mmtk_set_during_gc(false);
 

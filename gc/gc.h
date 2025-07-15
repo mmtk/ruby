@@ -96,11 +96,6 @@ MODULAR_GC_FN void rb_gc_prepare_heap_process_object(VALUE obj);
 MODULAR_GC_FN bool rb_memerror_reentered(void);
 MODULAR_GC_FN bool rb_obj_id_p(VALUE);
 
-// BEGIN: Added by MMTk
-MODULAR_GC_FN void rb_gc_before_updating(void);
-MODULAR_GC_FN void rb_gc_after_updating(void);
-// END: Added by MMTk
-
 #if USE_MODULAR_GC
 MODULAR_GC_FN bool rb_gc_event_hook_required_p(rb_event_flag_t event);
 MODULAR_GC_FN void *rb_gc_get_ractor_newobj_cache(void);

@@ -231,24 +231,6 @@ impl<A: Allocator> VirtualMemory<A> {
         Ok(())
     }
 
-    //////// BEGIN: Added by MMTk
-    /// Make all the code in the region writeable. Call this at the beginning of a write session.
-    pub fn mark_all_writeable(&mut self) {
-        self.current_write_page = None;
-
-        let region_start = self.region_start;
-        let mapped_region_bytes: u32 = self.mapped_region_bytes.try_into().unwrap();
-
-        // Make mapped region executable
-        if !self.allocator.mark_writable(region_start.as_ptr(), mapped_region_bytes) {
-            panic!("Cannot make memory region writable: {:?}-{:?}",
-                region_start.as_ptr(),
-                unsafe { region_start.as_ptr().byte_add(mapped_region_bytes as usize)}
-            );
-        }
-    }
-    //////// END: Added by MMTk
-
     /// Make all the code in the region executable. Call this at the end of a write session.
     /// See [Self] for usual usage flow.
     pub fn mark_all_executable(&mut self) {

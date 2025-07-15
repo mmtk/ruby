@@ -51,12 +51,6 @@ void rb_yjit_lazy_push_frame(const VALUE *pc);
 void rb_yjit_invalidate_no_singleton_class(VALUE klass);
 void rb_yjit_invalidate_ep_is_bp(const rb_iseq_t *iseq);
 
-/////// BEGIN: ADDED BY MMTk
-// The following are added by MMTk developers.
-void rb_yjit_mark_all_writeable(void);
-void rb_yjit_mark_all_executable(void);
-/////// END: ADDED BY MMTk
-
 #else
 // !USE_YJIT
 // In these builds, YJIT could never be turned on. Provide dummy implementations.

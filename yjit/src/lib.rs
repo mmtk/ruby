@@ -29,8 +29,3 @@ mod utils;
 mod yjit;
 mod virtualmem;
 mod log;
-
-//////// BEGIN: ADDED BY MMTk
-pub use core::rb_yjit_mark_all_writeable;
-pub use core::rb_yjit_mark_all_executable;
-//////// END: ADDED BY MMTk

@@ -590,12 +590,6 @@ impl CodeBlock {
         self.label_refs = state.label_refs;
     }
 
-    //////// BEGIN: Added by MMTk
-    pub fn mark_all_writeable(&mut self) {
-        self.mem_block.borrow_mut().mark_all_writeable();
-    }
-    //////// END: Added by MMTk
-
     pub fn mark_all_executable(&mut self) {
         self.mem_block.borrow_mut().mark_all_executable();
     }

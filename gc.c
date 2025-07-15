@@ -2288,34 +2288,6 @@ rb_obj_id_p(VALUE obj)
     return !RB_TYPE_P(obj, T_IMEMO) && rb_shape_obj_has_id(obj);
 }
 
-// BEGIN: Added by MMTk
-/*
- * Call this function before the phase that can update reference fields.
- * YJIT needs this to enable write permission for the generated machine code.
- */
-void
-rb_gc_before_updating(void)
-{
-#if USE_YJIT
-    // MMTk: Added this so that we don't need to change the page protection of code during reference updating
-    rb_yjit_mark_all_writeable();
-#endif
-}
-
-/*
- * Call this function after the phase that can update reference fields.
- * YJIT needs this to disable write permission and enable execute permission for the generated machine code.
- */
-void
-rb_gc_after_updating(void)
-{
-#if USE_YJIT
-    // MMTk: Reset all code memory to be executable and not writeable.
-    rb_yjit_mark_all_executable();
-#endif
-}
-// END: Added by MMTk
-
 static enum rb_id_table_iterator_result
 cc_table_memsize_i(VALUE ccs_ptr, void *data_ptr)
 {

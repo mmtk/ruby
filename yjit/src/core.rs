@@ -1925,23 +1925,27 @@ pub extern "C" fn rb_yjit_iseq_mark(payload: *mut c_void) {
         }
     };
 
+    // For marking VALUEs written into the inline code block.
+    // We don't write VALUEs in the outlined block.
+    let cb: &CodeBlock = CodegenGlobals::get_inline_cb();
+
     for versions in &payload.version_map {
         for block in versions {
             // SAFETY: all blocks inside version_map are initialized.
             let block = unsafe { block.as_ref() };
-            mark_block(block, false);
+            mark_block(block, cb, false);
         }
     }
     // Mark dead blocks, since there could be stubs pointing at them
     for blockref in &payload.dead_blocks {
         // SAFETY: dead blocks come from version_map, which only have initialized blocks
         let block = unsafe { blockref.as_ref() };
-        mark_block(block, true);
+        mark_block(block, cb, true);
     }
 
     return;
 
-    fn mark_block(block: &Block, dead: bool) {
+    fn mark_block(block: &Block, cb: &CodeBlock, dead: bool) {
         unsafe { rb_gc_mark_movable(block.iseq.get().into()) };
 
         // Mark method entry dependencies
@@ -2013,23 +2017,33 @@ pub extern "C" fn rb_yjit_iseq_update_references(iseq: IseqPtr) {
     // Also acts as an assert that we hold the VM lock.
     unsafe { rb_vm_barrier() };
 
+    // For updating VALUEs written into the inline code block.
+    let cb = CodegenGlobals::get_inline_cb();
+
     for versions in &payload.version_map {
         for version in versions {
             // SAFETY: all blocks inside version_map are initialized
             let block = unsafe { version.as_ref() };
-            block_update_references(block, false);
+            block_update_references(block, cb, false);
         }
     }
     // Update dead blocks, since there could be stubs pointing at them
     for blockref in &payload.dead_blocks {
         // SAFETY: dead blocks come from version_map, which only have initialized blocks
         let block = unsafe { blockref.as_ref() };
-        block_update_references(block, true);
+        block_update_references(block, cb, true);
     }
+
+    // Note that we would have returned already if YJIT is off.
+    cb.mark_all_executable();
+
+    CodegenGlobals::get_outlined_cb()
+        .unwrap()
+        .mark_all_executable();
 
     return;
 
-    fn block_update_references(block: &Block, dead: bool) {
+    fn block_update_references(block: &Block, cb: &mut CodeBlock, dead: bool) {
         block.iseq.set(unsafe { rb_gc_location(block.iseq.get().into()) }.as_iseq());
 
         // Update method entry dependencies
@@ -2070,7 +2084,10 @@ pub extern "C" fn rb_yjit_iseq_update_references(iseq: IseqPtr) {
         // Skip for dead blocks since they shouldn't run and
         // so there is no potential of writing over invalidation jumps
         if !dead {
-            for value_ptr in block.gc_obj_addresses.iter().copied() {
+            for offset in block.gc_obj_offsets.iter() {
+                let offset_to_value = offset.as_usize();
+                let value_code_ptr = cb.get_ptr(offset_to_value);
+                let value_ptr: *const u8 = value_code_ptr.raw_ptr(cb);
                 // Creating an unaligned pointer is well defined unlike in C.
                 let value_ptr = value_ptr as *mut VALUE;
 
@@ -2080,37 +2097,15 @@ pub extern "C" fn rb_yjit_iseq_update_references(iseq: IseqPtr) {
 
                 // Only write when the VALUE moves, to be copy-on-write friendly.
                 if new_addr != object {
-                    unsafe { value_ptr.write_unaligned(new_addr) };
+                    for (byte_idx, &byte) in new_addr.as_u64().to_le_bytes().iter().enumerate() {
+                        let byte_code_ptr = value_code_ptr.add_bytes(byte_idx);
+                        cb.write_mem(byte_code_ptr, byte)
+                            .expect("patching existing code should be within bounds");
+                    }
                 }
             }
         }
 
-    }
-}
-
-/// Mark all code memory as writable.
-/// Call this before the compaction phase.
-#[no_mangle]
-pub extern "C" fn rb_yjit_mark_all_writeable() {
-    if CodegenGlobals::has_instance() {
-        CodegenGlobals::get_inline_cb().mark_all_writeable();
-
-        CodegenGlobals::get_outlined_cb()
-            .unwrap()
-            .mark_all_writeable();
-    }
-}
-
-/// Mark all code memory as executable but not writable.
-/// Call this before the compaction phase.
-#[no_mangle]
-pub extern "C" fn rb_yjit_mark_all_executable() {
-    if CodegenGlobals::has_instance() {
-        CodegenGlobals::get_inline_cb().mark_all_executable();
-
-        CodegenGlobals::get_outlined_cb()
-            .unwrap()
-            .mark_all_executable();
     }
 }
 
