@@ -1646,7 +1646,7 @@ pub struct Block {
 
     // FIXME: should these be code pointers instead?
     // Offsets for GC managed objects in the mainline code block
-    gc_obj_addresses: Box<[*const u8]>,
+    gc_obj_offsets: Box<[u32]>,
 
     // CME dependencies of this block, to help to remove all pointers to this
     // block in the system.
@@ -1979,7 +1979,8 @@ pub extern "C" fn rb_yjit_iseq_mark(payload: *mut c_void) {
         // Mark references to objects in generated code.
         // Skip for dead blocks since they shouldn't run.
         if !dead {
-            for value_address in block.gc_obj_addresses.iter().copied() {
+            for offset in block.gc_obj_offsets.iter() {
+                let value_address: *const u8 = cb.get_ptr(offset.as_usize()).raw_ptr(cb);
                 // Creating an unaligned pointer is well defined unlike in C.
                 let value_address = value_address as *const VALUE;
 
@@ -2341,7 +2342,8 @@ unsafe fn add_block_version(blockref: BlockRef, cb: &CodeBlock) {
     }
 
     // Run write barriers for all objects in generated code.
-    for value_address in block.gc_obj_addresses.iter() {
+    for offset in block.gc_obj_offsets.iter() {
+        let value_address: *const u8 = cb.get_ptr(offset.as_usize()).raw_ptr(cb);
         // Creating an unaligned pointer is well defined unlike in C.
         let value_address: *const VALUE = value_address.cast();
 
@@ -2376,11 +2378,11 @@ fn remove_block_version(blockref: &BlockRef) {
 impl<'a> JITState<'a> {
     // Finish compiling and turn a jit state into a block
     // note that the block is still not in shape.
-    pub fn into_block(self, end_insn_idx: IseqIdx, start_addr: CodePtr, end_addr: CodePtr, gc_obj_addresses: Vec<*const u8>) -> BlockRef {
+    pub fn into_block(self, end_insn_idx: IseqIdx, start_addr: CodePtr, end_addr: CodePtr, gc_obj_offsets: Vec<u32>) -> BlockRef {
         // Allocate the block and get its pointer
         let blockref: *mut MaybeUninit<Block> = Box::into_raw(Box::new(MaybeUninit::uninit()));
 
-        incr_counter_by!(num_gc_obj_refs, gc_obj_addresses.len());
+        incr_counter_by!(num_gc_obj_refs, gc_obj_offsets.len());
 
         let ctx = Context::encode(&self.get_starting_ctx());
 
@@ -2392,7 +2394,7 @@ impl<'a> JITState<'a> {
             ctx,
             end_addr: Cell::new(end_addr),
             incoming: MutableBranchList(Cell::default()),
-            gc_obj_addresses: gc_obj_addresses.into_boxed_slice(),
+            gc_obj_offsets: gc_obj_offsets.into_boxed_slice(),
             entry_exit: self.get_block_entry_exit(),
             cme_dependencies: self.method_lookup_assumptions.into_iter().map(Cell::new).collect(),
             // Pending branches => actual branches
