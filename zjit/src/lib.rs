@@ -23,3 +23,5 @@ mod profile;
 mod invariants;
 #[cfg(test)]
 mod assertions;
+mod bitset;
+mod gc;

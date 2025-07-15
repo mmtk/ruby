@@ -47,6 +47,11 @@ Note: We're only listing outstanding class updates.
     * `IO.select` accepts +Float::INFINITY+ as a timeout argument.
       [[Feature #20610]]
 
+* Socket
+
+    * `Socket.tcp` accepts `open_timeout` as a keyword argument to specify
+      the timeout for the initial connection. [[Feature #21347]]
+
 * Ractor
 
     * `Ractor::Port` class was added for a new synchronization mechanism
@@ -114,7 +119,7 @@ The following bundled gems are promoted from default gems.
 * pstore 0.2.0
 * benchmark 0.4.1
 * logger 1.7.0
-* rdoc 6.14.1
+* rdoc 6.14.2
 * win32ole 1.9.2
 * irb 1.15.2
 * reline 0.6.1
@@ -140,7 +145,7 @@ The following default gems are updated.
 * optparse 0.7.0.dev.2
 * prism 1.4.0
 * psych 5.2.6
-* resolv 0.6.1
+* resolv 0.6.2
 * stringio 3.1.8.dev
 * strscan 3.1.6.dev
 * uri 1.0.3
@@ -153,7 +158,7 @@ The following bundled gems are updated.
 
 * minitest 5.25.5
 * rake 13.3.0
-* test-unit 3.6.8
+* test-unit 3.7.0
 * rexml 3.4.1
 * net-imap 0.5.9
 * net-smtp 0.5.1
@@ -227,3 +232,4 @@ The following bundled gems are updated.
 [Feature #21258]: https://bugs.ruby-lang.org/issues/21258
 [Feature #21262]: https://bugs.ruby-lang.org/issues/21262
 [Feature #21287]: https://bugs.ruby-lang.org/issues/21287
+[Feature #21347]: https://bugs.ruby-lang.org/issues/21347

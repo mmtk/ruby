@@ -24,10 +24,6 @@ module Spec
       end
       FileUtils.mkdir_p(home)
       FileUtils.mkdir_p(tmpdir)
-      reset_paths!
-    end
-
-    def reset_paths!
       Bundler.reset!
       Gem.clear_paths
     end
@@ -303,6 +299,10 @@ module Spec
       bundle :lock, opts
     end
 
+    def base_system_gems(*names, **options)
+      system_gems names.map {|name| find_base_path(name) }, **options
+    end
+
     def system_gems(*gems)
       gems = gems.flatten
       options = gems.last.is_a?(Hash) ? gems.pop : {}
@@ -312,7 +312,7 @@ module Spec
         gem_name = g.to_s
         if gem_name.start_with?("bundler")
           version = gem_name.match(/\Abundler-(?<version>.*)\z/)[:version] if gem_name != "bundler"
-          with_built_bundler(version) {|gem_path| install_gem(gem_path, install_dir, default) }
+          with_built_bundler(version, released: options.fetch(:released, false)) {|gem_path| install_gem(gem_path, install_dir, default) }
         elsif %r{\A(?:[a-zA-Z]:)?/.*\.gem\z}.match?(gem_name)
           install_gem(gem_name, install_dir, default)
         else
@@ -337,10 +337,10 @@ module Spec
       gem_command "install #{args} '#{path}'"
     end
 
-    def with_built_bundler(version = nil, &block)
+    def with_built_bundler(version = nil, opts = {}, &block)
       require_relative "builders"
 
-      Builders::BundlerBuilder.new(self, "bundler", version)._build(&block)
+      Builders::BundlerBuilder.new(self, "bundler", version)._build(opts, &block)
     end
 
     def with_gem_path_as(path)
@@ -396,16 +396,6 @@ module Spec
       FileUtils.rm_r(system_gem_path)
 
       system_gems(*gems)
-    end
-
-    def realworld_system_gems(*gems)
-      gems = gems.flatten
-      opts = gems.last.is_a?(Hash) ? gems.pop : {}
-      path = opts.fetch(:path, system_gem_path)
-
-      gems.each do |gem|
-        gem_command "install --no-document --verbose --install-dir #{path} #{gem}"
-      end
     end
 
     def cache_gems(*gems, gem_repo: gem_repo1)
@@ -509,29 +499,9 @@ module Spec
     def require_rack_test
       # need to hack, so we can require rack for testing
       old_gem_home = ENV["GEM_HOME"]
-      ENV["GEM_HOME"] = Spec::Path.base_system_gem_path.to_s
+      ENV["GEM_HOME"] = Spec::Path.scoped_base_system_gem_path.to_s
       require "rack/test"
       ENV["GEM_HOME"] = old_gem_home
-    end
-
-    def wait_for_server(host, port, seconds = 15)
-      tries = 0
-      sleep 0.5
-      TCPSocket.new(host, port)
-    rescue StandardError => e
-      raise(e) if tries > (seconds * 2)
-      tries += 1
-      retry
-    end
-
-    def find_unused_port
-      port = 21_453
-      begin
-        port += 1 while TCPSocket.new("127.0.0.1", port)
-      rescue StandardError
-        false
-      end
-      port
     end
 
     def exit_status_for_signal(signal_number)

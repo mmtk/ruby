@@ -5,7 +5,7 @@
 #include <math.h>
 #include <ctype.h>
 
-#include "simd.h"
+#include "../simd/simd.h"
 
 /* ruby api and some helpers */
 
@@ -304,28 +304,6 @@ static inline FORCE_INLINE unsigned char neon_next_match(search_state *search)
     return 1;
 }
 
-// See: https://community.arm.com/arm-community-blogs/b/servers-and-cloud-computing-blog/posts/porting-x86-vector-bitmask-optimizations-to-arm-neon
-static inline FORCE_INLINE uint64_t neon_match_mask(uint8x16_t matches)
-{
-    const uint8x8_t res = vshrn_n_u16(vreinterpretq_u16_u8(matches), 4);
-    const uint64_t mask = vget_lane_u64(vreinterpret_u64_u8(res), 0);
-    return mask & 0x8888888888888888ull;
-}
-
-static inline FORCE_INLINE uint64_t neon_rules_update(const char *ptr)
-{
-    uint8x16_t chunk = vld1q_u8((const unsigned char *)ptr);
-
-    // Trick: c < 32 || c == 34 can be factored as c ^ 2 < 33
-    // https://lemire.me/blog/2025/04/13/detect-control-characters-quotes-and-backslashes-efficiently-using-swar/
-    const uint8x16_t too_low_or_dbl_quote = vcltq_u8(veorq_u8(chunk, vdupq_n_u8(2)), vdupq_n_u8(33));
-
-    uint8x16_t has_backslash = vceqq_u8(chunk, vdupq_n_u8('\\'));
-    uint8x16_t needs_escape  = vorrq_u8(too_low_or_dbl_quote, has_backslash);
-
-    return neon_match_mask(needs_escape);
-}
-
 static inline unsigned char search_escape_basic_neon(search_state *search)
 {
     if (RB_UNLIKELY(search->has_matches)) {
@@ -380,14 +358,8 @@ static inline unsigned char search_escape_basic_neon(search_state *search)
     * no bytes need to be escaped and we can continue to the next chunk. If the mask is not 0 then we
     * have at least one byte that needs to be escaped.
     */
-    while (search->ptr + sizeof(uint8x16_t) <= search->end) {
-        uint64_t mask = neon_rules_update(search->ptr);
 
-        if (!mask) {
-            search->ptr += sizeof(uint8x16_t);
-            continue;
-        }
-        search->matches_mask = mask;
+    if (string_scan_simd_neon(&search->ptr, search->end, &search->matches_mask)) {
         search->has_matches = true;
         search->chunk_base = search->ptr;
         search->chunk_end = search->ptr + sizeof(uint8x16_t);
@@ -399,7 +371,7 @@ static inline unsigned char search_escape_basic_neon(search_state *search)
     if (remaining >= SIMD_MINIMUM_THRESHOLD) {
         char *s = copy_remaining_bytes(search, sizeof(uint8x16_t), remaining);
 
-        uint64_t mask = neon_rules_update(s);
+        uint64_t mask = compute_chunk_mask_neon(s);
 
         if (!mask) {
             // Nothing to escape, ensure search_flush doesn't do anything by setting
@@ -428,11 +400,6 @@ static inline unsigned char search_escape_basic_neon(search_state *search)
 
 #ifdef HAVE_SIMD_SSE2
 
-#define _mm_cmpge_epu8(a, b) _mm_cmpeq_epi8(_mm_max_epu8(a, b), a)
-#define _mm_cmple_epu8(a, b) _mm_cmpge_epu8(b, a)
-#define _mm_cmpgt_epu8(a, b) _mm_xor_si128(_mm_cmple_epu8(a, b), _mm_set1_epi8(-1))
-#define _mm_cmplt_epu8(a, b) _mm_cmpgt_epu8(b, a)
-
 static inline FORCE_INLINE unsigned char sse2_next_match(search_state *search)
 {
     int mask = search->matches_mask;
@@ -457,18 +424,6 @@ static inline FORCE_INLINE unsigned char sse2_next_match(search_state *search)
 #define TARGET_SSE2
 #endif
 
-static inline TARGET_SSE2 FORCE_INLINE int sse2_update(const char *ptr)
-{
-    __m128i chunk         = _mm_loadu_si128((__m128i const*)ptr);
-
-    // Trick: c < 32 || c == 34 can be factored as c ^ 2 < 33
-    // https://lemire.me/blog/2025/04/13/detect-control-characters-quotes-and-backslashes-efficiently-using-swar/
-    __m128i too_low_or_dbl_quote = _mm_cmplt_epu8(_mm_xor_si128(chunk, _mm_set1_epi8(2)), _mm_set1_epi8(33));
-    __m128i has_backslash = _mm_cmpeq_epi8(chunk, _mm_set1_epi8('\\'));
-    __m128i needs_escape  = _mm_or_si128(too_low_or_dbl_quote, has_backslash);
-    return _mm_movemask_epi8(needs_escape);
-}
-
 static inline TARGET_SSE2 FORCE_INLINE unsigned char search_escape_basic_sse2(search_state *search)
 {
     if (RB_UNLIKELY(search->has_matches)) {
@@ -487,17 +442,10 @@ static inline TARGET_SSE2 FORCE_INLINE unsigned char search_escape_basic_sse2(se
         }
     }
 
-    while (search->ptr + sizeof(__m128i) <= search->end) {
-        int needs_escape_mask = sse2_update(search->ptr);
-
-        if (needs_escape_mask == 0) {
-            search->ptr += sizeof(__m128i);
-            continue;
-        }
-
+    if (string_scan_simd_sse2(&search->ptr, search->end, &search->matches_mask)) {
         search->has_matches = true;
-        search->matches_mask = needs_escape_mask;
         search->chunk_base = search->ptr;
+        search->chunk_end = search->ptr + sizeof(__m128i);
         return sse2_next_match(search);
     }
 
@@ -506,7 +454,7 @@ static inline TARGET_SSE2 FORCE_INLINE unsigned char search_escape_basic_sse2(se
     if (remaining >= SIMD_MINIMUM_THRESHOLD) {
         char *s = copy_remaining_bytes(search, sizeof(__m128i), remaining);
 
-        int needs_escape_mask = sse2_update(s);
+        int needs_escape_mask = compute_chunk_mask_sse2(s);
 
         if (needs_escape_mask == 0) {
             // Nothing to escape, ensure search_flush doesn't do anything by setting
@@ -638,7 +586,8 @@ static inline unsigned char search_ascii_only_escape(search_state *search, const
     return 0;
 }
 
-static inline void full_escape_UTF8_char(search_state *search, unsigned char ch_len) {
+static inline void full_escape_UTF8_char(search_state *search, unsigned char ch_len)
+{
     const unsigned char ch = (unsigned char)*search->ptr;
     switch (ch_len) {
         case 1: {
@@ -668,7 +617,7 @@ static inline void full_escape_UTF8_char(search_state *search, unsigned char ch_
 
             uint32_t wchar = 0;
 
-            switch(ch_len) {
+            switch (ch_len) {
                 case 2:
                     wchar = ch & 0x1F;
                     break;
@@ -828,7 +777,8 @@ static VALUE mHash_to_json(int argc, VALUE *argv, VALUE self)
  * _state_ is a JSON::State object, that can also be used to configure the
  * produced JSON string output further.
  */
-static VALUE mArray_to_json(int argc, VALUE *argv, VALUE self) {
+static VALUE mArray_to_json(int argc, VALUE *argv, VALUE self)
+{
     rb_check_arity(argc, 0, 1);
     VALUE Vstate = cState_from_state_s(cState, argc == 1 ? argv[0] : Qnil);
     return cState_partial_generate(Vstate, self, generate_json_array, Qfalse);
@@ -890,7 +840,8 @@ static VALUE mFloat_to_json(int argc, VALUE *argv, VALUE self)
  *
  * Extends _modul_ with the String::Extend module.
  */
-static VALUE mString_included_s(VALUE self, VALUE modul) {
+static VALUE mString_included_s(VALUE self, VALUE modul)
+{
     VALUE result = rb_funcall(modul, i_extend, 1, mString_Extend);
     rb_call_super(1, &modul);
     return result;
@@ -1135,7 +1086,7 @@ json_object_i(VALUE key, VALUE val, VALUE _arg)
     }
 
     VALUE key_to_s;
-    switch(rb_type(key)) {
+    switch (rb_type(key)) {
         case T_STRING:
             if (RB_LIKELY(RBASIC_CLASS(key) == rb_cString)) {
                 key_to_s = key;
@@ -1219,7 +1170,7 @@ static void generate_json_array(FBuffer *buffer, struct generate_json_data *data
 
     fbuffer_append_char(buffer, '[');
     if (RB_UNLIKELY(data->state->array_nl)) fbuffer_append_str(buffer, data->state->array_nl);
-    for(i = 0; i < RARRAY_LEN(obj); i++) {
+    for (i = 0; i < RARRAY_LEN(obj); i++) {
         if (i > 0) {
             fbuffer_append_char(buffer, ',');
             if (RB_UNLIKELY(data->state->array_nl)) fbuffer_append_str(buffer, data->state->array_nl);
@@ -1304,7 +1255,7 @@ static void generate_json_string(FBuffer *buffer, struct generate_json_data *dat
     search.chunk_base = NULL;
 #endif /* HAVE_SIMD */
 
-    switch(rb_enc_str_coderange(obj)) {
+    switch (rb_enc_str_coderange(obj)) {
         case ENC_CODERANGE_7BIT:
         case ENC_CODERANGE_VALID:
             if (RB_UNLIKELY(data->state->ascii_only)) {
@@ -2168,7 +2119,7 @@ void Init_generator(void)
     rb_require("json/ext/generator/state");
 
 
-    switch(find_simd_implementation()) {
+    switch (find_simd_implementation()) {
 #ifdef HAVE_SIMD
 #ifdef HAVE_SIMD_NEON
         case SIMD_NEON:

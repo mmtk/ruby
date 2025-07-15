@@ -293,77 +293,6 @@ rb_imemo_memsize(VALUE obj)
  * mark
  * ========================================================================= */
 
-static enum rb_id_table_iterator_result
-cc_table_mark_i(VALUE ccs_ptr, void *data)
-{
-    // looks duplicate to mark_cc_entry_i (gc.c)
-    struct rb_class_cc_entries *ccs = (struct rb_class_cc_entries *)ccs_ptr;
-    VM_ASSERT(vm_ccs_p(ccs));
-
-#if VM_CHECK_MODE > 0
-    VALUE klass = (VALUE)data;
-
-    WHEN_NOT_USING_MMTK({
-    // ccs->cme can point to heap object, too.
-    // Evacuating GC (such as Immix) may have moved it.
-    VALUE lookup_val;
-    VM_ASSERT(rb_id_table_lookup(RCLASS_WRITABLE_CC_TBL(klass), ccs->cme->called_id, &lookup_val));
-    VM_ASSERT(lookup_val == ccs_ptr);
-    })
-#endif
-
-    if (METHOD_ENTRY_INVALIDATED(ccs->cme)) {
-#if USE_MMTK
-        if (!rb_mmtk_enabled_p()) {
-        // NOTE:
-        // Vanilla Ruby assumes no objects are moved during marking phase,
-        // and attempts to clean-up invalidated method entries during marking.
-        // This doesn't work with MMTk.
-        // With an evacuating GC algorithm (such as Immix),
-        // children of `ccs` may have been moved during tracing.
-        // But the code in `rb_vm_ccs_free` reads many VALUE fields without calling `gc_location`
-        // which obviously isn't needed for the non-moving marking phase.
-        // We temporarily disable this call for now.
-        // FIXME: Clean up method entries properly using the weak reference processing mechanism.
-#endif
-        rb_vm_ccs_free(ccs);
-#if USE_MMTK
-        }
-#endif
-        return ID_TABLE_DELETE;
-    }
-    else {
-        rb_gc_mark_movable((VALUE)ccs->cme);
-
-        for (int i=0; i<ccs->len; i++) {
-#if USE_MMTK
-            if (!rb_mmtk_enabled_p()) {
-            // Type info are stored on the heap, too.
-            // With evacuating GC, they may have been moved, too.
-            // It is not safe to inspect reference fields during tracing.
-#endif
-            VM_ASSERT(klass == ccs->entries[i].cc->klass);
-            VM_ASSERT(vm_cc_check_cme(ccs->entries[i].cc, ccs->cme));
-#if USE_MMTK
-            }
-#endif
-
-            rb_gc_mark_movable((VALUE)ccs->entries[i].cc);
-        }
-        return ID_TABLE_CONTINUE;
-    }
-}
-
-void
-rb_cc_table_mark(VALUE klass)
-{
-    // TODO: delete this (and cc_table_mark_i) if it's ok
-    struct rb_id_table *cc_tbl = RCLASS_WRITABLE_CC_TBL(klass);
-    if (cc_tbl) {
-        rb_id_table_foreach_values(cc_tbl, cc_table_mark_i, (void *)klass);
-    }
-}
-
 static bool
 moved_or_living_object_strictly_p(VALUE obj)
 {
@@ -696,7 +625,7 @@ rb_vm_ccs_free(struct rb_class_cc_entries *ccs)
 }
 
 static enum rb_id_table_iterator_result
-cc_table_free_i(VALUE ccs_ptr, void *data)
+cc_tbl_free_i(VALUE ccs_ptr, void *data)
 {
     struct rb_class_cc_entries *ccs = (struct rb_class_cc_entries *)ccs_ptr;
     VALUE klass = (VALUE)data;
@@ -708,24 +637,10 @@ cc_table_free_i(VALUE ccs_ptr, void *data)
 }
 
 void
-rb_cc_table_free(VALUE klass)
-{
-    // This can be called and work well only for IClass
-    // And classext_iclass_free uses rb_cc_tbl_free now.
-    // TODO: remove this if it's ok
-    struct rb_id_table *cc_tbl = RCLASS_WRITABLE_CC_TBL(klass);
-
-    if (cc_tbl) {
-        rb_id_table_foreach_values(cc_tbl, cc_table_free_i, (void *)klass);
-        rb_id_table_free(cc_tbl);
-    }
-}
-
-void
 rb_cc_tbl_free(struct rb_id_table *cc_tbl, VALUE klass)
 {
     if (!cc_tbl) return;
-    rb_id_table_foreach_values(cc_tbl, cc_table_free_i, (void *)klass);
+    rb_id_table_foreach_values(cc_tbl, cc_tbl_free_i, (void *)klass);
     rb_id_table_free(cc_tbl);
 }
 

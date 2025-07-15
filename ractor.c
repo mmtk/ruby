@@ -1653,10 +1653,10 @@ obj_traverse_replace_i(VALUE obj, struct obj_traverse_replace_data *data)
         obj = replacement;
     }
 
-#define CHECK_AND_REPLACE(v) do { \
+#define CHECK_AND_REPLACE(parent_obj, v) do { \
     VALUE _val = (v); \
     if (obj_traverse_replace_i(_val, data)) { return 1; } \
-    else if (data->replacement != _val)     { RB_OBJ_WRITE(obj, &v, data->replacement); } \
+    else if (data->replacement != _val)     { RB_OBJ_WRITE(parent_obj, &v, data->replacement); } \
 } while (0)
 
     if (UNLIKELY(rb_obj_exivar_p(obj))) {
@@ -1667,7 +1667,7 @@ obj_traverse_replace_i(VALUE obj, struct obj_traverse_replace_data *data)
             struct obj_traverse_replace_callback_data d = {
                 .stop = false,
                 .data = data,
-                .src = obj,
+                .src = fields_obj,
             };
             rb_st_foreach_with_replace(
                 rb_imemo_fields_complex_tbl(fields_obj),
@@ -1681,7 +1681,7 @@ obj_traverse_replace_i(VALUE obj, struct obj_traverse_replace_data *data)
             uint32_t fields_count = RSHAPE_LEN(RBASIC_SHAPE_ID(obj));
             VALUE *fields = rb_imemo_fields_ptr(fields_obj);
             for (uint32_t i = 0; i < fields_count; i++) {
-                CHECK_AND_REPLACE(fields[i]);
+                CHECK_AND_REPLACE(fields_obj, fields[i]);
             }
         }
     }
@@ -1720,7 +1720,7 @@ obj_traverse_replace_i(VALUE obj, struct obj_traverse_replace_data *data)
                 VALUE *ptr = ROBJECT_FIELDS(obj);
 
                 for (uint32_t i = 0; i < len; i++) {
-                    CHECK_AND_REPLACE(ptr[i]);
+                    CHECK_AND_REPLACE(obj, ptr[i]);
                 }
             }
         }
@@ -1773,18 +1773,18 @@ obj_traverse_replace_i(VALUE obj, struct obj_traverse_replace_data *data)
             const VALUE *ptr = RSTRUCT_CONST_PTR(obj);
 
             for (long i=0; i<len; i++) {
-                CHECK_AND_REPLACE(ptr[i]);
+                CHECK_AND_REPLACE(obj, ptr[i]);
             }
         }
         break;
 
       case T_RATIONAL:
-        CHECK_AND_REPLACE(RRATIONAL(obj)->num);
-        CHECK_AND_REPLACE(RRATIONAL(obj)->den);
+        CHECK_AND_REPLACE(obj, RRATIONAL(obj)->num);
+        CHECK_AND_REPLACE(obj, RRATIONAL(obj)->den);
         break;
       case T_COMPLEX:
-        CHECK_AND_REPLACE(RCOMPLEX(obj)->real);
-        CHECK_AND_REPLACE(RCOMPLEX(obj)->imag);
+        CHECK_AND_REPLACE(obj, RCOMPLEX(obj)->real);
+        CHECK_AND_REPLACE(obj, RCOMPLEX(obj)->imag);
         break;
 
       case T_DATA:
@@ -2263,6 +2263,8 @@ struct cross_ractor_require {
     // autoload
     VALUE module;
     ID name;
+
+    bool silent;
 };
 
 static void
@@ -2294,7 +2296,14 @@ require_body(VALUE data)
 
     ID require;
     CONST_ID(require, "require");
-    crr->result = rb_funcallv(Qnil, require, 1, &crr->feature);
+
+    if (crr->silent) {
+        int rb_require_internal_silent(VALUE fname);
+        crr->result = INT2NUM(rb_require_internal_silent(crr->feature));
+    }
+    else {
+        crr->result = rb_funcallv(Qnil, require, 1, &crr->feature);
+    }
 
     return Qnil;
 }
@@ -2338,9 +2347,21 @@ ractor_require_protect(VALUE crr_obj, VALUE (*func)(VALUE))
     struct cross_ractor_require *crr;
     TypedData_Get_Struct(crr_obj, struct cross_ractor_require, &cross_ractor_require_data_type, crr);
 
+    const bool silent = crr->silent;
+    VALUE debug, errinfo;
+    if (silent) {
+        debug = ruby_debug;
+        errinfo = rb_errinfo();
+    }
+
     // catch any error
     rb_rescue2(func, (VALUE)crr,
                require_rescue, (VALUE)crr, rb_eException, 0);
+
+    if (silent) {
+        ruby_debug = debug;
+        rb_set_errinfo(errinfo);
+    }
 
     rb_rescue2(require_result_copy_body, (VALUE)crr,
                require_result_copy_resuce, (VALUE)crr, rb_eException, 0);
@@ -2357,8 +2378,11 @@ ractor_require_func(void *crr_obj)
 }
 
 VALUE
-rb_ractor_require(VALUE feature)
+rb_ractor_require(VALUE feature, bool silent)
 {
+    // We're about to block on the main ractor, so if we're holding the global lock we'll deadlock.
+    ASSERT_vm_unlocking();
+
     struct cross_ractor_require *crr;
     VALUE crr_obj = TypedData_Make_Struct(0, struct cross_ractor_require, &cross_ractor_require_data_type, crr);
     FL_SET_RAW(crr_obj, RUBY_FL_SHAREABLE);
@@ -2368,6 +2392,7 @@ rb_ractor_require(VALUE feature)
     crr->port = ractor_port_new(GET_RACTOR());
     crr->result = Qundef;
     crr->exception = Qundef;
+    crr->silent = silent;
 
     rb_execution_context_t *ec = GET_EC();
     rb_ractor_t *main_r = GET_VM()->ractor.main_ractor;
@@ -2395,7 +2420,7 @@ rb_ractor_require(VALUE feature)
 static VALUE
 ractor_require(rb_execution_context_t *ec, VALUE self, VALUE feature)
 {
-    return rb_ractor_require(feature);
+    return rb_ractor_require(feature, false);
 }
 
 static VALUE

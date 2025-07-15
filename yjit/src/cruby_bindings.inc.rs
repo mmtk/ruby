@@ -1191,7 +1191,6 @@ extern "C" {
     pub fn rb_yjit_get_proc_ptr(procv: VALUE) -> *mut rb_proc_t;
     pub fn rb_get_symbol_id(namep: VALUE) -> ID;
     pub fn rb_get_def_bmethod_proc(def: *mut rb_method_definition_t) -> VALUE;
-    pub fn rb_get_iseq_body_parent_iseq(iseq: *const rb_iseq_t) -> *const rb_iseq_t;
     pub fn rb_optimized_call(
         recv: *mut VALUE,
         ec: *mut rb_execution_context_t,
@@ -1247,7 +1246,6 @@ extern "C" {
     pub fn rb_yjit_shape_obj_too_complex_p(obj: VALUE) -> bool;
     pub fn rb_yjit_shape_capacity(shape_id: shape_id_t) -> attr_index_t;
     pub fn rb_yjit_shape_index(shape_id: shape_id_t) -> attr_index_t;
-    pub fn rb_yjit_assert_holding_vm_lock();
     pub fn rb_yjit_sendish_sp_pops(ci: *const rb_callinfo) -> usize;
     pub fn rb_yjit_invokeblock_sp_pops(ci: *const rb_callinfo) -> usize;
     pub fn rb_yjit_set_exception_return(
@@ -1288,6 +1286,7 @@ extern "C" {
     pub fn rb_get_mct_func(mct: *const rb_method_cfunc_t) -> *mut ::std::os::raw::c_void;
     pub fn rb_get_def_iseq_ptr(def: *mut rb_method_definition_t) -> *const rb_iseq_t;
     pub fn rb_get_iseq_body_local_iseq(iseq: *const rb_iseq_t) -> *const rb_iseq_t;
+    pub fn rb_get_iseq_body_parent_iseq(iseq: *const rb_iseq_t) -> *const rb_iseq_t;
     pub fn rb_get_iseq_body_local_table_size(iseq: *const rb_iseq_t) -> ::std::os::raw::c_uint;
     pub fn rb_get_iseq_body_iseq_encoded(iseq: *const rb_iseq_t) -> *mut VALUE;
     pub fn rb_get_iseq_body_stack_max(iseq: *const rb_iseq_t) -> ::std::os::raw::c_uint;
@@ -1327,6 +1326,7 @@ extern "C" {
     pub fn rb_BASIC_OP_UNREDEFINED_P(bop: ruby_basic_operators, klass: u32) -> bool;
     pub fn rb_RCLASS_ORIGIN(c: VALUE) -> VALUE;
     pub fn rb_assert_iseq_handle(handle: VALUE);
+    pub fn rb_assert_holding_vm_lock();
     pub fn rb_IMEMO_TYPE_P(imemo: VALUE, imemo_type: imemo_type) -> ::std::os::raw::c_int;
     pub fn rb_assert_cme_handle(handle: VALUE);
     pub fn rb_yarv_ary_entry_internal(ary: VALUE, offset: ::std::os::raw::c_long) -> VALUE;

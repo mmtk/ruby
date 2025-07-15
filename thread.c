@@ -703,6 +703,10 @@ thread_start_func_2(rb_thread_t *th, VALUE *stack_start)
             /* fatal error within this thread, need to stop whole script */
         }
         else if (rb_obj_is_kind_of(errinfo, rb_eSystemExit)) {
+            if (th->invoke_type == thread_invoke_type_ractor_proc) {
+                rb_ractor_atexit_exception(th->ec);
+            }
+
             /* exit on main_thread. */
         }
         else {
@@ -4779,7 +4783,7 @@ rb_gc_set_stack_end(VALUE **stack_end_p)
 {
     VALUE stack_end;
 COMPILER_WARNING_PUSH
-#ifdef __GNUC__
+#if RBIMPL_COMPILER_IS(GCC)
 COMPILER_WARNING_IGNORED(-Wdangling-pointer);
 #endif
     *stack_end_p = &stack_end;
@@ -4933,6 +4937,7 @@ rb_thread_atfork_internal(rb_thread_t *th, void (*atfork)(rb_thread_t *, const r
 
     thread_sched_atfork(TH_SCHED(th));
     ubf_list_atfork();
+    rb_signal_atfork();
 
     // OK. Only this thread accesses:
     ccan_list_for_each(&vm->ractor.set, r, vmlr_node) {

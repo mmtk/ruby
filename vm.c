@@ -240,13 +240,9 @@ vm_cref_new0(VALUE klass, rb_method_visibility_t visi, int module_func, rb_cref_
     int omod_shared = FALSE;
 
     /* scope */
-    union {
-        rb_scope_visibility_t visi;
-        VALUE value;
-    } scope_visi;
-
-    scope_visi.visi.method_visi = visi;
-    scope_visi.visi.module_func = module_func;
+    rb_scope_visibility_t scope_visi;
+    scope_visi.method_visi = visi;
+    scope_visi.module_func = module_func;
 
     /* refinements */
     if (prev_cref != NULL && prev_cref != (void *)1 /* TODO: why CREF_NEXT(cref) is 1? */) {
@@ -263,7 +259,7 @@ vm_cref_new0(VALUE klass, rb_method_visibility_t visi, int module_func, rb_cref_
     rb_cref_t *cref = IMEMO_NEW(rb_cref_t, imemo_cref, refinements);
     cref->klass_or_self = klass;
     cref->next = use_prev_prev ? CREF_NEXT(prev_cref) : prev_cref;
-    *((rb_scope_visibility_t *)&cref->scope_visi) = scope_visi.visi;
+    *((rb_scope_visibility_t *)&cref->scope_visi) = scope_visi;
 
     if (pushed_by_eval) CREF_PUSHED_BY_EVAL_SET(cref);
     if (omod_shared) CREF_OMOD_SHARED_SET(cref);
@@ -743,7 +739,7 @@ vm_stat(int argc, VALUE *argv, VALUE self)
     SET(constant_cache_invalidations, ruby_vm_constant_cache_invalidations);
     SET(constant_cache_misses, ruby_vm_constant_cache_misses);
     SET(global_cvar_state, ruby_vm_global_cvar_state);
-    SET(next_shape_id, (rb_serial_t)rb_shape_tree.next_shape_id);
+    SET(next_shape_id, (rb_serial_t)rb_shapes_count());
     SET(shape_cache_size, (rb_serial_t)rb_shape_tree.cache_size);
 #undef SET
 

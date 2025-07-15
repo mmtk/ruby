@@ -683,18 +683,21 @@ pub const YARVINSN_trace_setlocal_WC_1: ruby_vminsn_type = 219;
 pub const YARVINSN_trace_putobject_INT2FIX_0_: ruby_vminsn_type = 220;
 pub const YARVINSN_trace_putobject_INT2FIX_1_: ruby_vminsn_type = 221;
 pub const YARVINSN_zjit_opt_send_without_block: ruby_vminsn_type = 222;
-pub const YARVINSN_zjit_opt_plus: ruby_vminsn_type = 223;
-pub const YARVINSN_zjit_opt_minus: ruby_vminsn_type = 224;
-pub const YARVINSN_zjit_opt_mult: ruby_vminsn_type = 225;
-pub const YARVINSN_zjit_opt_div: ruby_vminsn_type = 226;
-pub const YARVINSN_zjit_opt_mod: ruby_vminsn_type = 227;
-pub const YARVINSN_zjit_opt_eq: ruby_vminsn_type = 228;
-pub const YARVINSN_zjit_opt_neq: ruby_vminsn_type = 229;
-pub const YARVINSN_zjit_opt_lt: ruby_vminsn_type = 230;
-pub const YARVINSN_zjit_opt_le: ruby_vminsn_type = 231;
-pub const YARVINSN_zjit_opt_gt: ruby_vminsn_type = 232;
-pub const YARVINSN_zjit_opt_ge: ruby_vminsn_type = 233;
-pub const VM_INSTRUCTION_SIZE: ruby_vminsn_type = 234;
+pub const YARVINSN_zjit_opt_nil_p: ruby_vminsn_type = 223;
+pub const YARVINSN_zjit_opt_plus: ruby_vminsn_type = 224;
+pub const YARVINSN_zjit_opt_minus: ruby_vminsn_type = 225;
+pub const YARVINSN_zjit_opt_mult: ruby_vminsn_type = 226;
+pub const YARVINSN_zjit_opt_div: ruby_vminsn_type = 227;
+pub const YARVINSN_zjit_opt_mod: ruby_vminsn_type = 228;
+pub const YARVINSN_zjit_opt_eq: ruby_vminsn_type = 229;
+pub const YARVINSN_zjit_opt_neq: ruby_vminsn_type = 230;
+pub const YARVINSN_zjit_opt_lt: ruby_vminsn_type = 231;
+pub const YARVINSN_zjit_opt_le: ruby_vminsn_type = 232;
+pub const YARVINSN_zjit_opt_gt: ruby_vminsn_type = 233;
+pub const YARVINSN_zjit_opt_ge: ruby_vminsn_type = 234;
+pub const YARVINSN_zjit_opt_and: ruby_vminsn_type = 235;
+pub const YARVINSN_zjit_opt_or: ruby_vminsn_type = 236;
+pub const VM_INSTRUCTION_SIZE: ruby_vminsn_type = 237;
 pub type ruby_vminsn_type = u32;
 pub type rb_iseq_callback = ::std::option::Option<
     unsafe extern "C" fn(arg1: *const rb_iseq_t, arg2: *mut ::std::os::raw::c_void),
@@ -752,6 +755,8 @@ unsafe extern "C" {
     pub static mut rb_cNilClass: VALUE;
     pub static mut rb_cNumeric: VALUE;
     pub static mut rb_cRange: VALUE;
+    pub static mut rb_cRegexp: VALUE;
+    pub static mut rb_cSet: VALUE;
     pub static mut rb_cString: VALUE;
     pub static mut rb_cSymbol: VALUE;
     pub static mut rb_cThread: VALUE;
@@ -790,6 +795,7 @@ unsafe extern "C" {
     pub fn rb_intern(name: *const ::std::os::raw::c_char) -> ID;
     pub fn rb_intern2(name: *const ::std::os::raw::c_char, len: ::std::os::raw::c_long) -> ID;
     pub fn rb_id2str(id: ID) -> VALUE;
+    pub fn rb_sym2str(symbol: VALUE) -> VALUE;
     pub fn rb_class2name(klass: VALUE) -> *const ::std::os::raw::c_char;
     pub fn rb_obj_is_kind_of(obj: VALUE, klass: VALUE) -> VALUE;
     pub fn rb_obj_frozen_p(obj: VALUE) -> VALUE;
@@ -960,6 +966,7 @@ unsafe extern "C" {
     pub fn rb_get_mct_func(mct: *const rb_method_cfunc_t) -> *mut ::std::os::raw::c_void;
     pub fn rb_get_def_iseq_ptr(def: *mut rb_method_definition_t) -> *const rb_iseq_t;
     pub fn rb_get_iseq_body_local_iseq(iseq: *const rb_iseq_t) -> *const rb_iseq_t;
+    pub fn rb_get_iseq_body_parent_iseq(iseq: *const rb_iseq_t) -> *const rb_iseq_t;
     pub fn rb_get_iseq_body_local_table_size(iseq: *const rb_iseq_t) -> ::std::os::raw::c_uint;
     pub fn rb_get_iseq_body_iseq_encoded(iseq: *const rb_iseq_t) -> *mut VALUE;
     pub fn rb_get_iseq_body_stack_max(iseq: *const rb_iseq_t) -> ::std::os::raw::c_uint;
@@ -999,6 +1006,7 @@ unsafe extern "C" {
     pub fn rb_BASIC_OP_UNREDEFINED_P(bop: ruby_basic_operators, klass: u32) -> bool;
     pub fn rb_RCLASS_ORIGIN(c: VALUE) -> VALUE;
     pub fn rb_assert_iseq_handle(handle: VALUE);
+    pub fn rb_assert_holding_vm_lock();
     pub fn rb_IMEMO_TYPE_P(imemo: VALUE, imemo_type: imemo_type) -> ::std::os::raw::c_int;
     pub fn rb_assert_cme_handle(handle: VALUE);
     pub fn rb_yarv_ary_entry_internal(ary: VALUE, offset: ::std::os::raw::c_long) -> VALUE;

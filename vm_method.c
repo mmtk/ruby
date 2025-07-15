@@ -142,7 +142,7 @@ rb_clear_constant_cache_for_id(ID id)
 
     if (rb_id_table_lookup(vm->constant_cache, id, &lookup_result)) {
         set_table *ics = (set_table *)lookup_result;
-        set_foreach(ics, rb_clear_constant_cache_for_id_i, (st_data_t) NULL);
+        set_table_foreach(ics, rb_clear_constant_cache_for_id_i, (st_data_t) NULL);
         ruby_vm_constant_cache_invalidations += ics->num_entries;
     }
 
@@ -245,7 +245,8 @@ clear_method_cache_by_id_in_class(VALUE klass, ID mid)
     VM_ASSERT_TYPE2(klass, T_CLASS, T_ICLASS);
     if (rb_objspace_garbage_object_p(klass)) return;
 
-    RB_VM_LOCKING() {    if (LIKELY(RCLASS_SUBCLASSES_FIRST(klass) == NULL)) {
+    RB_VM_LOCKING() {
+        if (LIKELY(RCLASS_SUBCLASSES_FIRST(klass) == NULL)) {
             // no subclasses
             // check only current class
 
@@ -548,7 +549,7 @@ rb_vm_delete_cc_refinement(const struct rb_callcache *cc)
     rb_vm_t *vm = GET_VM();
     st_data_t key = (st_data_t)cc;
 
-    rb_set_delete(vm->cc_refinement_table, &key);
+    rb_set_table_delete(vm->cc_refinement_table, &key);
 }
 
 void
@@ -558,8 +559,8 @@ rb_clear_all_refinement_method_cache(void)
 
     RB_VM_LOCK_ENTER();
     {
-        rb_set_foreach(vm->cc_refinement_table, invalidate_cc_refinement, (st_data_t)NULL);
-        rb_set_clear(vm->cc_refinement_table);
+        rb_set_table_foreach(vm->cc_refinement_table, invalidate_cc_refinement, (st_data_t)NULL);
+        rb_set_table_clear(vm->cc_refinement_table);
         rb_set_compact_table(vm->cc_refinement_table);
     }
     RB_VM_LOCK_LEAVE();
@@ -879,6 +880,8 @@ method_definition_reset(const rb_method_entry_t *me)
     }
 }
 
+static rb_atomic_t method_serial = 1;
+
 rb_method_definition_t *
 rb_method_definition_create(rb_method_type_t type, ID mid)
 {
@@ -886,8 +889,7 @@ rb_method_definition_create(rb_method_type_t type, ID mid)
     def = ZALLOC(rb_method_definition_t);
     def->type = type;
     def->original_id = mid;
-    static uintptr_t method_serial = 1;
-    def->method_serial = method_serial++;
+    def->method_serial = (uintptr_t)RUBY_ATOMIC_FETCH_ADD(method_serial, 1);
     def->ns = rb_current_namespace();
     return def;
 }

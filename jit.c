@@ -173,6 +173,12 @@ rb_get_iseq_body_local_iseq(const rb_iseq_t *iseq)
     return iseq->body->local_iseq;
 }
 
+const rb_iseq_t *
+rb_get_iseq_body_parent_iseq(const rb_iseq_t *iseq)
+{
+    return iseq->body->parent_iseq;
+}
+
 unsigned int
 rb_get_iseq_body_local_table_size(const rb_iseq_t *iseq)
 {
@@ -407,6 +413,14 @@ void
 rb_assert_iseq_handle(VALUE handle)
 {
     RUBY_ASSERT_ALWAYS(IMEMO_TYPE_P(handle, imemo_iseq));
+}
+
+// Assert that we have the VM lock. Relevant mostly for multi ractor situations.
+// The GC takes the lock before calling us, and this asserts that it indeed happens.
+void
+rb_assert_holding_vm_lock(void)
+{
+    ASSERT_vm_locking();
 }
 
 int

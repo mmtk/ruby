@@ -360,6 +360,32 @@ assert_equal 'ok', %q{
   r.value
 }
 
+# SystemExit from a Ractor is re-raised
+# [Bug #21505]
+assert_equal '[SystemExit, "exit", true]', %q{
+  r = Ractor.new { exit }
+  begin
+    r.value
+  rescue Ractor::RemoteError => e
+    [e.cause.class,   #=> RuntimeError
+     e.cause.message, #=> 'ok'
+     e.ractor == r]   #=> true
+  end
+}
+
+# SystemExit from a Thread inside a Ractor is re-raised
+# [Bug #21505]
+assert_equal '[SystemExit, "exit", true]', %q{
+  r = Ractor.new { Thread.new { exit }.join }
+  begin
+    r.value
+  rescue Ractor::RemoteError => e
+    [e.cause.class,   #=> RuntimeError
+     e.cause.message, #=> 'ok'
+     e.ractor == r]   #=> true
+  end
+}
+
 # threads in a ractor will killed
 assert_equal '{ok: 3}', %q{
   Ractor.new Ractor.current do |main|
@@ -391,7 +417,7 @@ assert_equal '{ok: 3}', %q{
   end
 
   3.times.map{Ractor.receive}.tally
-} unless yjit_enabled? # `[BUG] Bus Error at 0x000000010b7002d0` in jit_exec()
+} unless yjit_enabled? || zjit_enabled? # YJIT: `[BUG] Bus Error at 0x000000010b7002d0` in jit_exec(), ZJIT hangs
 
 # unshareable object are copied
 assert_equal 'false', %q{
@@ -1923,6 +1949,60 @@ assert_equal 'ok', %q{
   ractor.send(obj, move: true)
   roundtripped_obj = ractor.value
   roundtripped_obj.instance_variable_get(:@array) == [1] ? :ok : roundtripped_obj
+}
+
+# move object with many generic ivars
+assert_equal 'ok', %q{
+  ractor = Ractor.new { Ractor.receive }
+  obj = Array.new(10, 42)
+  0.upto(300) do |i|
+    obj.instance_variable_set(:"@array#{i}", [i])
+  end
+
+  ractor.send(obj, move: true)
+  roundtripped_obj = ractor.value
+  roundtripped_obj.instance_variable_get(:@array1) == [1] ? :ok : roundtripped_obj
+}
+
+# move object with complex generic ivars
+assert_equal 'ok', %q{
+  # Make Array too_complex
+  30.times { |i| [].instance_variable_set(:"@complex#{i}", 1) }
+
+  ractor = Ractor.new { Ractor.receive }
+  obj = Array.new(10, 42)
+  obj.instance_variable_set(:@array1, [1])
+
+  ractor.send(obj, move: true)
+  roundtripped_obj = ractor.value
+  roundtripped_obj.instance_variable_get(:@array1) == [1] ? :ok : roundtripped_obj
+}
+
+# copy object with complex generic ivars
+assert_equal 'ok', %q{
+  # Make Array too_complex
+  30.times { |i| [].instance_variable_set(:"@complex#{i}", 1) }
+
+  ractor = Ractor.new { Ractor.receive }
+  obj = Array.new(10, 42)
+  obj.instance_variable_set(:@array1, [1])
+
+  ractor.send(obj)
+  roundtripped_obj = ractor.value
+  roundtripped_obj.instance_variable_get(:@array1) == [1] ? :ok : roundtripped_obj
+}
+
+# copy object with many generic ivars
+assert_equal 'ok', %q{
+  ractor = Ractor.new { Ractor.receive }
+  obj = Array.new(10, 42)
+  0.upto(300) do |i|
+    obj.instance_variable_set(:"@array#{i}", [i])
+  end
+
+  ractor.send(obj)
+  roundtripped_obj = ractor.value
+  roundtripped_obj.instance_variable_get(:@array1) == [1] ? :ok : roundtripped_obj
 }
 
 # moved composite types move their non-shareable parts properly

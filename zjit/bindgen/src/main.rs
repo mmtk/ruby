@@ -186,7 +186,9 @@ fn main() {
         .allowlist_var("rb_cThread")
         .allowlist_var("rb_cArray")
         .allowlist_var("rb_cHash")
+        .allowlist_var("rb_cSet")
         .allowlist_var("rb_cClass")
+        .allowlist_var("rb_cRegexp")
         .allowlist_var("rb_cISeq")
 
         // From include/ruby/internal/fl_type.h
@@ -227,6 +229,7 @@ fn main() {
         .allowlist_function("rb_sym2id")
         .allowlist_function("rb_str_intern")
         .allowlist_function("rb_id2str")
+        .allowlist_function("rb_sym2str")
 
         // From internal/numeric.h
         .allowlist_function("rb_fix_aref")
@@ -348,6 +351,9 @@ fn main() {
         .allowlist_function("rb_zjit_print_exception")
         .allowlist_type("robject_offsets")
         .allowlist_type("rstring_offsets")
+
+        // From jit.c
+        .allowlist_function("rb_assert_holding_vm_lock")
 
         // from vm_sync.h
         .allowlist_function("rb_vm_barrier")

@@ -44,6 +44,7 @@
 #include "builtin.h"
 #include "insns.inc"
 #include "insns_info.inc"
+#include "zjit.h"
 
 // Conditional compilation macros for MMTk.
 #include "internal/mmtk_macros.h"
@@ -115,7 +116,7 @@ remove_from_constant_cache(ID id, IC ic)
 
     if (rb_id_table_lookup(vm->constant_cache, id, &lookup_result)) {
         set_table *ics = (set_table *)lookup_result;
-        set_delete(ics, &ic_data);
+        set_table_delete(ics, &ic_data);
 
         if (ics->num_entries == 0 &&
                 // See comment in vm_track_constant_cache on why we need this check
@@ -421,10 +422,16 @@ rb_iseq_mark_and_move(rb_iseq_t *iseq, bool reference_updating)
 #if USE_YJIT
             rb_yjit_iseq_update_references(iseq);
 #endif
+#if USE_ZJIT
+            rb_zjit_iseq_update_references(body->zjit_payload);
+#endif
         }
         else {
 #if USE_YJIT
             rb_yjit_iseq_mark(body->yjit_payload);
+#endif
+#if USE_ZJIT
+            rb_zjit_iseq_mark(body->zjit_payload);
 #endif
         }
     }

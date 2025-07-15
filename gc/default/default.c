@@ -55,15 +55,15 @@
 #endif
 
 #ifdef BUILDING_MODULAR_GC
-# define rb_asan_poison_object(_obj) (0)
-# define rb_asan_unpoison_object(_obj, _newobj_p) (0)
-# define asan_unpoisoning_object(_obj) if (true)
-# define asan_poison_memory_region(_ptr, _size) (0)
-# define asan_unpoison_memory_region(_ptr, _size, _malloc_p) (0)
-# define asan_unpoisoning_memory_region(_ptr, _size) if (true)
+# define rb_asan_poison_object(obj) ((void)(obj))
+# define rb_asan_unpoison_object(obj, newobj_p) ((void)(obj), (void)(newobj_p))
+# define asan_unpoisoning_object(obj) if ((obj) || true)
+# define asan_poison_memory_region(ptr, size) ((void)(ptr), (void)(size))
+# define asan_unpoison_memory_region(ptr, size, malloc_p) ((void)(ptr), (size), (malloc_p))
+# define asan_unpoisoning_memory_region(ptr, size) if ((ptr) || (size) || true)
 
-# define VALGRIND_MAKE_MEM_DEFINED(_ptr, _size) (0)
-# define VALGRIND_MAKE_MEM_UNDEFINED(_ptr, _size) (0)
+# define VALGRIND_MAKE_MEM_DEFINED(ptr, size) ((void)(ptr), (void)(size))
+# define VALGRIND_MAKE_MEM_UNDEFINED(ptr, size) ((void)(ptr), (void)(size))
 #else
 # include "internal/sanitizers.h"
 #endif
@@ -6977,7 +6977,7 @@ gc_start(rb_objspace_t *objspace, unsigned int reason)
     if (!rb_darray_size(objspace->heap_pages.sorted)) return TRUE; /* heap is not ready */
     if (!(reason & GPR_FLAG_METHOD) && !ready_to_gc(objspace)) return TRUE; /* GC is not allowed */
 
-    GC_ASSERT(gc_mode(objspace) == gc_mode_none);
+    GC_ASSERT(gc_mode(objspace) == gc_mode_none, "gc_mode is %s\n", gc_mode_name(gc_mode(objspace)));
     GC_ASSERT(!is_lazy_sweeping(objspace));
     GC_ASSERT(!is_incremental_marking(objspace));
 
@@ -7759,6 +7759,8 @@ gc_update_references(rb_objspace_t *objspace)
 {
     objspace->flags.during_reference_updating = true;
 
+    rb_gc_before_updating_jit_code();
+
     struct heap_page *page = NULL;
 
     for (int i = 0; i < HEAP_COUNT; i++) {
@@ -7792,6 +7794,8 @@ gc_update_references(rb_objspace_t *objspace)
             table
         );
     }
+
+    rb_gc_after_updating_jit_code();
 
     objspace->flags.during_reference_updating = false;
 }
