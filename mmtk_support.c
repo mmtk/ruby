@@ -3,6 +3,7 @@
 #include "gc/gc.h"
 #include "internal.h"
 #include "internal/cmdlineopt.h"
+#include "internal/concurrent_set.h"
 #include "internal/gc.h"
 #include "internal/imemo.h"
 #include "internal/string.h"
@@ -1913,9 +1914,56 @@ rb_mmtk_has_exivar(MMTk_ObjectReference object)
     return rb_obj_exivar_p((VALUE)object);
 }
 
-st_table*
-rb_mmtk_get_global_symbols_table(void) {
+static MMTk_ObjectReference
+rb_mmtk_get_fstring_table_obj_wrapper(void)
+{
+    return (MMTk_ObjectReference)rb_mmtk_get_fstring_table_obj();
+}
+
+static st_table*
+rb_mmtk_get_global_symbols_table(void)
+{
     return ruby_global_symbols.str_sym;
+}
+
+static size_t
+rb_mmtk_concurrent_set_get_num_entries_wrapper(MMTk_ObjectReference set_obj)
+{
+    return rb_mmtk_concurrent_set_get_num_entries((VALUE)set_obj);
+}
+
+static size_t
+rb_mmtk_concurrent_set_get_capacity_wrapper(MMTk_ObjectReference set_obj)
+{
+    return rb_mmtk_concurrent_set_get_capacity((VALUE)set_obj);
+}
+
+static int
+rb_mmtk_concurrent_set_update_entries_range_i(VALUE *key, void *data)
+{
+    MMTk_ConcurrentSetStats *stats = (MMTk_ConcurrentSetStats*)data;
+    VALUE old_key = *key;
+
+    assert(!rb_special_const_p(old_key));
+
+    if (mmtk_is_reachable((MMTk_ObjectReference)old_key)) {
+        stats->live++;
+        VALUE new_key = (VALUE)mmtk_get_forwarded_object((MMTk_ObjectReference)old_key);
+        if (new_key != 0 && new_key != old_key) {
+            stats->moved++;
+            *key = new_key;
+        }
+        return ST_CONTINUE;
+    } else {
+        stats->deleted++;
+        return ST_DELETE;
+    }
+}
+
+static void
+rb_mmtk_concurrent_set_update_entries_range(MMTk_ObjectReference set_obj, size_t begin, size_t end, MMTk_ConcurrentSetStats *stats)
+{
+    rb_mmtk_concurrent_set_foreach_with_replace_range((VALUE)set_obj, begin, end, rb_mmtk_concurrent_set_update_entries_range_i, stats);
 }
 
 MMTk_RubyUpcalls ruby_upcalls = {
@@ -1959,12 +2007,17 @@ MMTk_RubyUpcalls ruby_upcalls = {
     rb_mmtk_get_cc_refinement_table_size,
     rb_mmtk_update_cc_refinement_table,
     // Get tables for specialized processing
+    rb_mmtk_get_fstring_table_obj_wrapper,
     rb_mmtk_get_global_symbols_table,
-    // Detailed table info queries and operations
+    // Detailed st_table info queries and operations
     rb_mmtk_st_get_num_entries,
     rb_mmtk_st_get_size_info,
     rb_mmtk_st_update_entries_range,
     rb_mmtk_st_update_bins_range,
+    // Detailed concurrent_set info queries and operations
+    rb_mmtk_concurrent_set_get_num_entries_wrapper,
+    rb_mmtk_concurrent_set_get_capacity_wrapper,
+    rb_mmtk_concurrent_set_update_entries_range,
 };
 
 ////////////////////////////////////////////////////////////////////////////////

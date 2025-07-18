@@ -325,10 +325,62 @@ rb_concurrent_set_foreach_with_replace(VALUE set_obj, int (*callback)(VALUE *key
 }
 
 #if USE_MMTK
+struct concurrent_set*
+rb_mmtk_get_concurrent_set(VALUE set_obj)
+{
+    return RTYPEDDATA_GET_DATA(set_obj);
+}
+
 size_t
-rb_mmtk_concurrent_set_num_entries(VALUE set_obj)
+rb_mmtk_concurrent_set_get_num_entries(VALUE set_obj)
 {
     struct concurrent_set *set = RTYPEDDATA_GET_DATA(set_obj);
-    RUBY_ATOMIC_LOAD(set->size);
+    return RUBY_ATOMIC_LOAD(set->size) - set->deleted_entries;
+}
+
+size_t
+rb_mmtk_concurrent_set_get_capacity(VALUE set_obj)
+{
+    struct concurrent_set *set = RTYPEDDATA_GET_DATA(set_obj);
+    return set->capacity;
+}
+
+void
+rb_mmtk_concurrent_set_foreach_with_replace_range(VALUE set_obj, size_t begin, size_t end, int (*callback)(VALUE *key, void *data), void *data)
+{
+    // We don't assert VM locking because this is supposed to be called by GC threads during parallel GC.
+
+    struct concurrent_set *set = RTYPEDDATA_GET_DATA(set_obj);
+
+    RUBY_ASSERT(end <= set->capacity);
+
+    int deleted = 0;
+
+    for (size_t i = begin; i < end; i++) {
+        VALUE key = set->entries[i].key;
+
+        switch (key) {
+          case CONCURRENT_SET_EMPTY:
+          case CONCURRENT_SET_DELETED:
+            continue;
+          case CONCURRENT_SET_MOVED:
+            rb_bug("rb_concurrent_set_foreach_with_replace_range: moved entry");
+            break;
+          default: {
+            int ret = callback(&set->entries[i].key, data);
+            switch (ret) {
+              case ST_STOP:
+                return;
+              case ST_DELETE:
+                set->entries[i].key = CONCURRENT_SET_DELETED;
+                deleted++;
+                break;
+            }
+            break;
+          }
+        }
+    }
+
+    RUBY_ATOMIC_SUB(set->deleted_entries, deleted);
 }
 #endif

@@ -804,7 +804,13 @@ Init_fstring_table(void)
 size_t
 rb_mmtk_debug_get_num_fstrings(void)
 {
-    return rb_mmtk_concurrent_set_num_entries(fstring_table_obj);
+    return rb_mmtk_concurrent_set_get_num_entries(fstring_table_obj);
+}
+
+VALUE
+rb_mmtk_get_fstring_table_obj(void)
+{
+    return fstring_table_obj;
 }
 #endif
 

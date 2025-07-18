@@ -57,6 +57,12 @@ typedef struct MMTk_GCThreadTLS {
     struct MMTk_ObjectClosure object_closure;
 } MMTk_GCThreadTLS;
 
+typedef struct MMTk_ConcurrentSetStats {
+    size_t live;
+    size_t moved;
+    size_t deleted;
+} MMTk_ConcurrentSetStats;
+
 typedef struct MMTk_RubyUpcalls {
     void (*init_gc_worker_thread)(struct MMTk_GCThreadTLS *gc_worker_tls);
     struct MMTk_GCThreadTLS *(*get_gc_thread_tls)(void);
@@ -97,6 +103,7 @@ typedef struct MMTk_RubyUpcalls {
     void (*update_frozen_strings_table)(void);
     size_t (*get_cc_refinement_table_size)(void);
     void (*update_cc_refinement_table)(void);
+    MMTk_ObjectReference (*get_fstring_table_obj)(void);
     struct st_table *(*get_global_symbols_table)(void);
     size_t (*st_get_num_entries)(const struct st_table *table);
     void (*st_get_size_info)(const struct st_table *table,
@@ -110,6 +117,12 @@ typedef struct MMTk_RubyUpcalls {
                                       bool weak_records,
                                       bool forward);
     size_t (*st_update_bins_range)(struct st_table *table, size_t begin, size_t end);
+    size_t (*concurrent_set_get_num_entries)(MMTk_ObjectReference set);
+    size_t (*concurrent_set_get_capacity)(MMTk_ObjectReference set);
+    void (*concurrent_set_update_entries_range)(MMTk_ObjectReference set,
+                                                size_t begin,
+                                                size_t end,
+                                                struct MMTk_ConcurrentSetStats *stats);
 } MMTk_RubyUpcalls;
 
 typedef struct MMTk_RawVecOfObjRef {

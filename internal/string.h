@@ -70,6 +70,8 @@ void rb_warn_unchilled_symbol_to_s(VALUE str);
 
 #if USE_MMTK
 size_t rb_mmtk_debug_get_num_fstrings(void);
+size_t rb_mmtk_debug_get_num_fstrings(void);
+VALUE rb_mmtk_get_fstring_table_obj(void);
 bool rb_mmtk_str_no_free(VALUE str);
 #endif
 

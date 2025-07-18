@@ -19,7 +19,9 @@ VALUE rb_concurrent_set_delete_by_identity(VALUE set_obj, VALUE key);
 void rb_concurrent_set_foreach_with_replace(VALUE set_obj, int (*callback)(VALUE *key, void *data), void *data);
 
 #if USE_MMTK
-size_t rb_mmtk_concurrent_set_num_entries(VALUE set_obj);
+size_t rb_mmtk_concurrent_set_get_num_entries(VALUE set_obj);
+size_t rb_mmtk_concurrent_set_get_capacity(VALUE set_obj);
+void rb_mmtk_concurrent_set_foreach_with_replace_range(VALUE set_obj, size_t begin, size_t end, int (*callback)(VALUE *key, void *data), void *data);
 #endif
 
 #endif
