@@ -381,6 +381,6 @@ rb_mmtk_concurrent_set_foreach_with_replace_range(VALUE set_obj, size_t begin, s
         }
     }
 
-    RUBY_ATOMIC_SUB(set->deleted_entries, deleted);
+    RUBY_ATOMIC_ADD(set->deleted_entries, deleted);
 }
 #endif
