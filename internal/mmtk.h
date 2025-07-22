@@ -123,6 +123,8 @@ typedef struct MMTk_RubyUpcalls {
                                                 size_t begin,
                                                 size_t end,
                                                 struct MMTk_ConcurrentSetStats *stats);
+    void (*before_updating_jit_code)(void);
+    void (*after_updating_jit_code)(void);
 } MMTk_RubyUpcalls;
 
 typedef struct MMTk_RawVecOfObjRef {
@@ -286,5 +288,9 @@ void mmtk_object_reference_write_post(MMTk_Mutator *mutator, MMTk_ObjectReferenc
 void mmtk_enumerate_objects(void (*callback)(MMTk_ObjectReference, void*), void *data);
 
 bool mmtk_hidden_header_is_sane(const struct MMTk_HiddenHeader *hidden_header);
+
+bool mmtk_current_gc_may_move_object(void);
+
+bool mmtk_current_gc_is_nursery(void);
 
 #endif  /* MMTK_H */

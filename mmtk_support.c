@@ -2018,6 +2018,9 @@ MMTk_RubyUpcalls ruby_upcalls = {
     rb_mmtk_concurrent_set_get_num_entries_wrapper,
     rb_mmtk_concurrent_set_get_capacity_wrapper,
     rb_mmtk_concurrent_set_update_entries_range,
+    // Memory protection for code memory
+    rb_gc_before_updating_jit_code,
+    rb_gc_after_updating_jit_code,
 };
 
 ////////////////////////////////////////////////////////////////////////////////
