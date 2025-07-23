@@ -49,7 +49,7 @@ Note: We're only listing outstanding class updates.
 
 * Socket
 
-    * `Socket.tcp` accepts `open_timeout` as a keyword argument to specify
+    * `Socket.tcp` & `TCPSocket.new` accepts `open_timeout` as a keyword argument to specify
       the timeout for the initial connection. [[Feature #21347]]
 
 * Ractor
@@ -111,18 +111,23 @@ Note: We're only listing outstanding class updates.
       waiting on a blocking IO operation when the IO operation is closed.
       [[Feature #21166]]
 
+* Pathname
+
+    * Pathname has been promoted from a default gem to a core class of Ruby.
+      [[Feature #17473]]
+
 ## Stdlib updates
 
 The following bundled gems are promoted from default gems.
 
-* ostruct 0.6.2
+* ostruct 0.6.3
 * pstore 0.2.0
 * benchmark 0.4.1
 * logger 1.7.0
 * rdoc 6.14.2
 * win32ole 1.9.2
 * irb 1.15.2
-* reline 0.6.1
+* reline 0.6.2
 * readline 0.0.4
 * fiddle 1.1.8
 
@@ -138,10 +143,14 @@ The following default gem is added.
 
 The following default gems are updated.
 
-* RubyGems 3.7.0.dev
-* bundler 2.7.0.dev
-* erb 5.0.1
-* json 2.12.2
+* RubyGems 3.8.0.dev
+* bundler 2.8.0.dev
+* erb 5.0.2
+* etc 1.4.6
+* io-console 0.8.1
+* io-nonblock 0.3.2
+* io-wait 0.3.2
+* json 2.13.0
 * optparse 0.7.0.dev.2
 * prism 1.4.0
 * psych 5.2.6
@@ -220,6 +229,7 @@ The following bundled gems are updated.
 
 ## JIT
 
+[Feature #17473]: https://bugs.ruby-lang.org/issues/17473
 [Feature #18455]: https://bugs.ruby-lang.org/issues/18455
 [Feature #19908]: https://bugs.ruby-lang.org/issues/19908
 [Feature #20610]: https://bugs.ruby-lang.org/issues/20610

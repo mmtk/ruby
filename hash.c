@@ -191,7 +191,7 @@ any_hash(VALUE a, st_index_t (*other_func)(VALUE))
             hnum = rb_hash_start(hnum);
         }
         else {
-            hnum = RSYMBOL(a)->hashval;
+            hnum = RSHIFT(RSYMBOL(a)->hashval, 1);
         }
         break;
       case T_FIXNUM:
@@ -889,8 +889,9 @@ ar_general_foreach(VALUE hash, st_foreach_check_callback_func *func, st_update_c
                 if (replace) {
                     (*replace)(&key, &val, arg, TRUE);
 
-                    // TODO: pair should be same as pair before.
-                    pair = RHASH_AR_TABLE_REF(hash, i);
+                    // Pair should not have moved
+                    HASH_ASSERT(pair == RHASH_AR_TABLE_REF(hash, i));
+
                     pair->key = (VALUE)key;
                     pair->val = (VALUE)val;
                 }
@@ -1307,7 +1308,6 @@ hash_ar_foreach_iter(st_data_t key, st_data_t value, st_data_t argp, int error)
     if (error) return ST_STOP;
 
     int status = (*arg->func)((VALUE)key, (VALUE)value, arg->arg);
-    /* TODO: rehash check? rb_raise(rb_eRuntimeError, "rehash occurred during iteration"); */
 
     return hash_iter_status_check(status);
 }
@@ -1319,12 +1319,7 @@ hash_foreach_iter(st_data_t key, st_data_t value, st_data_t argp, int error)
 
     if (error) return ST_STOP;
 
-    st_table *tbl = RHASH_ST_TABLE(arg->hash);
     int status = (*arg->func)((VALUE)key, (VALUE)value, arg->arg);
-
-    if (RHASH_ST_TABLE(arg->hash) != tbl) {
-        rb_raise(rb_eRuntimeError, "rehash occurred during iteration");
-    }
 
     return hash_iter_status_check(status);
 }

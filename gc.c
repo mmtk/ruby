@@ -91,6 +91,7 @@
 #include "internal/class.h"
 #include "internal/compile.h"
 #include "internal/complex.h"
+#include "internal/concurrent_set.h"
 #include "internal/cont.h"
 #include "internal/error.h"
 #include "internal/eval.h"
@@ -351,6 +352,7 @@ rb_gc_shutdown_call_finalizer_p(VALUE obj)
         if (rb_obj_is_fiber(obj)) return false;
         if (rb_obj_is_main_ractor(obj)) return false;
         if (rb_obj_is_fstring_table(obj)) return false;
+        if (rb_obj_is_symbol_table(obj)) return false;
 
         return true;
 
@@ -2551,11 +2553,19 @@ count_objects(int argc, VALUE *argv, VALUE os)
 {
     struct count_objects_data data = { 0 };
     VALUE hash = Qnil;
+    VALUE types[T_MASK + 1];
 
     if (rb_check_arity(argc, 0, 1) == 1) {
         hash = argv[0];
         if (!RB_TYPE_P(hash, T_HASH))
             rb_raise(rb_eTypeError, "non-hash given");
+    }
+
+    for (size_t i = 0; i <= T_MASK; i++) {
+        // type_sym can allocate an object,
+        // so we need to create all key symbols in advance
+        // not to disturb the result
+        types[i] = type_sym(i);
     }
 
     rb_gc_impl_each_object(rb_gc_get_objspace(), count_objects_i, &data);
@@ -2570,9 +2580,9 @@ count_objects(int argc, VALUE *argv, VALUE os)
     rb_hash_aset(hash, ID2SYM(rb_intern("FREE")), SIZET2NUM(data.freed));
 
     for (size_t i = 0; i <= T_MASK; i++) {
-        VALUE type = type_sym(i);
-        if (data.counts[i])
-            rb_hash_aset(hash, type, SIZET2NUM(data.counts[i]));
+        if (data.counts[i]) {
+            rb_hash_aset(hash, types[i], SIZET2NUM(data.counts[i]));
+        }
     }
 
     return hash;
@@ -3293,16 +3303,6 @@ rb_gc_mark_children(void *objspace, VALUE obj)
     switch (BUILTIN_TYPE(obj)) {
       case T_FLOAT:
       case T_BIGNUM:
-      case T_SYMBOL:
-        /* Not immediates, but does not have references and singleton class.
-         *
-         * RSYMBOL(obj)->fstr intentionally not marked. See log for 96815f1e
-         * ("symbol.c: remove rb_gc_mark_symbols()") */
-// TODO: we really don't need this, but I'm copying everything to avoid mistakes.
-#if USE_MMTK
-        // Note: When using MMTk, RSYMBOL(obj)->fstr is a reference field.
-        // It will be scanned in gc_update_object_references.
-#endif
         return;
 
       case T_NIL:
@@ -3365,6 +3365,10 @@ rb_gc_mark_children(void *objspace, VALUE obj)
 
       case T_HASH:
         mark_hash(obj);
+        break;
+
+      case T_SYMBOL:
+        gc_mark_internal(RSYMBOL(obj)->fstr);
         break;
 
       case T_STRING:
@@ -4045,9 +4049,6 @@ update_iclass_classext(rb_classext_t *ext, bool is_prime, VALUE namespace, void 
     update_classext_values(objspace, ext, true);
 }
 
-extern rb_symbols_t ruby_global_symbols;
-#define global_symbols ruby_global_symbols
-
 struct global_vm_table_foreach_data {
     vm_table_foreach_callback_func callback;
     vm_table_update_callback_func update_callback;
@@ -4105,34 +4106,20 @@ vm_weak_table_cc_refinement_foreach_update_update(st_data_t *key, st_data_t data
 
 
 static int
-vm_weak_table_str_sym_foreach(st_data_t key, st_data_t value, st_data_t data, int error)
+vm_weak_table_sym_set_foreach(VALUE *sym_ptr, void *data)
 {
+    VALUE sym = *sym_ptr;
     struct global_vm_table_foreach_data *iter_data = (struct global_vm_table_foreach_data *)data;
 
-    if (!iter_data->weak_only) {
-        int ret = iter_data->callback((VALUE)key, iter_data->data);
-        if (ret != ST_CONTINUE) return ret;
+    if (RB_SPECIAL_CONST_P(sym)) return ST_CONTINUE;
+
+    int ret = iter_data->callback(sym, iter_data->data);
+
+    if (ret == ST_REPLACE) {
+        ret = iter_data->update_callback(sym_ptr, iter_data->data);
     }
 
-    if (STATIC_SYM_P(value)) {
-        return ST_CONTINUE;
-    }
-    else {
-        return iter_data->callback((VALUE)value, iter_data->data);
-    }
-}
-
-static int
-vm_weak_table_foreach_update_weak_value(st_data_t *key, st_data_t *value, st_data_t data, int existing)
-{
-    struct global_vm_table_foreach_data *iter_data = (struct global_vm_table_foreach_data *)data;
-
-    if (!iter_data->weak_only) {
-        int ret = iter_data->update_callback((VALUE *)key, iter_data->data);
-        if (ret != ST_CONTINUE) return ret;
-    }
-
-    return iter_data->update_callback((VALUE *)value, iter_data->data);
+    return ret;
 }
 
 struct st_table *rb_generic_fields_tbl_get(void);
@@ -4279,14 +4266,10 @@ rb_gc_vm_weak_table_foreach(vm_table_foreach_callback_func callback,
         break;
       }
       case RB_GC_VM_GLOBAL_SYMBOLS_TABLE: {
-        if (global_symbols.str_sym) {
-            st_foreach_with_replace(
-                global_symbols.str_sym,
-                vm_weak_table_str_sym_foreach,
-                vm_weak_table_foreach_update_weak_value,
-                (st_data_t)&foreach_data
-            );
-        }
+        rb_sym_global_symbol_table_foreach_weak_reference(
+            vm_weak_table_sym_set_foreach,
+            &foreach_data
+        );
         break;
       }
       case RB_GC_VM_ID2REF_TABLE: {

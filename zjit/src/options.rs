@@ -17,7 +17,7 @@ pub static mut rb_zjit_call_threshold: u64 = 2;
 #[derive(Clone, Copy, Debug)]
 pub struct Options {
     /// Number of times YARV instructions should be profiled.
-    pub num_profiles: u64,
+    pub num_profiles: u8,
 
     /// Enable debug logging
     pub debug: bool,
@@ -33,6 +33,9 @@ pub struct Options {
 
     /// Dump all compiled machine code.
     pub dump_disasm: bool,
+
+    /// Dump code map to /tmp for performance profilers.
+    pub perf: bool,
 }
 
 /// Return an Options with default values
@@ -44,6 +47,7 @@ pub fn init_options() -> Options {
         dump_hir_opt: None,
         dump_lir: false,
         dump_disasm: false,
+        perf: false,
     }
 }
 
@@ -51,7 +55,7 @@ pub fn init_options() -> Options {
 /// Note that --help allows only 80 chars per line, including indentation.    80-char limit --> |
 pub const ZJIT_OPTIONS: &'static [(&str, &str)] = &[
     ("--zjit-call-threshold=num", "Number of calls to trigger JIT (default: 2)."),
-    ("--zjit-num-profiles=num",   "Number of profiled calls before JIT (default: 1)."),
+    ("--zjit-num-profiles=num",   "Number of profiled calls before JIT (default: 1, max: 255)."),
 ];
 
 #[derive(Clone, Copy, Debug)]
@@ -143,6 +147,8 @@ fn parse_option(options: &mut Options, str_ptr: *const std::os::raw::c_char) -> 
 
         ("dump-disasm", "") => options.dump_disasm = true,
 
+        ("perf", "") => options.perf = true,
+
         _ => return None, // Option name not recognized
     }
 
@@ -158,7 +164,7 @@ fn update_profile_threshold(options: &Options) {
             rb_zjit_profile_threshold = 0;
         } else {
             // Otherwise, profile instructions at least once.
-            rb_zjit_profile_threshold = rb_zjit_call_threshold.saturating_sub(options.num_profiles).max(1);
+            rb_zjit_profile_threshold = rb_zjit_call_threshold.saturating_sub(options.num_profiles as u64).max(1);
         }
     }
 }

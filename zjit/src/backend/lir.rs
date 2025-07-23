@@ -5,7 +5,7 @@ use crate::codegen::local_size_and_idx_to_ep_offset;
 use crate::cruby::{Qundef, RUBY_OFFSET_CFP_PC, RUBY_OFFSET_CFP_SP, SIZEOF_VALUE_I32};
 use crate::hir::SideExitReason;
 use crate::options::{debug, get_option};
-use crate::{cruby::VALUE};
+use crate::cruby::VALUE;
 use crate::backend::current::*;
 use crate::virtualmem::CodePtr;
 use crate::asm::{CodeBlock, Label};
@@ -32,13 +32,13 @@ pub enum MemBase
 pub struct Mem
 {
     // Base register number or instruction index
-    pub(super) base: MemBase,
+    pub base: MemBase,
 
     // Offset relative to the base pointer
-    pub(super) disp: i32,
+    pub disp: i32,
 
     // Size in bits
-    pub(super) num_bits: u8,
+    pub num_bits: u8,
 }
 
 impl fmt::Debug for Mem {
@@ -117,7 +117,7 @@ impl Opnd
     }
 
     /// Constructor for constant pointer operand
-    pub fn const_ptr(ptr: *const u8) -> Self {
+    pub fn const_ptr<T>(ptr: *const T) -> Self {
         Opnd::UImm(ptr as u64)
     }
 
@@ -270,6 +270,14 @@ impl From<VALUE> for Opnd {
     }
 }
 
+/// Set of things we need to restore for side exits.
+#[derive(Clone, Debug)]
+pub struct SideExitContext {
+    pub pc: *const VALUE,
+    pub stack: Vec<Opnd>,
+    pub locals: Vec<Opnd>,
+}
+
 /// Branch target (something that we can jump to)
 /// for branch instructions
 #[derive(Clone, Debug)]
@@ -281,12 +289,14 @@ pub enum Target
     Label(Label),
     /// Side exit to the interpreter
     SideExit {
-        pc: *const VALUE,
-        stack: Vec<Opnd>,
-        locals: Vec<Opnd>,
-        c_stack_bytes: usize,
+        /// Context to restore on regular side exits. None for side exits right
+        /// after JIT-to-JIT calls because we restore them before the JIT call.
+        context: Option<SideExitContext>,
+        /// We use this to enrich asm comments.
         reason: SideExitReason,
-        // Some if the side exit should write this label. We use it for patch points.
+        /// The number of bytes we need to adjust the C stack pointer by.
+        c_stack_bytes: usize,
+        /// Some if the side exit should write this label. We use it for patch points.
         label: Option<Label>,
     },
 }
@@ -767,7 +777,7 @@ impl<'a> Iterator for InsnOpndIterator<'a> {
             Insn::Label(target) |
             Insn::LeaJumpTarget { target, .. } |
             Insn::PatchPoint(target) => {
-                if let Target::SideExit { stack, locals, .. } = target {
+                if let Target::SideExit { context: Some(SideExitContext { stack, locals, .. }), .. } = target {
                     let stack_idx = self.idx;
                     if stack_idx < stack.len() {
                         let opnd = &stack[stack_idx];
@@ -792,7 +802,7 @@ impl<'a> Iterator for InsnOpndIterator<'a> {
                     return Some(opnd);
                 }
 
-                if let Target::SideExit { stack, locals, .. } = target {
+                if let Target::SideExit { context: Some(SideExitContext { stack, locals, .. }), .. } = target {
                     let stack_idx = self.idx - 1;
                     if stack_idx < stack.len() {
                         let opnd = &stack[stack_idx];
@@ -923,7 +933,7 @@ impl<'a> InsnOpndMutIterator<'a> {
             Insn::Label(target) |
             Insn::LeaJumpTarget { target, .. } |
             Insn::PatchPoint(target) => {
-                if let Target::SideExit { stack, locals, .. } = target {
+                if let Target::SideExit { context: Some(SideExitContext { stack, locals, .. }), .. } = target {
                     let stack_idx = self.idx;
                     if stack_idx < stack.len() {
                         let opnd = &mut stack[stack_idx];
@@ -948,7 +958,7 @@ impl<'a> InsnOpndMutIterator<'a> {
                     return Some(opnd);
                 }
 
-                if let Target::SideExit { stack, locals, .. } = target {
+                if let Target::SideExit { context: Some(SideExitContext { stack, locals, .. }), .. } = target {
                     let stack_idx = self.idx - 1;
                     if stack_idx < stack.len() {
                         let opnd = &mut stack[stack_idx];
@@ -1742,6 +1752,9 @@ impl Assembler
                         asm.push_insn(Insn::PosMarker(end_marker));
                     }
                 }
+                Insn::Mov { src, dest } | Insn::LoadInto { dest, opnd: src } if src == dest => {
+                    // Remove no-op move now that VReg are resolved to physical Reg
+                }
                 _ => asm.push_insn(insn),
             }
 
@@ -1803,7 +1816,7 @@ impl Assembler
         for (idx, target) in targets {
             // Compile a side exit. Note that this is past the split pass and alloc_regs(),
             // so you can't use a VReg or an instruction that needs to be split.
-            if let Target::SideExit { pc, stack, locals, c_stack_bytes, reason, label } = target {
+            if let Target::SideExit { context, reason, c_stack_bytes, label } = target {
                 asm_comment!(self, "Exit: {reason}");
                 let side_exit_label = if let Some(label) = label {
                     Target::Label(label)
@@ -1823,26 +1836,30 @@ impl Assembler
                     }
                 }
 
-                asm_comment!(self, "write stack slots: {stack:?}");
-                for (idx, &opnd) in stack.iter().enumerate() {
-                    let opnd = split_store_source(self, opnd);
-                    self.store(Opnd::mem(64, SP, idx as i32 * SIZEOF_VALUE_I32), opnd);
+                // Restore the PC and the stack for regular side exits. We don't do this for
+                // side exits right after JIT-to-JIT calls, which restore them before the call.
+                if let Some(SideExitContext { pc, stack, locals }) = context {
+                    asm_comment!(self, "write stack slots: {stack:?}");
+                    for (idx, &opnd) in stack.iter().enumerate() {
+                        let opnd = split_store_source(self, opnd);
+                        self.store(Opnd::mem(64, SP, idx as i32 * SIZEOF_VALUE_I32), opnd);
+                    }
+
+                    asm_comment!(self, "write locals: {locals:?}");
+                    for (idx, &opnd) in locals.iter().enumerate() {
+                        let opnd = split_store_source(self, opnd);
+                        self.store(Opnd::mem(64, SP, (-local_size_and_idx_to_ep_offset(locals.len(), idx) - 1) * SIZEOF_VALUE_I32), opnd);
+                    }
+
+                    asm_comment!(self, "save cfp->pc");
+                    self.load_into(Opnd::Reg(Assembler::SCRATCH_REG), Opnd::const_ptr(pc));
+                    self.store(Opnd::mem(64, CFP, RUBY_OFFSET_CFP_PC), Opnd::Reg(Assembler::SCRATCH_REG));
+
+                    asm_comment!(self, "save cfp->sp");
+                    self.lea_into(Opnd::Reg(Assembler::SCRATCH_REG), Opnd::mem(64, SP, stack.len() as i32 * SIZEOF_VALUE_I32));
+                    let cfp_sp = Opnd::mem(64, CFP, RUBY_OFFSET_CFP_SP);
+                    self.store(cfp_sp, Opnd::Reg(Assembler::SCRATCH_REG));
                 }
-
-                asm_comment!(self, "write locals: {locals:?}");
-                for (idx, &opnd) in locals.iter().enumerate() {
-                    let opnd = split_store_source(self, opnd);
-                    self.store(Opnd::mem(64, SP, (-local_size_and_idx_to_ep_offset(locals.len(), idx) - 1) * SIZEOF_VALUE_I32), opnd);
-                }
-
-                asm_comment!(self, "save cfp->pc");
-                self.load_into(Opnd::Reg(Assembler::SCRATCH_REG), Opnd::const_ptr(pc as *const u8));
-                self.store(Opnd::mem(64, CFP, RUBY_OFFSET_CFP_PC), Opnd::Reg(Assembler::SCRATCH_REG));
-
-                asm_comment!(self, "save cfp->sp");
-                self.lea_into(Opnd::Reg(Assembler::SCRATCH_REG), Opnd::mem(64, SP, stack.len() as i32 * SIZEOF_VALUE_I32));
-                let cfp_sp = Opnd::mem(64, CFP, RUBY_OFFSET_CFP_SP);
-                self.store(cfp_sp, Opnd::Reg(Assembler::SCRATCH_REG));
 
                 if c_stack_bytes > 0 {
                     asm_comment!(self, "restore C stack pointer");
@@ -2150,6 +2167,7 @@ impl Assembler {
     }
 
     pub fn load_into(&mut self, dest: Opnd, opnd: Opnd) {
+        assert!(matches!(dest, Opnd::Reg(_) | Opnd::VReg{..}), "Destination of load_into must be a register");
         match (dest, opnd) {
             (Opnd::Reg(dest), Opnd::Reg(opnd)) if dest == opnd => {}, // skip if noop
             _ => self.push_insn(Insn::LoadInto { dest, opnd }),
@@ -2278,6 +2296,15 @@ macro_rules! asm_comment {
 }
 pub(crate) use asm_comment;
 
+/// Convenience macro over [`Assembler::ccall`] that also adds a comment with the function name.
+macro_rules! asm_ccall {
+    [$asm: ident, $fn_name:ident, $($args:expr),* ] => {{
+        $crate::backend::lir::asm_comment!($asm, concat!("call ", stringify!($fn_name)));
+        $asm.ccall($fn_name as *const u8, vec![$($args),*])
+    }};
+}
+pub(crate) use asm_ccall;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2302,6 +2329,14 @@ mod tests {
         assert!(matches!(opnd_iter.next(), Some(Opnd::None)));
 
         assert!(matches!(opnd_iter.next(), None));
+    }
+
+    #[test]
+    #[should_panic]
+    fn load_into_memory_is_invalid() {
+        let mut asm = Assembler::new();
+        let mem = Opnd::mem(64, SP, 0);
+        asm.load_into(mem, mem);
     }
 }
 

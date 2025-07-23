@@ -127,6 +127,8 @@ pub enum Invariant {
         klass: VALUE,
         /// The method ID of the method we want to assume unchanged
         method: ID,
+        /// The callable method entry that we want to track
+        cme: *const rb_callable_method_entry_t,
     },
     /// A list of constant expression path segments that must have not been written to for the
     /// following code to be valid.
@@ -222,12 +224,13 @@ impl<'a> std::fmt::Display for InvariantPrinter<'a> {
                 }
                 write!(f, ")")
             }
-            Invariant::MethodRedefined { klass, method } => {
+            Invariant::MethodRedefined { klass, method, cme } => {
                 let class_name = get_class_name(klass);
-                write!(f, "MethodRedefined({class_name}@{:p}, {}@{:p})",
+                write!(f, "MethodRedefined({class_name}@{:p}, {}@{:p}, cme:{:p})",
                     self.ptr_map.map_ptr(klass.as_ptr::<VALUE>()),
                     method.contents_lossy(),
-                    self.ptr_map.map_id(method.0)
+                    self.ptr_map.map_id(method.0),
+                    self.ptr_map.map_ptr(cme)
                 )
             }
             Invariant::StableConstantNames { idlist } => {
@@ -414,6 +417,7 @@ pub enum SideExitReason {
     GuardType(Type),
     GuardBitEquals(VALUE),
     PatchPoint(Invariant),
+    CalleeSideExit,
 }
 
 impl std::fmt::Display for SideExitReason {
@@ -939,6 +943,14 @@ pub enum ValidationError {
     DuplicateInstruction(BlockId, InsnId),
 }
 
+fn can_direct_send(iseq: *const rb_iseq_t) -> bool {
+    if unsafe { rb_get_iseq_flags_has_rest(iseq) } { false }
+    else if unsafe { rb_get_iseq_flags_has_opt(iseq) } { false }
+    else if unsafe { rb_get_iseq_flags_has_kw(iseq) } { false }
+    else if unsafe { rb_get_iseq_flags_has_kwrest(iseq) } { false }
+    else if unsafe { rb_get_iseq_flags_has_block(iseq) } { false }
+    else { true }
+}
 
 /// A [`Function`], which is analogous to a Ruby ISeq, is a control-flow graph of [`Block`]s
 /// containing instructions.
@@ -1373,6 +1385,11 @@ impl Function {
     }
 
     fn try_rewrite_fixnum_op(&mut self, block: BlockId, orig_insn_id: InsnId, f: &dyn Fn(InsnId, InsnId) -> Insn, bop: u32, left: InsnId, right: InsnId, state: InsnId) {
+        if !unsafe { rb_BASIC_OP_UNREDEFINED_P(bop, INTEGER_REDEFINED_OP_FLAG) } {
+            // If the basic operation is already redefined, we cannot optimize it.
+            self.push_insn_id(block, orig_insn_id);
+            return;
+        }
         if self.arguments_likely_fixnums(left, right, state) {
             if bop == BOP_NEQ {
                 // For opt_neq, the interpreter checks that both neq and eq are unchanged.
@@ -1390,6 +1407,11 @@ impl Function {
     }
 
     fn rewrite_if_frozen(&mut self, block: BlockId, orig_insn_id: InsnId, self_val: InsnId, klass: u32, bop: u32, state: InsnId) {
+        if !unsafe { rb_BASIC_OP_UNREDEFINED_P(bop, klass) } {
+            // If the basic operation is already redefined, we cannot optimize it.
+            self.push_insn_id(block, orig_insn_id);
+            return;
+        }
         let self_type = self.type_of(self_val);
         if let Some(obj) = self_type.ruby_object() {
             if obj.is_frozen() {
@@ -1422,6 +1444,11 @@ impl Function {
     }
 
     fn try_rewrite_aref(&mut self, block: BlockId, orig_insn_id: InsnId, self_val: InsnId, idx_val: InsnId, state: InsnId) {
+        if !unsafe { rb_BASIC_OP_UNREDEFINED_P(BOP_AREF, ARRAY_REDEFINED_OP_FLAG) } {
+            // If the basic operation is already redefined, we cannot optimize it.
+            self.push_insn_id(block, orig_insn_id);
+            return;
+        }
         let self_type = self.type_of(self_val);
         let idx_type = self.type_of(idx_val);
         if self_type.is_subtype(types::ArrayExact) {
@@ -1507,8 +1534,13 @@ impl Function {
                             // TODO(max): Allow non-iseq; cache cme
                             self.push_insn_id(block, insn_id); continue;
                         }
-                        self.push_insn(block, Insn::PatchPoint { invariant: Invariant::MethodRedefined { klass, method: mid }, state });
+                        // Only specialize positional-positional calls
+                        // TODO(max): Handle other kinds of parameter passing
                         let iseq = unsafe { get_def_iseq_ptr((*cme).def) };
+                        if !can_direct_send(iseq) {
+                            self.push_insn_id(block, insn_id); continue;
+                        }
+                        self.push_insn(block, Insn::PatchPoint { invariant: Invariant::MethodRedefined { klass, method: mid, cme }, state });
                         if let Some(expected) = guard_equal_to {
                             self_val = self.push_insn(block, Insn::GuardBitEquals { val: self_val, expected, state });
                         }
@@ -1532,6 +1564,7 @@ impl Function {
                         // referenced after the PatchPoint.
                         self.push_insn(block, Insn::PatchPoint { invariant: Invariant::StableConstantNames { idlist }, state });
                         let replacement = self.push_insn(block, Insn::Const { val: Const::Value(unsafe { (*ice).value }) });
+                        self.insn_types[replacement.0] = self.infer_type(replacement);
                         self.make_equal_to(insn_id, replacement);
                     }
                     Insn::ObjToString { val, call_info, cd, state, .. } => {
@@ -1626,7 +1659,7 @@ impl Function {
                     // Filter for simple call sites (i.e. no splats etc.)
                     if ci_flags & VM_CALL_ARGS_SIMPLE != 0 {
                         // Commit to the replacement. Put PatchPoint.
-                        fun.push_insn(block, Insn::PatchPoint { invariant: Invariant::MethodRedefined { klass: recv_class, method: method_id }, state });
+                        fun.push_insn(block, Insn::PatchPoint { invariant: Invariant::MethodRedefined { klass: recv_class, method: method_id, cme: method }, state });
                         if let Some(guard_type) = guard_type {
                             // Guard receiver class
                             self_val = fun.push_insn(block, Insn::GuardType { val: self_val, guard_type, state });
@@ -1673,7 +1706,7 @@ impl Function {
     fn fold_fixnum_bop(&mut self, insn_id: InsnId, left: InsnId, right: InsnId, f: impl FnOnce(Option<i64>, Option<i64>) -> Option<i64>) -> InsnId {
         f(self.type_of(left).fixnum_value(), self.type_of(right).fixnum_value())
             .filter(|&n| n >= (RUBY_FIXNUM_MIN as i64) && n <= RUBY_FIXNUM_MAX as i64)
-            .map(|n| self.new_insn(Insn::Const { val: Const::Value(VALUE::fixnum_from_usize(n as usize)) }))
+            .map(|n| self.new_insn(Insn::Const { val: Const::Value(VALUE::fixnum_from_isize(n as isize)) }))
             .unwrap_or(insn_id)
     }
 
@@ -2652,6 +2685,11 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                             break;  // End the block
                         },
                     };
+                    if !unsafe { rb_BASIC_OP_UNREDEFINED_P(bop, ARRAY_REDEFINED_OP_FLAG) } {
+                        // If the basic operation is already redefined, we cannot optimize it.
+                        fun.push_insn(block, Insn::SideExit { state: exit_id, reason: SideExitReason::PatchPoint(Invariant::BOPRedefined { klass: ARRAY_REDEFINED_OP_FLAG, bop }) });
+                        break;  // End the block
+                    }
                     fun.push_insn(block, Insn::PatchPoint { invariant: Invariant::BOPRedefined { klass: ARRAY_REDEFINED_OP_FLAG, bop }, state: exit_id });
                     state.stack_push(fun.push_insn(block, insn));
                 }
@@ -5157,6 +5195,24 @@ mod opt_tests {
     }
 
     #[test]
+    fn test_fold_fixnum_sub_large_negative_result() {
+        eval("
+            def test
+              0 - 1073741825
+            end
+        ");
+        assert_optimized_method_hir("test", expect![[r#"
+            fn test@<compiled>:3:
+            bb0(v0:BasicObject):
+              v2:Fixnum[0] = Const Value(0)
+              v3:Fixnum[1073741825] = Const Value(1073741825)
+              PatchPoint BOPRedefined(INTEGER_REDEFINED_OP_FLAG, BOP_MINUS)
+              v9:Fixnum[-1073741825] = Const Value(-1073741825)
+              Return v9
+        "#]]);
+    }
+
+    #[test]
     fn test_fold_fixnum_mult() {
         eval("
             def test
@@ -5461,9 +5517,9 @@ mod opt_tests {
         assert_optimized_method_hir("test", expect![[r#"
             fn test@<compiled>:5:
             bb0(v0:BasicObject):
-              PatchPoint MethodRedefined(Object@0x1000, foo@0x1008)
-              v6:BasicObject[VALUE(0x1010)] = GuardBitEquals v0, VALUE(0x1010)
-              v7:BasicObject = SendWithoutBlockDirect v6, :foo (0x1018)
+              PatchPoint MethodRedefined(Object@0x1000, foo@0x1008, cme:0x1010)
+              v6:BasicObject[VALUE(0x1038)] = GuardBitEquals v0, VALUE(0x1038)
+              v7:BasicObject = SendWithoutBlockDirect v6, :foo (0x1040)
               Return v7
         "#]]);
     }
@@ -5501,9 +5557,9 @@ mod opt_tests {
         assert_optimized_method_hir("test", expect![[r#"
             fn test@<compiled>:6:
             bb0(v0:BasicObject):
-              PatchPoint MethodRedefined(Object@0x1000, foo@0x1008)
-              v6:BasicObject[VALUE(0x1010)] = GuardBitEquals v0, VALUE(0x1010)
-              v7:BasicObject = SendWithoutBlockDirect v6, :foo (0x1018)
+              PatchPoint MethodRedefined(Object@0x1000, foo@0x1008, cme:0x1010)
+              v6:BasicObject[VALUE(0x1038)] = GuardBitEquals v0, VALUE(0x1038)
+              v7:BasicObject = SendWithoutBlockDirect v6, :foo (0x1040)
               Return v7
         "#]]);
     }
@@ -5520,9 +5576,9 @@ mod opt_tests {
             fn test@<compiled>:3:
             bb0(v0:BasicObject):
               v2:Fixnum[3] = Const Value(3)
-              PatchPoint MethodRedefined(Object@0x1000, Integer@0x1008)
-              v7:BasicObject[VALUE(0x1010)] = GuardBitEquals v0, VALUE(0x1010)
-              v8:BasicObject = SendWithoutBlockDirect v7, :Integer (0x1018), v2
+              PatchPoint MethodRedefined(Object@0x1000, Integer@0x1008, cme:0x1010)
+              v7:BasicObject[VALUE(0x1038)] = GuardBitEquals v0, VALUE(0x1038)
+              v8:BasicObject = SendWithoutBlockDirect v7, :Integer (0x1040), v2
               Return v8
         "#]]);
     }
@@ -5542,9 +5598,9 @@ mod opt_tests {
             bb0(v0:BasicObject):
               v2:Fixnum[1] = Const Value(1)
               v3:Fixnum[2] = Const Value(2)
-              PatchPoint MethodRedefined(Object@0x1000, foo@0x1008)
-              v8:BasicObject[VALUE(0x1010)] = GuardBitEquals v0, VALUE(0x1010)
-              v9:BasicObject = SendWithoutBlockDirect v8, :foo (0x1018), v2, v3
+              PatchPoint MethodRedefined(Object@0x1000, foo@0x1008, cme:0x1010)
+              v8:BasicObject[VALUE(0x1038)] = GuardBitEquals v0, VALUE(0x1038)
+              v9:BasicObject = SendWithoutBlockDirect v8, :foo (0x1040), v2, v3
               Return v9
         "#]]);
     }
@@ -5565,13 +5621,32 @@ mod opt_tests {
         assert_optimized_method_hir("test", expect![[r#"
             fn test@<compiled>:7:
             bb0(v0:BasicObject):
-              PatchPoint MethodRedefined(Object@0x1000, foo@0x1008)
-              v8:BasicObject[VALUE(0x1010)] = GuardBitEquals v0, VALUE(0x1010)
-              v9:BasicObject = SendWithoutBlockDirect v8, :foo (0x1018)
-              PatchPoint MethodRedefined(Object@0x1000, bar@0x1020)
-              v11:BasicObject[VALUE(0x1010)] = GuardBitEquals v0, VALUE(0x1010)
-              v12:BasicObject = SendWithoutBlockDirect v11, :bar (0x1018)
+              PatchPoint MethodRedefined(Object@0x1000, foo@0x1008, cme:0x1010)
+              v8:BasicObject[VALUE(0x1038)] = GuardBitEquals v0, VALUE(0x1038)
+              v9:BasicObject = SendWithoutBlockDirect v8, :foo (0x1040)
+              PatchPoint MethodRedefined(Object@0x1000, bar@0x1048, cme:0x1050)
+              v11:BasicObject[VALUE(0x1038)] = GuardBitEquals v0, VALUE(0x1038)
+              v12:BasicObject = SendWithoutBlockDirect v11, :bar (0x1040)
               Return v12
+        "#]]);
+    }
+
+    #[test]
+    fn test_dont_optimize_fixnum_add_if_redefined() {
+        eval("
+            class Integer
+              def +(other)
+                100
+              end
+            end
+            def test(a, b) = a + b
+            test(1,2); test(3,4)
+        ");
+        assert_optimized_method_hir("test", expect![[r#"
+            fn test@<compiled>:7:
+            bb0(v0:BasicObject, v1:BasicObject, v2:BasicObject):
+              v5:BasicObject = SendWithoutBlock v1, :+, v2
+              Return v5
         "#]]);
     }
 
@@ -6077,9 +6152,9 @@ mod opt_tests {
         assert_optimized_method_hir("test", expect![[r#"
             fn test@<compiled>:2:
             bb0(v0:BasicObject, v1:BasicObject):
-              PatchPoint MethodRedefined(Integer@0x1000, itself@0x1008)
+              PatchPoint MethodRedefined(Integer@0x1000, itself@0x1008, cme:0x1010)
               v7:Fixnum = GuardType v1, Fixnum
-              v8:BasicObject = CCall itself@0x1010, v7
+              v8:BasicObject = CCall itself@0x1038, v7
               Return v8
         "#]]);
     }
@@ -6093,8 +6168,8 @@ mod opt_tests {
             fn test@<compiled>:2:
             bb0(v0:BasicObject):
               v3:ArrayExact = NewArray
-              PatchPoint MethodRedefined(Array@0x1000, itself@0x1008)
-              v8:BasicObject = CCall itself@0x1010, v3
+              PatchPoint MethodRedefined(Array@0x1000, itself@0x1008, cme:0x1010)
+              v8:BasicObject = CCall itself@0x1038, v3
               Return v8
         "#]]);
     }
@@ -6112,7 +6187,7 @@ mod opt_tests {
             bb0(v0:BasicObject):
               v1:NilClassExact = Const Value(nil)
               v4:ArrayExact = NewArray
-              PatchPoint MethodRedefined(Array@0x1000, itself@0x1008)
+              PatchPoint MethodRedefined(Array@0x1000, itself@0x1008, cme:0x1010)
               v7:Fixnum[1] = Const Value(1)
               Return v7
         "#]]);
@@ -6135,7 +6210,7 @@ mod opt_tests {
               PatchPoint SingleRactorMode
               PatchPoint StableConstantNames(0x1000, M)
               v11:ModuleExact[VALUE(0x1008)] = Const Value(VALUE(0x1008))
-              PatchPoint MethodRedefined(Module@0x1010, name@0x1018)
+              PatchPoint MethodRedefined(Module@0x1010, name@0x1018, cme:0x1020)
               v7:Fixnum[1] = Const Value(1)
               Return v7
         "#]]);
@@ -6154,7 +6229,7 @@ mod opt_tests {
             bb0(v0:BasicObject):
               v1:NilClassExact = Const Value(nil)
               v4:ArrayExact = NewArray
-              PatchPoint MethodRedefined(Array@0x1000, length@0x1008)
+              PatchPoint MethodRedefined(Array@0x1000, length@0x1008, cme:0x1010)
               v7:Fixnum[5] = Const Value(5)
               Return v7
         "#]]);
@@ -6254,7 +6329,7 @@ mod opt_tests {
             bb0(v0:BasicObject):
               v1:NilClassExact = Const Value(nil)
               v4:ArrayExact = NewArray
-              PatchPoint MethodRedefined(Array@0x1000, size@0x1008)
+              PatchPoint MethodRedefined(Array@0x1000, size@0x1008, cme:0x1010)
               v7:Fixnum[5] = Const Value(5)
               Return v7
         "#]]);
@@ -6287,8 +6362,8 @@ mod opt_tests {
             fn test@<compiled>:2:
             bb0(v0:BasicObject, v1:BasicObject):
               v3:Fixnum[1] = Const Value(1)
-              PatchPoint MethodRedefined(Integer@0x1000, zero?@0x1008)
-              v8:BasicObject = SendWithoutBlockDirect v3, :zero? (0x1010)
+              PatchPoint MethodRedefined(Integer@0x1000, zero?@0x1008, cme:0x1010)
+              v8:BasicObject = SendWithoutBlockDirect v3, :zero? (0x1038)
               Return v8
         "#]]);
     }
@@ -6307,9 +6382,111 @@ mod opt_tests {
               v2:NilClassExact = Const Value(nil)
               v4:ArrayExact[VALUE(0x1000)] = Const Value(VALUE(0x1000))
               v6:ArrayExact = ArrayDup v4
-              PatchPoint MethodRedefined(Array@0x1008, first@0x1010)
-              v11:BasicObject = SendWithoutBlockDirect v6, :first (0x1018)
+              PatchPoint MethodRedefined(Array@0x1008, first@0x1010, cme:0x1018)
+              v11:BasicObject = SendWithoutBlockDirect v6, :first (0x1040)
               Return v11
+        "#]]);
+    }
+
+    #[test]
+    fn send_direct_to_module() {
+        eval("
+            module M; end
+            def test = M.class
+            test
+            test
+        ");
+        assert_optimized_method_hir("test", expect![[r#"
+            fn test@<compiled>:3:
+            bb0(v0:BasicObject):
+              PatchPoint SingleRactorMode
+              PatchPoint StableConstantNames(0x1000, M)
+              v9:ModuleExact[VALUE(0x1008)] = Const Value(VALUE(0x1008))
+              PatchPoint MethodRedefined(Module@0x1010, class@0x1018, cme:0x1020)
+              v11:BasicObject = SendWithoutBlockDirect v9, :class (0x1048)
+              Return v11
+        "#]]);
+    }
+
+    #[test]
+    fn dont_specialize_call_to_iseq_with_opt() {
+        eval("
+            def foo(arg=1) = 1
+            def test = foo 1
+            test
+            test
+        ");
+        assert_optimized_method_hir("test", expect![[r#"
+            fn test@<compiled>:3:
+            bb0(v0:BasicObject):
+              v2:Fixnum[1] = Const Value(1)
+              v4:BasicObject = SendWithoutBlock v0, :foo, v2
+              Return v4
+        "#]]);
+    }
+
+    #[test]
+    fn dont_specialize_call_to_iseq_with_block() {
+        eval("
+            def foo(&block) = 1
+            def test = foo {|| }
+            test
+            test
+        ");
+        assert_optimized_method_hir("test", expect![[r#"
+            fn test@<compiled>:3:
+            bb0(v0:BasicObject):
+              v3:BasicObject = Send v0, 0x1000, :foo
+              Return v3
+        "#]]);
+    }
+
+    #[test]
+    fn dont_specialize_call_to_iseq_with_rest() {
+        eval("
+            def foo(*args) = 1
+            def test = foo 1
+            test
+            test
+        ");
+        assert_optimized_method_hir("test", expect![[r#"
+            fn test@<compiled>:3:
+            bb0(v0:BasicObject):
+              v2:Fixnum[1] = Const Value(1)
+              v4:BasicObject = SendWithoutBlock v0, :foo, v2
+              Return v4
+        "#]]);
+    }
+
+    #[test]
+    fn dont_specialize_call_to_iseq_with_kw() {
+        eval("
+            def foo(a:) = 1
+            def test = foo(a: 1)
+            test
+            test
+        ");
+        assert_optimized_method_hir("test", expect![[r#"
+            fn test@<compiled>:3:
+            bb0(v0:BasicObject):
+              v2:Fixnum[1] = Const Value(1)
+              SideExit UnknownCallType
+        "#]]);
+    }
+
+    #[test]
+    fn dont_specialize_call_to_iseq_with_kwrest() {
+        eval("
+            def foo(**args) = 1
+            def test = foo(a: 1)
+            test
+            test
+        ");
+        assert_optimized_method_hir("test", expect![[r#"
+            fn test@<compiled>:3:
+            bb0(v0:BasicObject):
+              v2:Fixnum[1] = Const Value(1)
+              SideExit UnknownCallType
         "#]]);
     }
 
@@ -6325,8 +6502,8 @@ mod opt_tests {
             bb0(v0:BasicObject):
               v2:StringExact[VALUE(0x1000)] = Const Value(VALUE(0x1000))
               v3:StringExact = StringCopy v2
-              PatchPoint MethodRedefined(String@0x1008, bytesize@0x1010)
-              v8:Fixnum = CCall bytesize@0x1018, v3
+              PatchPoint MethodRedefined(String@0x1008, bytesize@0x1010, cme:0x1018)
+              v8:Fixnum = CCall bytesize@0x1040, v3
               Return v8
         "#]]);
     }
@@ -6449,8 +6626,8 @@ mod opt_tests {
             fn test@<compiled>:2:
             bb0(v0:BasicObject, v1:BasicObject, v2:BasicObject):
               v5:ArrayExact = NewArray v1, v2
-              PatchPoint MethodRedefined(Array@0x1000, length@0x1008)
-              v10:Fixnum = CCall length@0x1010, v5
+              PatchPoint MethodRedefined(Array@0x1000, length@0x1008, cme:0x1010)
+              v10:Fixnum = CCall length@0x1038, v5
               Return v10
         "#]]);
     }
@@ -6464,8 +6641,8 @@ mod opt_tests {
             fn test@<compiled>:2:
             bb0(v0:BasicObject, v1:BasicObject, v2:BasicObject):
               v5:ArrayExact = NewArray v1, v2
-              PatchPoint MethodRedefined(Array@0x1000, size@0x1008)
-              v10:Fixnum = CCall size@0x1010, v5
+              PatchPoint MethodRedefined(Array@0x1000, size@0x1008, cme:0x1010)
+              v10:Fixnum = CCall size@0x1038, v5
               Return v10
         "#]]);
     }
@@ -6508,6 +6685,23 @@ mod opt_tests {
               v3:HashExact[VALUE(0x1000)] = Const Value(VALUE(0x1000))
               PatchPoint BOPRedefined(HASH_REDEFINED_OP_FLAG, BOP_FREEZE)
               Return v3
+        "#]]);
+    }
+
+    #[test]
+    fn test_dont_optimize_hash_freeze_if_redefined() {
+        eval("
+            class Hash
+              def freeze; end
+            end
+            def test = {}.freeze
+        ");
+        assert_optimized_method_hir("test",  expect![[r#"
+            fn test@<compiled>:5:
+            bb0(v0:BasicObject):
+              v3:HashExact[VALUE(0x1000)] = Const Value(VALUE(0x1000))
+              v4:BasicObject = SendWithoutBlock v3, :freeze
+              Return v4
         "#]]);
     }
 
@@ -6782,8 +6976,8 @@ mod opt_tests {
             fn test@<compiled>:3:
             bb0(v0:BasicObject):
               v3:Fixnum[1] = Const Value(1)
-              PatchPoint MethodRedefined(Integer@0x1000, itself@0x1008)
-              v15:BasicObject = CCall itself@0x1010, v3
+              PatchPoint MethodRedefined(Integer@0x1000, itself@0x1008, cme:0x1010)
+              v15:BasicObject = CCall itself@0x1038, v3
               Return v15
         "#]]);
     }
@@ -6857,6 +7051,44 @@ mod opt_tests {
     }
 
     #[test]
+    fn test_dont_optimize_array_aref_if_redefined() {
+        eval(r##"
+            class Array
+              def [](index); end
+            end
+            def test = [4,5,6].freeze[10]
+        "##);
+        assert_optimized_method_hir("test", expect![[r#"
+            fn test@<compiled>:5:
+            bb0(v0:BasicObject):
+              v3:ArrayExact[VALUE(0x1000)] = Const Value(VALUE(0x1000))
+              PatchPoint BOPRedefined(ARRAY_REDEFINED_OP_FLAG, BOP_FREEZE)
+              v5:Fixnum[10] = Const Value(10)
+              v7:BasicObject = SendWithoutBlock v3, :[], v5
+              Return v7
+        "#]]);
+    }
+
+    #[test]
+    fn test_dont_optimize_array_max_if_redefined() {
+        eval(r##"
+            class Array
+              def max = 10
+            end
+            def test = [4,5,6].max
+        "##);
+        assert_optimized_method_hir("test", expect![[r#"
+            fn test@<compiled>:5:
+            bb0(v0:BasicObject):
+              v2:ArrayExact[VALUE(0x1000)] = Const Value(VALUE(0x1000))
+              v4:ArrayExact = ArrayDup v2
+              PatchPoint MethodRedefined(Array@0x1008, max@0x1010, cme:0x1018)
+              v9:BasicObject = SendWithoutBlockDirect v4, :max (0x1040)
+              Return v9
+        "#]]);
+    }
+
+    #[test]
     fn test_set_type_from_constant() {
         eval("
             MY_SET = Set.new
@@ -6898,8 +7130,8 @@ mod opt_tests {
             fn test@<compiled>:2:
             bb0(v0:BasicObject):
               v2:NilClassExact = Const Value(nil)
-              PatchPoint MethodRedefined(NilClass@0x1000, nil?@0x1008)
-              v7:TrueClassExact = CCall nil?@0x1010, v2
+              PatchPoint MethodRedefined(NilClass@0x1000, nil?@0x1008, cme:0x1010)
+              v7:TrueClassExact = CCall nil?@0x1038, v2
               Return v7
         "#]]);
     }
@@ -6916,7 +7148,7 @@ mod opt_tests {
             fn test@<compiled>:3:
             bb0(v0:BasicObject):
               v2:NilClassExact = Const Value(nil)
-              PatchPoint MethodRedefined(NilClass@0x1000, nil?@0x1008)
+              PatchPoint MethodRedefined(NilClass@0x1000, nil?@0x1008, cme:0x1010)
               v5:Fixnum[1] = Const Value(1)
               Return v5
         "#]]);
@@ -6931,8 +7163,8 @@ mod opt_tests {
             fn test@<compiled>:2:
             bb0(v0:BasicObject):
               v2:Fixnum[1] = Const Value(1)
-              PatchPoint MethodRedefined(Integer@0x1000, nil?@0x1008)
-              v7:FalseClassExact = CCall nil?@0x1010, v2
+              PatchPoint MethodRedefined(Integer@0x1000, nil?@0x1008, cme:0x1010)
+              v7:FalseClassExact = CCall nil?@0x1038, v2
               Return v7
         "#]]);
     }
@@ -6949,7 +7181,7 @@ mod opt_tests {
             fn test@<compiled>:3:
             bb0(v0:BasicObject):
               v2:Fixnum[1] = Const Value(1)
-              PatchPoint MethodRedefined(Integer@0x1000, nil?@0x1008)
+              PatchPoint MethodRedefined(Integer@0x1000, nil?@0x1008, cme:0x1010)
               v5:Fixnum[2] = Const Value(2)
               Return v5
         "#]]);
@@ -6965,9 +7197,9 @@ mod opt_tests {
         assert_optimized_method_hir("test", expect![[r#"
             fn test@<compiled>:2:
             bb0(v0:BasicObject, v1:BasicObject):
-              PatchPoint MethodRedefined(NilClass@0x1000, nil?@0x1008)
+              PatchPoint MethodRedefined(NilClass@0x1000, nil?@0x1008, cme:0x1010)
               v7:NilClassExact = GuardType v1, NilClassExact
-              v8:TrueClassExact = CCall nil?@0x1010, v7
+              v8:TrueClassExact = CCall nil?@0x1038, v7
               Return v8
         "#]]);
     }
@@ -6982,9 +7214,9 @@ mod opt_tests {
         assert_optimized_method_hir("test", expect![[r#"
             fn test@<compiled>:2:
             bb0(v0:BasicObject, v1:BasicObject):
-              PatchPoint MethodRedefined(FalseClass@0x1000, nil?@0x1008)
+              PatchPoint MethodRedefined(FalseClass@0x1000, nil?@0x1008, cme:0x1010)
               v7:FalseClassExact = GuardType v1, FalseClassExact
-              v8:FalseClassExact = CCall nil?@0x1010, v7
+              v8:FalseClassExact = CCall nil?@0x1038, v7
               Return v8
         "#]]);
     }
@@ -6999,9 +7231,9 @@ mod opt_tests {
         assert_optimized_method_hir("test", expect![[r#"
             fn test@<compiled>:2:
             bb0(v0:BasicObject, v1:BasicObject):
-              PatchPoint MethodRedefined(TrueClass@0x1000, nil?@0x1008)
+              PatchPoint MethodRedefined(TrueClass@0x1000, nil?@0x1008, cme:0x1010)
               v7:TrueClassExact = GuardType v1, TrueClassExact
-              v8:FalseClassExact = CCall nil?@0x1010, v7
+              v8:FalseClassExact = CCall nil?@0x1038, v7
               Return v8
         "#]]);
     }
@@ -7016,9 +7248,9 @@ mod opt_tests {
         assert_optimized_method_hir("test", expect![[r#"
             fn test@<compiled>:2:
             bb0(v0:BasicObject, v1:BasicObject):
-              PatchPoint MethodRedefined(Symbol@0x1000, nil?@0x1008)
+              PatchPoint MethodRedefined(Symbol@0x1000, nil?@0x1008, cme:0x1010)
               v7:StaticSymbol = GuardType v1, StaticSymbol
-              v8:FalseClassExact = CCall nil?@0x1010, v7
+              v8:FalseClassExact = CCall nil?@0x1038, v7
               Return v8
         "#]]);
     }
@@ -7033,9 +7265,9 @@ mod opt_tests {
         assert_optimized_method_hir("test", expect![[r#"
             fn test@<compiled>:2:
             bb0(v0:BasicObject, v1:BasicObject):
-              PatchPoint MethodRedefined(Integer@0x1000, nil?@0x1008)
+              PatchPoint MethodRedefined(Integer@0x1000, nil?@0x1008, cme:0x1010)
               v7:Fixnum = GuardType v1, Fixnum
-              v8:FalseClassExact = CCall nil?@0x1010, v7
+              v8:FalseClassExact = CCall nil?@0x1038, v7
               Return v8
         "#]]);
     }
@@ -7050,9 +7282,9 @@ mod opt_tests {
         assert_optimized_method_hir("test", expect![[r#"
             fn test@<compiled>:2:
             bb0(v0:BasicObject, v1:BasicObject):
-              PatchPoint MethodRedefined(Float@0x1000, nil?@0x1008)
+              PatchPoint MethodRedefined(Float@0x1000, nil?@0x1008, cme:0x1010)
               v7:Flonum = GuardType v1, Flonum
-              v8:FalseClassExact = CCall nil?@0x1010, v7
+              v8:FalseClassExact = CCall nil?@0x1038, v7
               Return v8
         "#]]);
     }
@@ -7067,9 +7299,9 @@ mod opt_tests {
         assert_optimized_method_hir("test", expect![[r#"
             fn test@<compiled>:2:
             bb0(v0:BasicObject, v1:BasicObject):
-              PatchPoint MethodRedefined(String@0x1000, nil?@0x1008)
+              PatchPoint MethodRedefined(String@0x1000, nil?@0x1008, cme:0x1010)
               v7:StringExact = GuardType v1, StringExact
-              v8:FalseClassExact = CCall nil?@0x1010, v7
+              v8:FalseClassExact = CCall nil?@0x1038, v7
               Return v8
         "#]]);
     }
@@ -7107,6 +7339,25 @@ mod opt_tests {
               v9:Fixnum = GuardType v2, Fixnum
               v10:Fixnum = FixnumOr v8, v9
               Return v10
+        "#]]);
+    }
+
+    #[test]
+    fn test_method_redefinition_patch_point_on_top_level_method() {
+        eval("
+            def foo; end
+            def test = foo
+
+            test; test
+        ");
+
+        assert_optimized_method_hir("test", expect![[r#"
+            fn test@<compiled>:3:
+            bb0(v0:BasicObject):
+              PatchPoint MethodRedefined(Object@0x1000, foo@0x1008, cme:0x1010)
+              v6:BasicObject[VALUE(0x1038)] = GuardBitEquals v0, VALUE(0x1038)
+              v7:BasicObject = SendWithoutBlockDirect v6, :foo (0x1040)
+              Return v7
         "#]]);
     }
 }

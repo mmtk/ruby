@@ -590,8 +590,8 @@ assert_equal 'true', %q{
   r.value[:frozen]
 }
 
-# Access to global-variables are prohibited
-assert_equal 'can not access global variables $gv from non-main Ractors', %q{
+# Access to global-variables are prohibited (read)
+assert_equal 'can not access global variable $gv from non-main Ractor', %q{
   $gv = 1
   r = Ractor.new do
     $gv
@@ -604,8 +604,8 @@ assert_equal 'can not access global variables $gv from non-main Ractors', %q{
   end
 }
 
-# Access to global-variables are prohibited
-assert_equal 'can not access global variables $gv from non-main Ractors', %q{
+# Access to global-variables are prohibited (write)
+assert_equal 'can not access global variable $gv from non-main Ractor', %q{
   r = Ractor.new do
     $gv = 1
   end
@@ -1457,11 +1457,19 @@ assert_equal "ok", %q{
       loop do
         10_000.times.map { Object.new }
         port << Time.now
+        Ractor.receive
       end
     end
   end
 
-  1_000.times { port.receive }
+  100.times {
+    workers.each do
+      port.receive
+    end
+    workers.each do |w|
+      w.send(nil)
+    end
+  }
   "ok"
 } if !yjit_enabled? && ENV['GITHUB_WORKFLOW'] != 'ModGC' # flaky
 

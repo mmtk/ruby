@@ -1,13 +1,14 @@
 use std::cell::Cell;
 use std::rc::Rc;
+use std::ffi::{c_int};
 
 use crate::asm::Label;
 use crate::backend::current::{Reg, ALLOC_REGS};
-use crate::invariants::track_bop_assumption;
-use crate::gc::get_or_create_iseq_payload;
+use crate::invariants::{track_bop_assumption, track_cme_assumption};
+use crate::gc::{get_or_create_iseq_payload, append_gc_offsets};
 use crate::state::ZJITState;
 use crate::{asm::CodeBlock, cruby::*, options::debug, virtualmem::CodePtr};
-use crate::backend::lir::{self, asm_comment, Assembler, Opnd, Target, CFP, C_ARG_OPNDS, C_RET_OPND, EC, NATIVE_STACK_PTR, SP};
+use crate::backend::lir::{self, asm_comment, asm_ccall, Assembler, Opnd, SideExitContext, Target, CFP, C_ARG_OPNDS, C_RET_OPND, EC, NATIVE_STACK_PTR, SP};
 use crate::hir::{iseq_to_hir, Block, BlockId, BranchEdge, CallInfo, Invariant, RangeType, SideExitReason, SideExitReason::*, SpecialObjectType, SELF_PARAM_IDX};
 use crate::hir::{Const, FrameState, Function, Insn, InsnId};
 use crate::hir_type::{types::Fixnum, Type};
@@ -96,8 +97,22 @@ pub extern "C" fn rb_zjit_iseq_gen_entry_point(iseq: IseqPtr, _ec: EcPtr) -> *co
     code_ptr
 }
 
-/// Compile an entry point for a given ISEQ
+/// See [gen_iseq_entry_point_body]. This wrapper is to make sure cb.mark_all_executable()
+/// is called even if gen_iseq_entry_point_body() partially fails and returns a null pointer.
 fn gen_iseq_entry_point(iseq: IseqPtr) -> *const u8 {
+    let cb = ZJITState::get_code_block();
+    let code_ptr = gen_iseq_entry_point_body(cb, iseq);
+
+    // Always mark the code region executable if asm.compile() has been used.
+    // We need to do this even if code_ptr is null because, whether gen_entry()
+    // or gen_iseq() fails or not, gen_function() has already used asm.compile().
+    cb.mark_all_executable();
+
+    code_ptr
+}
+
+/// Compile an entry point for a given ISEQ
+fn gen_iseq_entry_point_body(cb: &mut CodeBlock, iseq: IseqPtr) -> *const u8 {
     // Compile ISEQ into High-level IR
     let function = match compile_iseq(iseq) {
         Some(function) => function,
@@ -105,16 +120,15 @@ fn gen_iseq_entry_point(iseq: IseqPtr) -> *const u8 {
     };
 
     // Compile the High-level IR
-    let cb = ZJITState::get_code_block();
     let (start_ptr, mut branch_iseqs) = match gen_function(cb, iseq, &function) {
-        Some((start_ptr, gc_offsets, branch_iseqs)) => {
+        Some((start_ptr, gc_offsets, jit)) => {
             // Remember the block address to reuse it later
             let payload = get_or_create_iseq_payload(iseq);
             payload.start_ptr = Some(start_ptr);
-            payload.gc_offsets.extend(gc_offsets);
+            append_gc_offsets(iseq, &gc_offsets);
 
             // Compile an entry point to the JIT code
-            (gen_entry(cb, iseq, &function, start_ptr), branch_iseqs)
+            (gen_entry(cb, iseq, &function, start_ptr, jit.c_stack_bytes), jit.branch_iseqs)
         },
         None => (None, vec![]),
     };
@@ -137,36 +151,53 @@ fn gen_iseq_entry_point(iseq: IseqPtr) -> *const u8 {
         }
     }
 
-    // Always mark the code region executable if asm.compile() has been used
-    cb.mark_all_executable();
-
     // Return a JIT code address or a null pointer
     start_ptr.map(|start_ptr| start_ptr.raw_ptr(cb)).unwrap_or(std::ptr::null())
 }
 
+/// Write an entry to the perf map in /tmp
+fn register_with_perf(iseq_name: String, start_ptr: usize, code_size: usize) {
+    use std::io::Write;
+    let perf_map = format!("/tmp/perf-{}.map", std::process::id());
+    let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&perf_map) else {
+        debug!("Failed to open perf map file: {perf_map}");
+        return;
+    };
+    let Ok(_) = writeln!(file, "{:#x} {:#x} zjit::{}", start_ptr, code_size, iseq_name) else {
+        debug!("Failed to write {iseq_name} to perf map file: {perf_map}");
+        return;
+    };
+}
+
 /// Compile a JIT entry
-fn gen_entry(cb: &mut CodeBlock, iseq: IseqPtr, function: &Function, function_ptr: CodePtr) -> Option<CodePtr> {
+fn gen_entry(cb: &mut CodeBlock, iseq: IseqPtr, function: &Function, function_ptr: CodePtr, c_stack_bytes: usize) -> Option<CodePtr> {
     // Set up registers for CFP, EC, SP, and basic block arguments
     let mut asm = Assembler::new();
     gen_entry_prologue(&mut asm, iseq);
-    gen_entry_params(&mut asm, iseq, function.block(BlockId(0)));
+    gen_entry_params(&mut asm, iseq, function.block(BlockId(0)), c_stack_bytes);
 
     // Jump to the first block using a call instruction
     asm.ccall(function_ptr.raw_ptr(cb) as *const u8, vec![]);
 
     // Restore registers for CFP, EC, and SP after use
     asm_comment!(asm, "exit to the interpreter");
-    // On x86_64, maintain 16-byte stack alignment
-    if cfg!(target_arch = "x86_64") {
-        asm.cpop_into(SP);
-    }
     asm.cpop_into(SP);
     asm.cpop_into(EC);
     asm.cpop_into(CFP);
     asm.frame_teardown();
     asm.cret(C_RET_OPND);
 
-    asm.compile(cb).map(|(start_ptr, _)| start_ptr)
+    let result = asm.compile(cb).map(|(start_ptr, _)| start_ptr);
+    if let Some(start_addr) = result {
+        if get_option!(perf) {
+            let start_ptr = start_addr.raw_ptr(cb) as usize;
+            let end_ptr = cb.get_write_ptr().raw_ptr(cb) as usize;
+            let code_size = end_ptr - start_ptr;
+            let iseq_name = iseq_get_location(iseq, 0);
+            register_with_perf(format!("entry for {iseq_name}"), start_ptr, code_size);
+        }
+    }
+    result
 }
 
 /// Compile an ISEQ into machine code
@@ -185,17 +216,17 @@ fn gen_iseq(cb: &mut CodeBlock, iseq: IseqPtr) -> Option<(CodePtr, Vec<(Rc<Branc
 
     // Compile the High-level IR
     let result = gen_function(cb, iseq, &function);
-    if let Some((start_ptr, gc_offsets, branch_iseqs)) = result {
+    if let Some((start_ptr, gc_offsets, jit)) = result {
         payload.start_ptr = Some(start_ptr);
-        payload.gc_offsets.extend(gc_offsets);
-        Some((start_ptr, branch_iseqs))
+        append_gc_offsets(iseq, &gc_offsets);
+        Some((start_ptr, jit.branch_iseqs))
     } else {
         None
     }
 }
 
 /// Compile a function
-fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, function: &Function) -> Option<(CodePtr, Vec<CodePtr>, Vec<(Rc<Branch>, IseqPtr)>)> {
+fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, function: &Function) -> Option<(CodePtr, Vec<CodePtr>, JITState)> {
     let c_stack_bytes = aligned_stack_bytes(max_num_params(function).saturating_sub(ALLOC_REGS.len()));
     let mut jit = JITState::new(iseq, function.num_insns(), function.num_blocks(), c_stack_bytes);
     let mut asm = Assembler::new();
@@ -249,7 +280,17 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, function: &Function) -> Optio
     }
 
     // Generate code if everything can be compiled
-    asm.compile(cb).map(|(start_ptr, gc_offsets)| (start_ptr, gc_offsets, jit.branch_iseqs))
+    let result = asm.compile(cb).map(|(start_ptr, gc_offsets)| (start_ptr, gc_offsets, jit));
+    if let Some((start_ptr, _, _)) = result {
+        if get_option!(perf) {
+            let start_usize = start_ptr.raw_ptr(cb) as usize;
+            let end_usize = cb.get_write_ptr().raw_ptr(cb) as usize;
+            let code_size = end_usize - start_usize;
+            let iseq_name = iseq_get_location(iseq, 0);
+            register_with_perf(iseq_name, start_usize, code_size);
+        }
+    }
+    result
 }
 
 /// Compile an instruction
@@ -285,6 +326,9 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         Insn::IfTrue { val, target } => return gen_if_true(jit, asm, opnd!(val), target),
         Insn::IfFalse { val, target } => return gen_if_false(jit, asm, opnd!(val), target),
         Insn::SendWithoutBlock { call_info, cd, state, self_val, args, .. } => gen_send_without_block(jit, asm, call_info, *cd, &function.frame_state(*state), opnd!(self_val), opnds!(args))?,
+        // Give up SendWithoutBlockDirect for 6+ args since asm.ccall() doesn't support it.
+        Insn::SendWithoutBlockDirect { call_info, cd, state, self_val, args, .. } if args.len() + 1 > C_ARG_OPNDS.len() => // +1 for self
+            gen_send_without_block(jit, asm, call_info, *cd, &function.frame_state(*state), opnd!(self_val), opnds!(args))?,
         Insn::SendWithoutBlockDirect { cme, iseq, self_val, args, state, .. } => gen_send_without_block_direct(cb, jit, asm, *cme, *iseq, opnd!(self_val), opnds!(args), &function.frame_state(*state))?,
         Insn::InvokeBuiltin { bf, args, state } => gen_invokebuiltin(asm, &function.frame_state(*state), bf, opnds!(args))?,
         Insn::Return { val } => return Some(gen_return(jit, asm, opnd!(val))?),
@@ -403,8 +447,20 @@ fn gen_getlocal_with_ep(asm: &mut Assembler, local_ep_offset: u32, level: u32) -
 /// can't optimize the level=0 case using the SP register.
 fn gen_setlocal_with_ep(asm: &mut Assembler, val: Opnd, local_ep_offset: u32, level: u32) -> Option<()> {
     let ep = gen_get_ep(asm, level);
-    let offset = -(SIZEOF_VALUE_I32 * i32::try_from(local_ep_offset).ok()?);
-    asm.mov(Opnd::mem(64, ep, offset), val);
+    match val {
+        // If we're writing a constant, non-heap VALUE, do a raw memory write without
+        // running write barrier.
+        lir::Opnd::Value(const_val) if const_val.special_const_p() => {
+            let offset = -(SIZEOF_VALUE_I32 * i32::try_from(local_ep_offset).ok()?);
+            asm.mov(Opnd::mem(64, ep, offset), val);
+        }
+        // We're potentially writing a reference to an IMEMO/env object,
+        // so take care of the write barrier with a function.
+        _ => {
+            let local_index = c_int::try_from(local_ep_offset).ok().and_then(|idx| idx.checked_mul(-1))?;
+            asm_ccall!(asm, rb_vm_env_write, ep, local_index.into(), val);
+        }
+    }
     Some(())
 }
 
@@ -416,11 +472,7 @@ fn gen_get_constant_path(asm: &mut Assembler, ic: *const iseq_inline_constant_ca
     // Save PC since the call can allocate an IC
     gen_save_pc(asm, state);
 
-    let val = asm.ccall(
-        rb_vm_opt_getconstant_path as *const u8,
-        vec![EC, CFP, Opnd::const_ptr(ic as *const u8)],
-    );
-    val
+    asm_ccall!(asm, rb_vm_opt_getconstant_path, EC, CFP, Opnd::const_ptr(ic))
 }
 
 fn gen_invokebuiltin(asm: &mut Assembler, state: &FrameState, bf: &rb_builtin_function, args: Vec<Opnd>) -> Option<lir::Opnd> {
@@ -455,6 +507,10 @@ fn gen_patch_point(jit: &mut JITState, asm: &mut Assembler, invariant: &Invarian
                 let side_exit_ptr = cb.resolve_label(label);
                 track_bop_assumption(klass, bop, code_ptr, side_exit_ptr);
             }
+            Invariant::MethodRedefined { klass: _, method: _, cme } => {
+                let side_exit_ptr = cb.resolve_label(label);
+                track_cme_assumption(cme, code_ptr, side_exit_ptr);
+            }
             _ => {
                 debug!("ZJIT: gen_patch_point: unimplemented invariant {invariant:?}");
                 return;
@@ -472,36 +528,23 @@ fn gen_ccall(asm: &mut Assembler, cfun: *const u8, args: Vec<Opnd>) -> Option<li
 
 /// Emit an uncached instance variable lookup
 fn gen_getivar(asm: &mut Assembler, recv: Opnd, id: ID) -> Opnd {
-    asm_comment!(asm, "call rb_ivar_get");
-    asm.ccall(
-        rb_ivar_get as *const u8,
-        vec![recv, Opnd::UImm(id.0)],
-    )
+    asm_ccall!(asm, rb_ivar_get, recv, id.0.into())
 }
 
 /// Emit an uncached instance variable store
 fn gen_setivar(asm: &mut Assembler, recv: Opnd, id: ID, val: Opnd) -> Option<()> {
-    asm_comment!(asm, "call rb_ivar_set");
-    asm.ccall(
-        rb_ivar_set as *const u8,
-        vec![recv, Opnd::UImm(id.0), val],
-    );
+    asm_ccall!(asm, rb_ivar_set, recv, id.0.into(), val);
     Some(())
 }
 
 /// Look up global variables
 fn gen_getglobal(asm: &mut Assembler, id: ID) -> Opnd {
-    asm_comment!(asm, "call rb_gvar_get");
-    asm.ccall(
-        rb_gvar_get as *const u8,
-        vec![Opnd::UImm(id.0)],
-    )
+    asm_ccall!(asm, rb_gvar_get, id.0.into())
 }
 
 /// Set global variables
 fn gen_setglobal(asm: &mut Assembler, id: ID, val: Opnd) {
-    asm_comment!(asm, "call rb_gvar_set");
-    asm.ccall(rb_gvar_set as *const u8, vec![Opnd::UImm(id.0), val]);
+    asm_ccall!(asm, rb_gvar_set, id.0.into(), val);
 }
 
 /// Side-exit into the interpreter
@@ -516,11 +559,7 @@ fn gen_putspecialobject(asm: &mut Assembler, value_type: SpecialObjectType) -> O
     let ep_opnd = Opnd::mem(64, CFP, RUBY_OFFSET_CFP_EP);
     let ep_reg = asm.load(ep_opnd);
 
-    asm_comment!(asm, "call rb_vm_get_special_object");
-    asm.ccall(
-        rb_vm_get_special_object as *const u8,
-        vec![ep_reg, Opnd::UImm(u64::from(value_type))],
-    )
+    asm_ccall!(asm, rb_vm_get_special_object, ep_reg, Opnd::UImm(u64::from(value_type)))
 }
 
 /// Compile an interpreter entry block to be inserted into an ISEQ
@@ -532,10 +571,6 @@ fn gen_entry_prologue(asm: &mut Assembler, iseq: IseqPtr) {
     asm.cpush(CFP);
     asm.cpush(EC);
     asm.cpush(SP);
-    // On x86_64, maintain 16-byte stack alignment
-    if cfg!(target_arch = "x86_64") {
-        asm.cpush(SP);
-    }
 
     // EC and CFP are passed as arguments
     asm.mov(EC, C_ARG_OPNDS[0]);
@@ -548,7 +583,7 @@ fn gen_entry_prologue(asm: &mut Assembler, iseq: IseqPtr) {
 }
 
 /// Assign method arguments to basic block arguments at JIT entry
-fn gen_entry_params(asm: &mut Assembler, iseq: IseqPtr, entry_block: &Block) {
+fn gen_entry_params(asm: &mut Assembler, iseq: IseqPtr, entry_block: &Block, c_stack_bytes: usize) {
     let self_param = gen_param(asm, SELF_PARAM_IDX);
     asm.mov(self_param, Opnd::mem(VALUE_BITS, CFP, RUBY_OFFSET_CFP_SELF));
 
@@ -557,14 +592,34 @@ fn gen_entry_params(asm: &mut Assembler, iseq: IseqPtr, entry_block: &Block) {
         asm_comment!(asm, "set method params: {num_params}");
 
         // Allocate registers for basic block arguments
-        let params: Vec<Opnd> = (0..num_params).map(|idx|
-            gen_param(asm, idx + 1) // +1 for self
-        ).collect();
+        for idx in 0..num_params {
+            let param = gen_param(asm, idx + 1); // +1 for self
 
-        // Assign local variables to the basic block arguments
-        for (idx, &param) in params.iter().enumerate() {
+            // Funky offset adjustment to write into the native stack frame of the
+            // HIR function we'll be calling into. This only makes sense in context
+            // of the schedule of instructions in gen_entry() for the JIT entry point.
+            //
+            // The entry point needs to load VALUEs into native stack slots _before_ the
+            // frame containing the slots exists. So, we anticipate the stack frame size
+            // of the Function and subtract offsets based on that.
+            //
+            // native SP at entry point ─────►┌────────────┐   Native SP grows downwards
+            //                                │            │ ↓ on all arches we support.
+            //                         SP-0x8 ├────────────┤
+            //                                │            │
+            // where native SP         SP-0x10├────────────┤
+            // would be while                 │            │
+            // the HIR function ────────────► └────────────┘
+            // is running
+            let param = if let Opnd::Mem(lir::Mem { base, disp, num_bits }) = param {
+                Opnd::Mem(lir::Mem { num_bits, base, disp: disp - c_stack_bytes as i32 - Assembler::frame_size() })
+            } else {
+                param
+            };
+
+            // Assign local variables to the basic block arguments
             let local = gen_entry_param(asm, iseq, idx);
-            asm.load_into(param, local);
+            asm.mov(param, local);
         }
     }
 }
@@ -783,7 +838,8 @@ fn gen_send_without_block_direct(
     // TODO: Let side exit code pop all JIT frames to optimize away this cmp + je.
     asm_comment!(asm, "side-exit if callee side-exits");
     asm.cmp(ret, Qundef.into());
-    asm.je(ZJITState::get_exit_trampoline().into());
+    // Restore the C stack pointer on exit
+    asm.je(Target::SideExit { context: None, reason: CalleeSideExit, c_stack_bytes: jit.c_stack_bytes, label: None });
 
     asm_comment!(asm, "restore SP register for the caller");
     let new_sp = asm.sub(SP, sp_offset.into());
@@ -794,13 +850,9 @@ fn gen_send_without_block_direct(
 
 /// Compile a string resurrection
 fn gen_string_copy(asm: &mut Assembler, recv: Opnd, chilled: bool) -> Opnd {
-    asm_comment!(asm, "call rb_ec_str_resurrect");
     // TODO: split rb_ec_str_resurrect into separate functions
     let chilled = if chilled { Opnd::Imm(1) } else { Opnd::Imm(0) };
-    asm.ccall(
-        rb_ec_str_resurrect as *const u8,
-        vec![EC, recv, chilled],
-    )
+    asm_ccall!(asm, rb_ec_str_resurrect, EC, recv, chilled)
 }
 
 /// Compile an array duplication instruction
@@ -812,11 +864,7 @@ fn gen_array_dup(
     // Save PC
     gen_save_pc(asm, state);
 
-    asm_comment!(asm, "call rb_ary_resurrect");
-    asm.ccall(
-        rb_ary_resurrect as *const u8,
-        vec![val],
-    )
+    asm_ccall!(asm, rb_ary_resurrect, val)
 }
 
 /// Compile a new array instruction
@@ -830,19 +878,10 @@ fn gen_new_array(
 
     let length: ::std::os::raw::c_long = elements.len().try_into().expect("Unable to fit length of elements into c_long");
 
-    asm_comment!(asm, "call rb_ary_new");
-    let new_array = asm.ccall(
-        rb_ary_new_capa as *const u8,
-        vec![lir::Opnd::Imm(length)],
-    );
+    let new_array = asm_ccall!(asm, rb_ary_new_capa, length.into());
 
-    for i in 0..elements.len() {
-        let val = *elements.get(i as usize).expect("Element should exist at index");
-        asm_comment!(asm, "call rb_ary_push");
-        asm.ccall(
-            rb_ary_push as *const u8,
-            vec![new_array, val]
-        );
+    for val in elements {
+        asm_ccall!(asm, rb_ary_push, new_array, val);
     }
 
     new_array
@@ -859,14 +898,8 @@ fn gen_new_range(
     // Save PC
     gen_save_pc(asm, state);
 
-    asm_comment!(asm, "call rb_range_new");
     // Call rb_range_new(low, high, flag)
-    let new_range = asm.ccall(
-        rb_range_new as *const u8,
-        vec![low, high, lir::Opnd::Imm(flag as i64)],
-    );
-
-    new_range
+    asm_ccall!(asm, rb_range_new, low, high, (flag as i64).into())
 }
 
 /// Compile code that exits from JIT code with a return value
@@ -878,6 +911,10 @@ fn gen_return(jit: &JITState, asm: &mut Assembler, val: lir::Opnd) -> Option<()>
     asm.mov(CFP, incr_cfp);
     asm.mov(Opnd::mem(64, EC, RUBY_OFFSET_EC_CFP), CFP);
 
+    // Order here is important. Because we're about to tear down the frame,
+    // we need to load the return value, which might be part of the frame.
+    asm.load_into(C_RET_OPND, val);
+
     // Restore the C stack pointer bumped for basic block arguments
     if jit.c_stack_bytes > 0 {
         asm_comment!(asm, "restore C stack pointer");
@@ -888,7 +925,7 @@ fn gen_return(jit: &JITState, asm: &mut Assembler, val: lir::Opnd) -> Option<()>
     asm.frame_teardown();
 
     // Return from the function
-    asm.cret(val);
+    asm.cret(C_RET_OPND);
     Some(())
 }
 
@@ -984,11 +1021,7 @@ fn gen_anytostring(asm: &mut Assembler, val: lir::Opnd, str: lir::Opnd, state: &
     // Save PC
     gen_save_pc(asm, state);
 
-    asm_comment!(asm, "call rb_obj_as_string_result");
-    Some(asm.ccall(
-        rb_obj_as_string_result as *const u8,
-        vec![str, val],
-    ))
+    Some(asm_ccall!(asm, rb_obj_as_string_result, str, val))
 }
 
 /// Evaluate if a value is truthy
@@ -1024,7 +1057,7 @@ fn gen_guard_type(jit: &mut JITState, asm: &mut Assembler, val: lir::Opnd, guard
 
 /// Compile an identity check with a side exit
 fn gen_guard_bit_equals(jit: &mut JITState, asm: &mut Assembler, val: lir::Opnd, expected: VALUE, state: &FrameState) -> Option<lir::Opnd> {
-    asm.cmp(val, Opnd::UImm(expected.into()));
+    asm.cmp(val, Opnd::Value(expected));
     asm.jnz(side_exit(jit, state, GuardBitEquals(expected))?);
     Some(val)
 }
@@ -1036,7 +1069,7 @@ fn gen_save_pc(asm: &mut Assembler, state: &FrameState) {
     let next_pc: *const VALUE = unsafe { state.pc.offset(insn_len(opcode) as isize) };
 
     asm_comment!(asm, "save PC to CFP");
-    asm.mov(Opnd::mem(64, CFP, RUBY_OFFSET_CFP_PC), Opnd::const_ptr(next_pc as *const u8));
+    asm.mov(Opnd::mem(64, CFP, RUBY_OFFSET_CFP_PC), Opnd::const_ptr(next_pc));
 }
 
 /// Save the current SP on the CFP
@@ -1093,11 +1126,12 @@ fn gen_push_frame(asm: &mut Assembler, argc: usize, state: &FrameState, frame: C
 /// Return an operand we use for the basic block argument at a given index
 fn param_opnd(idx: usize) -> Opnd {
     // To simplify the implementation, allocate a fixed register or a stack slot for each basic block argument for now.
+    // Note that this is implemented here as opposed to automatically inside LIR machineries.
     // TODO: Allow allocating arbitrary registers for basic block arguments
     if idx < ALLOC_REGS.len() {
         Opnd::Reg(ALLOC_REGS[idx])
     } else {
-        Opnd::mem(64, NATIVE_STACK_PTR, -((idx - ALLOC_REGS.len() + 1) as i32) * SIZEOF_VALUE_I32)
+        Opnd::mem(64, NATIVE_STACK_PTR, (idx - ALLOC_REGS.len()) as i32 * SIZEOF_VALUE_I32)
     }
 }
 
@@ -1147,11 +1181,13 @@ fn build_side_exit(jit: &mut JITState, state: &FrameState, reason: SideExitReaso
     }
 
     let target = Target::SideExit {
-        pc: state.pc,
-        stack,
-        locals,
-        c_stack_bytes: jit.c_stack_bytes,
+        context: Some(SideExitContext {
+            pc: state.pc,
+            stack,
+            locals,
+        }),
         reason,
+        c_stack_bytes: jit.c_stack_bytes,
         label,
     };
     Some(target)
@@ -1184,12 +1220,19 @@ fn max_num_params(function: &Function) -> usize {
 /// the function needs to allocate on the stack for the stack frame.
 fn aligned_stack_bytes(num_slots: usize) -> usize {
     // Both x86_64 and arm64 require the stack to be aligned to 16 bytes.
-    // Since SIZEOF_VALUE is 8 bytes, we need to round up the size to the nearest even number.
-    let num_slots = if num_slots % 2 == 0 {
-        num_slots
-    } else {
+    let num_slots = if cfg!(target_arch = "x86_64") && num_slots % 2 == 0 {
+        // On x86_64, since the call instruction bumps the stack pointer by 8 bytes on entry,
+        // we need to round up `num_slots` to an odd number.
         num_slots + 1
+    } else if cfg!(target_arch = "aarch64") && num_slots % 2 == 1 {
+        // On arm64, the stack pointer is always aligned to 16 bytes, so we need to round up
+        // `num_slots`` to an even number.
+        num_slots + 1
+    } else {
+        num_slots
     };
+
+    const { assert!(SIZEOF_VALUE == 8, "aligned_stack_bytes() assumes SIZEOF_VALUE == 8"); }
     num_slots * SIZEOF_VALUE
 }
 

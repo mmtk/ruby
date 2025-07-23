@@ -852,6 +852,7 @@ unsafe extern "C" {
     ) -> *const rb_callable_method_entry_t;
     pub fn rb_obj_info(obj: VALUE) -> *const ::std::os::raw::c_char;
     pub fn rb_ec_stack_check(ec: *mut rb_execution_context_struct) -> ::std::os::raw::c_int;
+    pub fn rb_gc_writebarrier_remember(obj: VALUE);
     pub fn rb_shape_id_offset() -> i32;
     pub fn rb_obj_shape_id(obj: VALUE) -> shape_id_t;
     pub fn rb_shape_get_iv_index(shape_id: shape_id_t, id: ID, value: *mut attr_index_t) -> bool;
@@ -928,6 +929,11 @@ unsafe extern "C" {
         recursive_lock_level: *mut ::std::os::raw::c_uint,
         file: *const ::std::os::raw::c_char,
         line: ::std::os::raw::c_int,
+    );
+    pub fn rb_zjit_iseq_insn_set(
+        iseq: *const rb_iseq_t,
+        insn_idx: ::std::os::raw::c_uint,
+        bare_insn: ruby_vminsn_type,
     );
     pub fn rb_iseq_get_zjit_payload(iseq: *const rb_iseq_t) -> *mut ::std::os::raw::c_void;
     pub fn rb_iseq_set_zjit_payload(iseq: *const rb_iseq_t, payload: *mut ::std::os::raw::c_void);

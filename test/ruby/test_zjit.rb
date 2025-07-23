@@ -133,6 +133,21 @@ class TestZJIT < Test::Unit::TestCase
     }
   end
 
+  def test_send_with_six_args
+    assert_compiles '[1, 2, 3, 4, 5, 6]', %q{
+      def foo(a1, a2, a3, a4, a5, a6)
+        [a1, a2, a3, a4, a5, a6]
+      end
+
+      def test
+        foo(1, 2, 3, 4, 5, 6)
+      end
+
+      test # profile send
+      test
+    }, call_threshold: 2
+  end
+
   def test_invokebuiltin
     omit 'Test fails at the moment due to not handling optional parameters'
     assert_compiles '["."]', %q{
@@ -380,6 +395,16 @@ class TestZJIT < Test::Unit::TestCase
       test(2, 2)
       test(true, false)
     }, call_threshold: 2, insns: [:opt_or]
+  end
+
+  def test_fixnum_mul
+    assert_compiles '12', %q{
+      C = 3
+      def test(n) = C * n
+      test(4)
+      test(4)
+      test(4)
+    }, call_threshold: 2, insns: [:opt_mult]
   end
 
   def test_opt_not
@@ -776,6 +801,16 @@ class TestZJIT < Test::Unit::TestCase
 
       test
     }
+
+    assert_compiles '1', %q{
+      def a(n1,n2,n3,n4,n5,n6,n7,n8,n9) = n1+n9
+      a(2,0,0,0,0,0,0,0,-1)
+    }
+
+    assert_compiles '0', %q{
+      def a(n1,n2,n3,n4,n5,n6,n7,n8) = n8
+      a(1,1,1,1,1,1,1,0)
+    }
   end
 
   def test_opt_aref_with
@@ -994,6 +1029,26 @@ class TestZJIT < Test::Unit::TestCase
     }, call_threshold: 2
   end
 
+  def test_profile_under_nested_jit_call
+    assert_compiles '[nil, nil, 3]', %q{
+      def profile
+        1 + 2
+      end
+
+      def jit_call(flag)
+        if flag
+          profile
+        end
+      end
+
+      def entry(flag)
+        jit_call(flag)
+      end
+
+      [entry(false), entry(false), entry(true)]
+    }, call_threshold: 2
+  end
+
   def test_bop_redefinition
     assert_runs '[3, :+, 100]', %q{
       def test
@@ -1013,6 +1068,31 @@ class TestZJIT < Test::Unit::TestCase
 
       test # profile opt_plus
       [test, Integer.class_eval { def +(_) = 100 }, test]
+    }, call_threshold: 2
+  end
+
+  # ZJIT currently only generates a MethodRedefined patch point when the method
+  # is called on the top-level self.
+  def test_method_redefinition_with_top_self
+    assert_runs '["original", "redefined"]', %q{
+      def foo
+        "original"
+      end
+
+      def test = foo
+
+      test; test
+
+      result1 = test
+
+      # Redefine the method
+      def foo
+        "redefined"
+      end
+
+      result2 = test
+
+      [result1, result2]
     }, call_threshold: 2
   end
 
