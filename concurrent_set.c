@@ -444,6 +444,7 @@ rb_mmtk_concurrent_set_foreach_with_replace_range(VALUE set_obj, size_t begin, s
     int deleted = 0;
 
     for (size_t i = begin; i < end; i++) {
+        struct concurrent_set_entry *entry = &set->entries[i];
         VALUE key = set->entries[i].key;
 
         switch (key) {
@@ -451,10 +452,10 @@ rb_mmtk_concurrent_set_foreach_with_replace_range(VALUE set_obj, size_t begin, s
           case CONCURRENT_SET_DELETED:
             continue;
           case CONCURRENT_SET_MOVED:
-            rb_bug("rb_concurrent_set_foreach_with_replace_range: moved entry");
+            rb_bug("rb_mmtk_concurrent_set_foreach_with_replace_range: moved entry");
             break;
           default: {
-            int ret = callback(&set->entries[i].key, data);
+            int ret = callback(&entry->key, data);
             switch (ret) {
               case ST_STOP:
                 return;

@@ -31,6 +31,10 @@ typedef uint32_t MMTk_AllocationSemantics;
 
 #define MMTK_HIDDEN_SIZE_MASK 281474976710655
 
+#define MMTK_WEAK_CONCURRENT_SET_KIND_FSTRING 0
+
+#define MMTK_WEAK_CONCURRENT_SET_KIND_GLOBAL_SYMBOLS 1
+
 typedef struct st_table st_table;
 
 typedef struct RubyBindingOptions {
@@ -103,8 +107,8 @@ typedef struct MMTk_RubyUpcalls {
     void (*update_frozen_strings_table)(void);
     size_t (*get_cc_refinement_table_size)(void);
     void (*update_cc_refinement_table)(void);
-    MMTk_ObjectReference (*get_fstring_table_obj)(void);
-    struct st_table *(*get_global_symbols_table)(void);
+    MMTk_NullableObjectReference (*get_fstring_table_obj)(void);
+    MMTk_NullableObjectReference (*get_global_symbols_table_obj)(void);
     size_t (*st_get_num_entries)(const struct st_table *table);
     void (*st_get_size_info)(const struct st_table *table,
                              size_t *entries_start,
@@ -122,6 +126,7 @@ typedef struct MMTk_RubyUpcalls {
     void (*concurrent_set_update_entries_range)(MMTk_ObjectReference set,
                                                 size_t begin,
                                                 size_t end,
+                                                uint8_t kind,
                                                 struct MMTk_ConcurrentSetStats *stats);
     void (*before_updating_jit_code)(void);
     void (*after_updating_jit_code)(void);

@@ -7,6 +7,7 @@
 #include "internal/gc.h"
 #include "internal/imemo.h"
 #include "internal/string.h"
+#include "internal/symbol.h"
 #include "internal/thread.h"
 #include "internal/variable.h"
 #include "ruby/ruby.h"
@@ -1272,27 +1273,18 @@ rb_mmtk_update_overloaded_cme_table(void)
 
 //////// Global symbols table
 
-extern rb_symbols_t ruby_global_symbols;
-
 size_t
 rb_mmtk_get_global_symbols_table_size(void)
 {
-    return ruby_global_symbols.str_sym->num_entries;
+    return rb_mmtk_get_sym_set_num_entries();
 }
 
 void
 rb_mmtk_update_global_symbols_table(void)
 {
-    // String-to-symbol table.
-    // Keys are the strings, hasshed by content (rb_str_hash).
-    // Values are symbol objects.  A symbol holds a reference to its
-    // corresponding string, so if the value is live, the key must be live.
-    // We need to remove entries for dead symbols.
-    rb_mmtk_update_weak_table(ruby_global_symbols.str_sym,
-                              false,
-                              RB_MMTK_VALUES_WEAK_REF,
-                              NULL,
-                              NULL);
+    // The global symbols table is a weak set of symbols.
+    // It is backed by a concurrent_set.
+    rb_gc_vm_weak_table_foreach(rb_mmtk_update_table_i, rb_mmtk_update_table_replace_i, NULL, false, RB_GC_VM_GLOBAL_SYMBOLS_TABLE);
 }
 
 //////// Finalizer and id2ref tables
@@ -1920,10 +1912,10 @@ rb_mmtk_get_fstring_table_obj_wrapper(void)
     return (MMTk_ObjectReference)rb_mmtk_get_fstring_table_obj();
 }
 
-static st_table*
-rb_mmtk_get_global_symbols_table(void)
+static MMTk_ObjectReference
+rb_mmtk_get_global_symbols_table_obj(void)
 {
-    return ruby_global_symbols.str_sym;
+    return (MMTk_ObjectReference)rb_mmtk_get_sym_set();
 }
 
 static size_t
@@ -1944,7 +1936,11 @@ rb_mmtk_concurrent_set_update_entries_range_i(VALUE *key, void *data)
     MMTk_ConcurrentSetStats *stats = (MMTk_ConcurrentSetStats*)data;
     VALUE old_key = *key;
 
-    assert(!rb_special_const_p(old_key));
+    if (rb_special_const_p(old_key)) {
+        // The global symbols table may contain integers which encode static symbols.
+        // We skip them.
+        return ST_CONTINUE;
+    }
 
     if (mmtk_is_reachable((MMTk_ObjectReference)old_key)) {
         stats->live++;
@@ -1961,9 +1957,24 @@ rb_mmtk_concurrent_set_update_entries_range_i(VALUE *key, void *data)
 }
 
 static void
-rb_mmtk_concurrent_set_update_entries_range(MMTk_ObjectReference set_obj, size_t begin, size_t end, MMTk_ConcurrentSetStats *stats)
+rb_mmtk_concurrent_set_update_entries_range(MMTk_ObjectReference set_obj, size_t begin, size_t end, uint8_t kind, MMTk_ConcurrentSetStats *stats)
 {
-    rb_mmtk_concurrent_set_foreach_with_replace_range((VALUE)set_obj, begin, end, rb_mmtk_concurrent_set_update_entries_range_i, stats);
+    int (*callback)(VALUE*, void*) = rb_mmtk_concurrent_set_update_entries_range_i;
+    void *data = stats;
+
+    switch (kind) {
+        case MMTK_WEAK_CONCURRENT_SET_KIND_GLOBAL_SYMBOLS: {
+            // Global symbols table need special handling.
+            // rb_mmtk_sym_global_symbol_table_foreach_weak_reference_range will handle static symbols.
+            assert((VALUE)set_obj == rb_mmtk_get_sym_set());
+            rb_mmtk_sym_global_symbol_table_foreach_weak_reference_range(begin, end, callback, data);
+            break;
+        }
+        default: {
+            rb_mmtk_concurrent_set_foreach_with_replace_range((VALUE)set_obj, begin, end, callback, data);
+            break;
+        }
+    }
 }
 
 MMTk_RubyUpcalls ruby_upcalls = {
@@ -2008,7 +2019,7 @@ MMTk_RubyUpcalls ruby_upcalls = {
     rb_mmtk_update_cc_refinement_table,
     // Get tables for specialized processing
     rb_mmtk_get_fstring_table_obj_wrapper,
-    rb_mmtk_get_global_symbols_table,
+    rb_mmtk_get_global_symbols_table_obj,
     // Detailed st_table info queries and operations
     rb_mmtk_st_get_num_entries,
     rb_mmtk_st_get_size_info,

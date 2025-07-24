@@ -412,6 +412,22 @@ rb_sym_global_symbols_update_references(void)
     symbols->ids = rb_gc_location(symbols->ids);
 }
 
+#if USE_MMTK
+size_t
+rb_mmtk_get_sym_set_num_entries(void)
+{
+    rb_symbols_t *symbols = &ruby_global_symbols;
+    return rb_mmtk_concurrent_set_get_num_entries(symbols->sym_set);
+}
+
+VALUE
+rb_mmtk_get_sym_set(void)
+{
+    rb_symbols_t *symbols = &ruby_global_symbols;
+    return symbols->sym_set;
+}
+#endif
+
 WARN_UNUSED_RESULT(static ID lookup_str_id(VALUE str));
 WARN_UNUSED_RESULT(static VALUE lookup_id_str(ID id));
 
@@ -950,6 +966,21 @@ rb_sym_global_symbol_table_foreach_weak_reference(int (*callback)(VALUE *key, vo
 
     rb_concurrent_set_foreach_with_replace(ruby_global_symbols.sym_set, rb_sym_global_symbol_table_foreach_weak_reference_i, &foreach_data);
 }
+
+#if USE_MMTK
+void
+rb_mmtk_sym_global_symbol_table_foreach_weak_reference_range(size_t begin, size_t end, int (*callback)(VALUE *key, void *data), void *data)
+{
+    if (!ruby_global_symbols.sym_set) return;
+
+    struct global_symbol_table_foreach_weak_reference_data foreach_data = {
+        .callback = callback,
+        .data = data,
+    };
+
+    rb_mmtk_concurrent_set_foreach_with_replace_range(ruby_global_symbols.sym_set, begin, end, rb_sym_global_symbol_table_foreach_weak_reference_i, &foreach_data);
+}
+#endif
 
 void
 rb_gc_free_dsymbol(VALUE sym)

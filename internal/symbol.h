@@ -19,6 +19,10 @@
 /* symbol.c */
 void rb_sym_global_symbols_mark(void);
 void rb_sym_global_symbols_update_references(void);
+#if USE_MMTK
+size_t rb_mmtk_get_sym_set_num_entries(void);
+VALUE rb_mmtk_get_sym_set(void);
+#endif
 VALUE rb_to_symbol_type(VALUE obj);
 VALUE rb_sym_intern(const char *ptr, long len, rb_encoding *enc);
 VALUE rb_sym_intern_ascii(const char *ptr, long len);
@@ -33,6 +37,9 @@ ID rb_make_internal_id(void);
 ID rb_make_temporary_id(size_t n);
 bool rb_obj_is_symbol_table(VALUE obj);
 void rb_sym_global_symbol_table_foreach_weak_reference(int (*callback)(VALUE *key, void *data), void *data);
+#if USE_MMTK
+void rb_mmtk_sym_global_symbol_table_foreach_weak_reference_range(size_t begin, size_t end, int (*callback)(VALUE *key, void *data), void *data);
+#endif
 void rb_gc_free_dsymbol(VALUE);
 int rb_static_id_valid_p(ID id);
 
