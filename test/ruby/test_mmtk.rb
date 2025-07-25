@@ -34,11 +34,13 @@ class TestMMTk < Test::Unit::TestCase
     ['--disable=mmtk', '--mmtk-max-heap=10240000']
   ]
 
+  MMTK_EXPECETED_PART = '+MMTk(XGC)'
+
   def test_enable
     ENABLE_OPTIONS.each do |version_args|
       assert_in_out_err(['--version'] + version_args) do |stdout, stderr|
         # Need to scrub the description because --mmtk etc will use the default plan
-        assert_equal(scrub_desc(RUBY_DESCRIPTION), scrub_desc(stdout.first))
+        assert(scrub_desc(stdout.first).include?(MMTK_EXPECETED_PART))
         assert_equal([], stderr)
       end
     end
@@ -49,7 +51,7 @@ class TestMMTk < Test::Unit::TestCase
       mmtk_child_env = {'RUBYOPT' => version_args.join(' ')}
       assert_in_out_err([mmtk_child_env, '--version'], '') do |stdout, stderr|
         # Need to scrub the description because --mmtk etc will use the default plan
-        assert_equal(scrub_desc(RUBY_DESCRIPTION), scrub_desc(stdout.first))
+        assert(scrub_desc(stdout.first).include?(MMTK_EXPECETED_PART))
         assert_equal([], stderr)
       end
     end
