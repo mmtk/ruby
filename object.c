@@ -337,12 +337,10 @@ rb_obj_copy_ivar(VALUE dest, VALUE obj)
         return;
     }
 
-    shape_id_t dest_shape_id = src_shape_id;
     shape_id_t initial_shape_id = RBASIC_SHAPE_ID(dest);
-
     RUBY_ASSERT(RSHAPE_TYPE_P(initial_shape_id, SHAPE_ROOT));
 
-    dest_shape_id = rb_shape_rebuild(initial_shape_id, src_shape_id);
+    shape_id_t dest_shape_id = rb_shape_rebuild(initial_shape_id, src_shape_id);
     if (UNLIKELY(rb_shape_too_complex_p(dest_shape_id))) {
         st_table *table = rb_st_init_numtable_with_size(src_num_ivs);
         rb_obj_copy_ivs_to_hash_table(obj, table);
@@ -377,19 +375,19 @@ init_copy(VALUE dest, VALUE obj)
     // Copies the shape id from obj to dest
     RBASIC(dest)->flags |= RBASIC(obj)->flags & T_MASK;
     switch (BUILTIN_TYPE(obj)) {
-        case T_IMEMO:
-          rb_bug("Unreachable");
-          break;
-        case T_CLASS:
-        case T_MODULE:
-          // noop: handled in class.c: rb_mod_init_copy
-          break;
-        case T_OBJECT:
-          rb_obj_copy_ivar(dest, obj);
-          break;
-        default:
-          rb_copy_generic_ivar(dest, obj);
-          break;
+      case T_IMEMO:
+        rb_bug("Unreachable");
+        break;
+      case T_CLASS:
+      case T_MODULE:
+        // noop: handled in class.c: rb_mod_init_copy
+        break;
+      case T_OBJECT:
+        rb_obj_copy_ivar(dest, obj);
+        break;
+      default:
+        rb_copy_generic_ivar(dest, obj);
+        break;
     }
     rb_gc_copy_attributes(dest, obj);
 }

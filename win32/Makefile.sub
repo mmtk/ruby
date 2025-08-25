@@ -23,10 +23,10 @@ MFLAGS=-l
 # executable in $(tooldir).
 ! if [cd $(tooldir) && ruby missing-baseruby.bat 2> nul]
 ! else if [(cd $(tooldir) && for %I in (ruby.exe) do @echo BASERUBY = %~s$$PATH:I) > baseruby.mk]
-! else
+! else if exist(baseruby.mk)
 !   include baseruby.mk
 ! endif
-! if [del baseruby.mk]
+! if [del baseruby.mk 2> nul]
 ! endif
 !else if "$(BASERUBY)" == "no" || [($(BASERUBY) -eexit) > nul 2> nul]
 BASERUBY =
@@ -464,6 +464,7 @@ ASMEXT = asm
 
 INSTALLED_LIST= .installed.list
 
+HASH_SIGN = ^#
 SRC_FILE = $(<:\=/)
 OS_SRC_FILE = $(<:/=\)
 DEST_FILE = $(@:\=/)
@@ -537,7 +538,7 @@ MESSAGE_END = ) do @echo.%~I)
 ECHO_BEGIN = @echo.
 ECHO_END =
 
-all: $(srcdir)/win32/Makefile.sub $(win_srcdir)/Makefile.sub $(srcdir)/common.mk
+all: $(srcdir)/win32/Makefile.sub $(win_srcdir)/Makefile.sub $(srcdir)/common.mk $(srcdir)/depend
 prog: config
 
 ruby: $(PROGRAM)

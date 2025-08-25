@@ -31,7 +31,7 @@ typedef struct JSON_Generator_StateStruct {
 #define RB_UNLIKELY(cond) (cond)
 #endif
 
-static VALUE mJSON, cState, cFragment, mString_Extend, eGeneratorError, eNestingError, Encoding_UTF_8;
+static VALUE mJSON, cState, cFragment, eGeneratorError, eNestingError, Encoding_UTF_8;
 
 static ID i_to_s, i_to_json, i_new, i_pack, i_unpack, i_create_id, i_extend, i_encode;
 static VALUE sym_indent, sym_space, sym_space_before, sym_object_nl, sym_array_nl, sym_max_nesting, sym_allow_nan,
@@ -137,8 +137,8 @@ static inline FORCE_INLINE void search_flush(search_state *search)
 {
     // Do not remove this conditional without profiling, specifically escape-heavy text.
     // escape_UTF8_char_basic will advance search->ptr and search->cursor (effectively a search_flush).
-    // For back-to-back characters that need to be escaped, specifcally for the SIMD code paths, this method
-    // will be called just before calling escape_UTF8_char_basic. There will be no characers to append for the
+    // For back-to-back characters that need to be escaped, specifically for the SIMD code paths, this method
+    // will be called just before calling escape_UTF8_char_basic. There will be no characters to append for the
     // consecutive characters that need to be escaped. While the fbuffer_append is a no-op if
     // nothing needs to be flushed, we can save a few memory references with this conditional.
     if (search->ptr > search->cursor) {
@@ -836,18 +836,6 @@ static VALUE mFloat_to_json(int argc, VALUE *argv, VALUE self)
 }
 
 /*
- * call-seq: String.included(modul)
- *
- * Extends _modul_ with the String::Extend module.
- */
-static VALUE mString_included_s(VALUE self, VALUE modul)
-{
-    VALUE result = rb_funcall(modul, i_extend, 1, mString_Extend);
-    rb_call_super(1, &modul);
-    return result;
-}
-
-/*
  * call-seq: to_json(*)
  *
  * This string should be encoded with UTF-8 A call to this method
@@ -859,51 +847,6 @@ static VALUE mString_to_json(int argc, VALUE *argv, VALUE self)
     rb_check_arity(argc, 0, 1);
     VALUE Vstate = cState_from_state_s(cState, argc == 1 ? argv[0] : Qnil);
     return cState_partial_generate(Vstate, self, generate_json_string, Qfalse);
-}
-
-/*
- * call-seq: to_json_raw_object()
- *
- * This method creates a raw object hash, that can be nested into
- * other data structures and will be generated as a raw string. This
- * method should be used, if you want to convert raw strings to JSON
- * instead of UTF-8 strings, e. g. binary data.
- */
-static VALUE mString_to_json_raw_object(VALUE self)
-{
-    VALUE ary;
-    VALUE result = rb_hash_new();
-    rb_hash_aset(result, rb_funcall(mJSON, i_create_id, 0), rb_class_name(rb_obj_class(self)));
-    ary = rb_funcall(self, i_unpack, 1, rb_str_new2("C*"));
-    rb_hash_aset(result, rb_utf8_str_new_lit("raw"), ary);
-    return result;
-}
-
-/*
- * call-seq: to_json_raw(*args)
- *
- * This method creates a JSON text from the result of a call to
- * to_json_raw_object of this String.
- */
-static VALUE mString_to_json_raw(int argc, VALUE *argv, VALUE self)
-{
-    VALUE obj = mString_to_json_raw_object(self);
-    Check_Type(obj, T_HASH);
-    return mHash_to_json(argc, argv, obj);
-}
-
-/*
- * call-seq: json_create(o)
- *
- * Raw Strings are JSON Objects (the raw bytes are stored in an array for the
- * key "raw"). The Ruby String can be created by this module method.
- */
-static VALUE mString_Extend_json_create(VALUE self, VALUE o)
-{
-    VALUE ary;
-    Check_Type(o, T_HASH);
-    ary = rb_hash_aref(o, rb_str_new2("raw"));
-    return rb_funcall(ary, i_pack, 1, rb_str_new2("C*"));
 }
 
 /*
@@ -1907,15 +1850,30 @@ static VALUE cState_buffer_initial_length_set(VALUE self, VALUE buffer_initial_l
     return Qnil;
 }
 
+struct configure_state_data {
+    JSON_Generator_State *state;
+    VALUE vstate;  // Ruby object that owns the state, or Qfalse if stack-allocated
+};
+
+static inline void state_write_value(struct configure_state_data *data, VALUE *field, VALUE value)
+{
+    if (RTEST(data->vstate)) {
+        RB_OBJ_WRITE(data->vstate, field, value);
+    } else {
+        *field = value;
+    }
+}
+
 static int configure_state_i(VALUE key, VALUE val, VALUE _arg)
 {
-    JSON_Generator_State *state = (JSON_Generator_State *)_arg;
+    struct configure_state_data *data = (struct configure_state_data *)_arg;
+    JSON_Generator_State *state = data->state;
 
-         if (key == sym_indent)                { state->indent = string_config(val); }
-    else if (key == sym_space)                 { state->space = string_config(val); }
-    else if (key == sym_space_before)          { state->space_before = string_config(val); }
-    else if (key == sym_object_nl)             { state->object_nl = string_config(val); }
-    else if (key == sym_array_nl)              { state->array_nl = string_config(val); }
+         if (key == sym_indent)                { state_write_value(data, &state->indent, string_config(val)); }
+    else if (key == sym_space)                 { state_write_value(data, &state->space, string_config(val)); }
+    else if (key == sym_space_before)          { state_write_value(data, &state->space_before, string_config(val)); }
+    else if (key == sym_object_nl)             { state_write_value(data, &state->object_nl, string_config(val)); }
+    else if (key == sym_array_nl)              { state_write_value(data, &state->array_nl, string_config(val)); }
     else if (key == sym_max_nesting)           { state->max_nesting = long_config(val); }
     else if (key == sym_allow_nan)             { state->allow_nan = RTEST(val); }
     else if (key == sym_ascii_only)            { state->ascii_only = RTEST(val); }
@@ -1924,11 +1882,14 @@ static int configure_state_i(VALUE key, VALUE val, VALUE _arg)
     else if (key == sym_script_safe)           { state->script_safe = RTEST(val); }
     else if (key == sym_escape_slash)          { state->script_safe = RTEST(val); }
     else if (key == sym_strict)                { state->strict = RTEST(val); }
-    else if (key == sym_as_json)               { state->as_json = RTEST(val) ? rb_convert_type(val, T_DATA, "Proc", "to_proc") : Qfalse; }
+    else if (key == sym_as_json)               {
+        VALUE proc = RTEST(val) ? rb_convert_type(val, T_DATA, "Proc", "to_proc") : Qfalse;
+        state_write_value(data, &state->as_json, proc);
+    }
     return ST_CONTINUE;
 }
 
-static void configure_state(JSON_Generator_State *state, VALUE config)
+static void configure_state(JSON_Generator_State *state, VALUE vstate, VALUE config)
 {
     if (!RTEST(config)) return;
 
@@ -1936,15 +1897,20 @@ static void configure_state(JSON_Generator_State *state, VALUE config)
 
     if (!RHASH_SIZE(config)) return;
 
+    struct configure_state_data data = {
+        .state = state,
+        .vstate = vstate
+    };
+
     // We assume in most cases few keys are set so it's faster to go over
     // the provided keys than to check all possible keys.
-    rb_hash_foreach(config, configure_state_i, (VALUE)state);
+    rb_hash_foreach(config, configure_state_i, (VALUE)&data);
 }
 
 static VALUE cState_configure(VALUE self, VALUE opts)
 {
     GET_STATE(self);
-    configure_state(state, opts);
+    configure_state(state, self, opts);
     return self;
 }
 
@@ -1952,7 +1918,7 @@ static VALUE cState_m_generate(VALUE klass, VALUE obj, VALUE opts, VALUE io)
 {
     JSON_Generator_State state = {0};
     state_init(&state);
-    configure_state(&state, opts);
+    configure_state(&state, Qfalse, opts);
 
     char stack_buffer[FBUFFER_STACK_SIZE];
     FBuffer buffer = {
@@ -2068,13 +2034,7 @@ void Init_generator(void)
     rb_define_method(mFloat, "to_json", mFloat_to_json, -1);
 
     VALUE mString = rb_define_module_under(mGeneratorMethods, "String");
-    rb_define_singleton_method(mString, "included", mString_included_s, 1);
     rb_define_method(mString, "to_json", mString_to_json, -1);
-    rb_define_method(mString, "to_json_raw", mString_to_json_raw, -1);
-    rb_define_method(mString, "to_json_raw_object", mString_to_json_raw_object, 0);
-
-    mString_Extend = rb_define_module_under(mString, "Extend");
-    rb_define_method(mString_Extend, "json_create", mString_Extend_json_create, 1);
 
     VALUE mTrueClass = rb_define_module_under(mGeneratorMethods, "TrueClass");
     rb_define_method(mTrueClass, "to_json", mTrueClass_to_json, -1);

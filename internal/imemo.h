@@ -16,10 +16,12 @@
 #include "ruby/ruby.h"          /* for rb_block_call_func_t */
 
 ///////////////// BEGIN MMTK-RELATED CHANGES
-// CRuby has 15 IMEMO types.
+// Once CRuby had 15 IMEMO types.
 // With added mmtk_strbuf and mmtk_objbuf, we now have 17 imemo types.
 // We use 5 bits instead of 4 in the flags field for the type.
 // We also shift all IMEMO_FL_USERx by one FL_USERx.
+// After imemo_ast was removed, CRuby now has 14 IMEMO types.
+// 4 bits fit again, but we leave it 5 bits anyway in case CRuby adds new IMEMO.
 #define IMEMO_MASK   0x1f
 
 /* FL_USER0 to FL_USER3 is for type */
@@ -43,14 +45,12 @@ enum imemo_type {
     imemo_ment           =  6,
     imemo_iseq           =  7,
     imemo_tmpbuf         =  8,
-    imemo_ast            =  9, // Obsolete due to the universal parser
-    imemo_parser_strterm = 10,
-    imemo_callinfo       = 11,
-    imemo_callcache      = 12,
-    imemo_constcache     = 13,
-    imemo_fields   = 14,
-    imemo_mmtk_strbuf    = 15,
-    imemo_mmtk_objbuf    = 16,
+    imemo_callinfo       = 10,
+    imemo_callcache      = 11,
+    imemo_constcache     = 12,
+    imemo_fields   = 13,
+    imemo_mmtk_strbuf    = 14,
+    imemo_mmtk_objbuf    = 15,
 };
 
 /* CREF (Class REFerence) is defined in method.h */
@@ -158,7 +158,6 @@ static inline void MEMO_V2_SET(struct MEMO *m, VALUE v);
 
 size_t rb_imemo_memsize(VALUE obj);
 void rb_imemo_mark_and_move(VALUE obj, bool reference_updating);
-void rb_cc_tbl_free(struct rb_id_table *cc_tbl, VALUE klass);
 void rb_imemo_free(VALUE obj);
 
 RUBY_SYMBOL_EXPORT_BEGIN
@@ -284,11 +283,17 @@ struct rb_fields {
 #define OBJ_FIELD_EXTERNAL IMEMO_FL_USER0
 #define IMEMO_OBJ_FIELDS(fields) ((struct rb_fields *)fields)
 
-VALUE rb_imemo_fields_new(VALUE klass, size_t capa);
-VALUE rb_imemo_fields_new_complex(VALUE klass, size_t capa);
-VALUE rb_imemo_fields_new_complex_tbl(VALUE klass, st_table *tbl);
+VALUE rb_imemo_fields_new(VALUE owner, size_t capa);
+VALUE rb_imemo_fields_new_complex(VALUE owner, size_t capa);
+VALUE rb_imemo_fields_new_complex_tbl(VALUE owner, st_table *tbl);
 VALUE rb_imemo_fields_clone(VALUE fields_obj);
 void rb_imemo_fields_clear(VALUE fields_obj);
+
+static inline VALUE
+rb_imemo_fields_owner(VALUE fields_obj)
+{
+    return CLASS_OF(fields_obj);
+}
 
 static inline VALUE *
 rb_imemo_fields_ptr(VALUE obj_fields)

@@ -2865,12 +2865,13 @@ rb_str_bytesize(VALUE str)
  *  call-seq:
  *    empty? -> true or false
  *
- *  Returns +true+ if the length of +self+ is zero, +false+ otherwise:
+ *  Returns whether the length of +self+ is zero:
  *
- *    "hello".empty? # => false
- *    " ".empty? # => false
- *    "".empty? # => true
+ *    'hello'.empty? # => false
+ *    ' '.empty? # => false
+ *    ''.empty? # => true
  *
+ *  Related: see {Querying}[rdoc-ref:String@Querying].
  */
 
 static VALUE
@@ -4613,10 +4614,8 @@ rb_str_hash_cmp(VALUE str1, VALUE str2)
  * call-seq:
  *   hash -> integer
  *
- * Returns the integer hash value for +self+.
- * The value is based on the length, content and encoding of +self+.
+ * :include: doc/string/hash.rdoc
  *
- * Related: Object#hash.
  */
 
 static VALUE
@@ -4723,17 +4722,7 @@ rb_str_equal(VALUE str1, VALUE str2)
  * call-seq:
  *   eql?(object) -> true or false
  *
- *  Returns +true+ if +object+ has the same length and content;
- *  as +self+; +false+ otherwise:
- *
- *    s = 'foo'
- *    s.eql?('foo') # => true
- *    s.eql?('food') # => false
- *    s.eql?('FOO') # => false
- *
- *  Returns +false+ if the two strings' encodings are not compatible:
- *
- *    "\u{e4 f6 fc}".encode(Encoding::ISO_8859_1).eql?("\u{c4 d6 dc}") # => false
+ * :include: doc/string/eql_p.rdoc
  *
  */
 
@@ -4871,9 +4860,9 @@ str_casecmp(VALUE str1, VALUE str2)
             p2 += l2;
         }
     }
-    if (RSTRING_LEN(str1) == RSTRING_LEN(str2)) return INT2FIX(0);
-    if (RSTRING_LEN(str1) > RSTRING_LEN(str2)) return INT2FIX(1);
-    return INT2FIX(-1);
+    if (p1 == p1end && p2 == p2end) return INT2FIX(0);
+    if (p1 == p1end) return INT2FIX(-1);
+    return INT2FIX(1);
 }
 
 /*
@@ -4991,8 +4980,7 @@ rb_strseq_index(VALUE str, VALUE sub, long offset, int in_byte)
 
 /*
  *  call-seq:
- *    index(substring, offset = 0) -> integer or nil
- *    index(regexp, offset = 0) -> integer or nil
+ *    index(pattern, offset = 0) -> integer or nil
  *
  *  :include: doc/string/index.rdoc
  *
@@ -6554,19 +6542,9 @@ rb_str_aset_m(int argc, VALUE *argv, VALUE str)
 
 /*
  *  call-seq:
- *    insert(index, other_string) -> self
+ *    insert(offset, other_string) -> self
  *
- *  Inserts the given +other_string+ into +self+; returns +self+.
- *
- *  If the Integer +index+ is positive, inserts +other_string+ at offset +index+:
- *
- *    'foo'.insert(1, 'bar') # => "fbaroo"
- *
- *  If the Integer +index+ is negative, counts backward from the end of +self+
- *  and inserts +other_string+ at offset <tt>index+1</tt>
- *  (that is, _after_ <tt>self[index]</tt>):
- *
- *    'foo'.insert(-2, 'bar') # => "fobaro"
+ *  :include: doc/string/insert.rdoc
  *
  */
 
@@ -7071,15 +7049,12 @@ str_gsub(int argc, VALUE *argv, VALUE str, int bang)
  *     gsub!(pattern) {|match| ... } -> self or nil
  *     gsub!(pattern)                -> an_enumerator
  *
- *  Performs the specified substring replacement(s) on +self+;
- *  returns +self+ if any replacement occurred, +nil+ otherwise.
+ *  Like String#gsub, except that:
  *
- *  See {Substitution Methods}[rdoc-ref:String@Substitution+Methods].
+ *  - Performs substitutions in +self+ (not in a copy of +self+).
+ *  - Returns +self+ if any characters are removed, +nil+ otherwise.
  *
- *  Returns an Enumerator if no +replacement+ and no block given.
- *
- *  Related: String#sub, String#gsub, String#sub!.
- *
+ *  Related: see {Modifying}[rdoc-ref:String@Modifying].
  */
 
 static VALUE
@@ -7096,14 +7071,41 @@ rb_str_gsub_bang(int argc, VALUE *argv, VALUE str)
  *     gsub(pattern) {|match| ... } -> new_string
  *     gsub(pattern)                -> enumerator
  *
- *  Returns a copy of +self+ with all occurrences of the given +pattern+ replaced.
+ *  Returns a copy of +self+ with zero or more substrings replaced.
  *
- *  See {Substitution Methods}[rdoc-ref:String@Substitution+Methods].
+ *  Argument +pattern+ may be a string or a Regexp;
+ *  argument +replacement+ may be a string or a Hash.
+ *  Varying types for the argument values makes this method very versatile.
  *
- *  Returns an Enumerator if no +replacement+ and no block given.
+ *  Below are some simple examples;
+ *  for many more examples, see {Substitution Methods}[rdoc-ref:String@Substitution+Methods].
  *
- *  Related: String#sub, String#sub!, String#gsub!.
+ *  With arguments +pattern+ and string +replacement+ given,
+ *  replaces each matching substring with the given +replacement+ string:
  *
+ *    s = 'abracadabra'
+ *    s.gsub('ab', 'AB')   # => "ABracadABra"
+ *    s.gsub(/[a-c]/, 'X') # => "XXrXXXdXXrX"
+ *
+ *  With arguments +pattern+ and hash +replacement+ given,
+ *  replaces each matching substring with a value from the given +replacement+ hash,
+ *  or removes it:
+ *
+ *    h = {'a' => 'A', 'b' => 'B', 'c' => 'C'}
+ *    s.gsub(/[a-c]/, h) # => "ABrACAdABrA"  # 'a', 'b', 'c' replaced.
+ *    s.gsub(/[a-d]/, h) # => "ABrACAABrA"   # 'd' removed.
+ *
+ *  With argument +pattern+ and a block given,
+ *  calls the block with each matching substring;
+ *  replaces that substring with the block's return value:
+ *
+ *    s.gsub(/[a-d]/) {|substring| substring.upcase }
+ *    # => "ABrACADABrA"
+ *
+ *  With argument +pattern+ and no block given,
+ *  returns a new Enumerator.
+ *
+ *  Related: see {Converting to New String}[rdoc-ref:String@Converting+to+New+String].
  */
 
 static VALUE
@@ -7180,14 +7182,8 @@ rb_str_chr(VALUE str)
  *  call-seq:
  *    getbyte(index) -> integer or nil
  *
- *  Returns the byte at zero-based +index+ as an integer, or +nil+ if +index+ is out of range:
+ *  :include: doc/string/getbyte.rdoc
  *
- *    s = 'abcde'   # => "abcde"
- *    s.getbyte(0)  # => 97
- *    s.getbyte(-1) # => 101
- *    s.getbyte(5)  # => nil
- *
- *  Related: String#setbyte.
  */
 VALUE
 rb_str_getbyte(VALUE str, VALUE index)
@@ -7560,13 +7556,17 @@ rb_str_reverse_bang(VALUE str)
  *  call-seq:
  *    include?(other_string) -> true or false
  *
- *  Returns +true+ if +self+ contains +other_string+, +false+ otherwise:
+ *  Returns whether +self+ contains +other_string+:
  *
- *    s = 'foo'
- *    s.include?('f')    # => true
- *    s.include?('fo')   # => true
- *    s.include?('food') # => false
+ *    s = 'bar'
+ *    s.include?('ba')  # => true
+ *    s.include?('ar')  # => true
+ *    s.include?('bar') # => true
+ *    s.include?('a')   # => true
+ *    s.include?('')    # => true
+ *    s.include?('foo') # => false
  *
+ *  Related: see {Querying}[rdoc-ref:String@Querying].
  */
 
 VALUE
@@ -10201,8 +10201,8 @@ rb_str_enumerate_lines(int argc, VALUE *argv, VALUE str, VALUE ary)
 
 /*
  *  call-seq:
- *    each_line(line_sep = $/, chomp: false) {|substring| ... } -> self
- *    each_line(line_sep = $/, chomp: false)                    -> enumerator
+ *    each_line(record_separator = $/, chomp: false) {|substring| ... } -> self
+ *    each_line(record_separator = $/, chomp: false)                    -> enumerator
  *
  *  :include: doc/string/each_line.rdoc
  *
@@ -10322,7 +10322,7 @@ rb_str_enumerate_chars(VALUE str, VALUE ary)
 
 /*
  *  call-seq:
- *    each_char {|c| ... } -> self
+ *    each_char {|char| ... } -> self
  *    each_char            -> enumerator
  *
  *  :include: doc/string/each_char.rdoc
@@ -10382,7 +10382,7 @@ rb_str_enumerate_codepoints(VALUE str, VALUE ary)
 
 /*
  *  call-seq:
- *    each_codepoint {|integer| ... } -> self
+ *    each_codepoint {|codepoint| ... } -> self
  *    each_codepoint                  -> enumerator
  *
  *  :include: doc/string/each_codepoint.rdoc
@@ -10552,7 +10552,7 @@ rb_str_enumerate_grapheme_clusters(VALUE str, VALUE ary)
 
 /*
  *  call-seq:
- *    each_grapheme_cluster {|gc| ... } -> self
+ *    each_grapheme_cluster {|grapheme_cluster| ... } -> self
  *    each_grapheme_cluster             -> enumerator
  *
  *  :include: doc/string/each_grapheme_cluster.rdoc
@@ -11196,18 +11196,21 @@ rb_str_scan(VALUE str, VALUE pat)
  *  call-seq:
  *    hex -> integer
  *
- *  Interprets the leading substring of +self+ as a string of hexadecimal digits
- *  (with an optional sign and an optional <code>0x</code>) and returns the
- *  corresponding number;
- *  returns zero if there is no such leading substring:
+ *  Interprets the leading substring of +self+ as hexadecimal;
+ *  returns its integer value:
  *
- *    '0x0a'.hex        # => 10
- *    '-1234'.hex       # => -4660
- *    '0'.hex           # => 0
- *    'non-numeric'.hex # => 0
+ *    '0xFFFF'.hex     # => 65535
+ *    'FFzzzFF'.hex    # =>   255  # Hex ends at first non-hex character, 'z'.
+ *    'ffzzzFF'.hex    # =>   255  # Case does not matter.
+ *    '-FFzzzFF'.hex   # =>  -255  # May have leading '-'.
+ *    '0xFFzzzFF'.hex  # =>   255  # May have leading '0x'.
+ *    '-0xFFzzzFF'.hex # =>  -255  # May have leading '-0x'.
  *
- *  Related: String#oct.
+ *  Returns zero if there is no such leading substring:
  *
+ *    'zzz'.hex # => 0
+ *
+ *  Related: See {Converting to Non-String}[rdoc-ref:String@Converting+to+Non--5CString].
  */
 
 static VALUE

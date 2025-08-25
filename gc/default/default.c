@@ -1943,7 +1943,10 @@ static struct heap_page *
 heap_page_resurrect(rb_objspace_t *objspace)
 {
     struct heap_page *page = NULL;
-    if (objspace->empty_pages != NULL) {
+    if (objspace->empty_pages == NULL) {
+        GC_ASSERT(objspace->empty_pages_count == 0);
+    }
+    else {
         GC_ASSERT(objspace->empty_pages_count > 0);
         objspace->empty_pages_count--;
         page = objspace->empty_pages;
@@ -2063,6 +2066,8 @@ heap_page_allocate_and_initialize(rb_objspace_t *objspace, rb_heap_t *heap)
     if (page == NULL && objspace->heap_pages.allocatable_slots > 0) {
         page = heap_page_allocate(objspace);
         allocated = true;
+
+        GC_ASSERT(page != NULL);
     }
 
     if (page != NULL) {
@@ -2154,6 +2159,9 @@ heap_prepare(rb_objspace_t *objspace, rb_heap_t *heap)
     /* If we still don't have a free page and not allowed to create a new page,
      * we should start a new GC cycle. */
     if (heap->free_pages == NULL) {
+        GC_ASSERT(objspace->empty_pages_count == 0);
+        GC_ASSERT(objspace->heap_pages.allocatable_slots == 0);
+
         if (gc_start(objspace, GPR_FLAG_NEWOBJ) == FALSE) {
             rb_memerror();
         }
@@ -4419,10 +4427,29 @@ gc_sweep_continue(rb_objspace_t *objspace, rb_heap_t *sweep_heap)
 
     for (int i = 0; i < HEAP_COUNT; i++) {
         rb_heap_t *heap = &heaps[i];
-        if (!gc_sweep_step(objspace, heap)) {
-            if (heap == sweep_heap && objspace->empty_pages_count == 0 && objspace->heap_pages.allocatable_slots == 0) {
+        if (gc_sweep_step(objspace, heap)) {
+            GC_ASSERT(heap->free_pages != NULL);
+        }
+        else if (heap == sweep_heap) {
+            if (objspace->empty_pages_count > 0 || objspace->heap_pages.allocatable_slots > 0) {
+                /* [Bug #21548]
+                 *
+                 * If this heap is the heap we want to sweep, but we weren't able
+                 * to free any slots, but we also either have empty pages or could
+                 * allocate new pages, then we want to preemptively claim a page
+                 * because it's possible that sweeping another heap will call
+                 * gc_sweep_finish_heap, which may use up all of the
+                 * empty/allocatable pages. If other heaps are not finished sweeping
+                 * then we do not finish this GC and we will end up triggering a new
+                 * GC cycle during this GC phase. */
+                heap_page_allocate_and_initialize(objspace, heap);
+
+                GC_ASSERT(heap->free_pages != NULL);
+            }
+            else {
                 /* Not allowed to create a new page so finish sweeping. */
                 gc_sweep_rest(objspace);
+                GC_ASSERT(gc_mode(objspace) == gc_mode_none);
                 break;
             }
         }
@@ -4940,7 +4967,10 @@ rb_gc_impl_mark_and_move(void *objspace_ptr, VALUE *ptr)
         GC_ASSERT(objspace->flags.during_compacting);
         GC_ASSERT(during_gc);
 
-        *ptr = rb_gc_impl_location(objspace, *ptr);
+        VALUE destination = rb_gc_impl_location(objspace, *ptr);
+        if (destination != *ptr) {
+            *ptr = destination;
+        }
     }
     else {
         gc_mark(objspace, *ptr);
@@ -4974,10 +5004,10 @@ rb_gc_impl_mark_maybe(void *objspace_ptr, VALUE obj)
         asan_unpoisoning_object(obj) {
             /* Garbage can live on the stack, so do not mark or pin */
             switch (BUILTIN_TYPE(obj)) {
-            case T_ZOMBIE:
-            case T_NONE:
+              case T_ZOMBIE:
+              case T_NONE:
                 break;
-            default:
+              default:
                 gc_mark_and_pin(objspace, obj);
                 break;
             }
@@ -6730,15 +6760,19 @@ rb_gc_impl_writebarrier_remember(void *objspace_ptr, VALUE obj)
 
     gc_report(1, objspace, "rb_gc_writebarrier_remember: %s\n", rb_obj_info(obj));
 
-    if (is_incremental_marking(objspace)) {
-        if (RVALUE_BLACK_P(objspace, obj)) {
-            gc_grey(objspace, obj);
+    if (is_incremental_marking(objspace) || RVALUE_OLD_P(objspace, obj)) {
+        int lev = RB_GC_VM_LOCK_NO_BARRIER();
+        {
+            if (is_incremental_marking(objspace)) {
+                if (RVALUE_BLACK_P(objspace, obj)) {
+                    gc_grey(objspace, obj);
+                }
+            }
+            else if (RVALUE_OLD_P(objspace, obj)) {
+                rgengc_remember(objspace, obj);
+            }
         }
-    }
-    else {
-        if (RVALUE_OLD_P(objspace, obj)) {
-            rgengc_remember(objspace, obj);
-        }
+        RB_GC_VM_UNLOCK_NO_BARRIER(lev);
     }
 }
 

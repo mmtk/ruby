@@ -47,6 +47,10 @@ Note: We're only listing outstanding class updates.
     * `IO.select` accepts +Float::INFINITY+ as a timeout argument.
       [[Feature #20610]]
 
+* Math
+
+    * `Math.log1p` and `Math.expm1` are added. [[Feature #21527]]
+
 * Socket
 
     * `Socket.tcp` & `TCPSocket.new` accepts `open_timeout` as a keyword argument to specify
@@ -104,6 +108,16 @@ Note: We're only listing outstanding class updates.
     * Update Unicode to Version 16.0.0 and Emoji Version 16.0.
       [[Feature #19908]][[Feature #20724]] (also applies to Regexp)
 
+* Thread
+
+    * Introduce support for `Thread#raise(cause:)` argument similar to
+      `Kernel#raise`. [[Feature #21360]]
+
+* Fiber
+
+    * Introduce support for `Fiber#raise(cause:)` argument similar to
+      `Kernel#raise`. [[Feature #21360]]
+
 * Fiber::Scheduler
 
     * Introduce `Fiber::Scheduler#fiber_interrupt` to interrupt a fiber with a
@@ -150,7 +164,7 @@ The following default gems are updated.
 * io-console 0.8.1
 * io-nonblock 0.3.2
 * io-wait 0.3.2
-* json 2.13.0
+* json 2.13.2
 * optparse 0.7.0.dev.2
 * prism 1.4.0
 * psych 5.2.6
@@ -229,6 +243,22 @@ The following bundled gems are updated.
 
 ## JIT
 
+* YJIT
+    * YJIT stats
+        * `ratio_in_yjit` no longer works in the default build.
+          Use `--enable-yjit=stats` on `configure` to enable it on `--yjit-stats`.
+        * Add `invalidate_everything` to default stats, which is
+          incremented when every code is invalidated by TracePoint.
+    * Add `mem_size:` and `call_threshold:` options to `RubyVM::YJIT.enable`.
+* ZJIT
+    * Add an experimental method-based JIT compiler.
+      Use `--enable-zjit` on `configure` to enable the `--zjit` support.
+    * As of Ruby 3.5.0-preview2, ZJIT is not yet ready for speeding up most benchmarks.
+      Please refrain from evaluating ZJIT just yet. Stay tuned for the Ruby 3.5 release.
+* RJIT
+    * `--rjit` is removed. We will move the implementation of the third-party JIT API
+      to the [ruby/rjit](https://github.com/ruby/rjit) repository.
+
 [Feature #17473]: https://bugs.ruby-lang.org/issues/17473
 [Feature #18455]: https://bugs.ruby-lang.org/issues/18455
 [Feature #19908]: https://bugs.ruby-lang.org/issues/19908
@@ -243,3 +273,5 @@ The following bundled gems are updated.
 [Feature #21262]: https://bugs.ruby-lang.org/issues/21262
 [Feature #21287]: https://bugs.ruby-lang.org/issues/21287
 [Feature #21347]: https://bugs.ruby-lang.org/issues/21347
+[Feature #21360]: https://bugs.ruby-lang.org/issues/21360
+[Feature #21527]: https://bugs.ruby-lang.org/issues/21527

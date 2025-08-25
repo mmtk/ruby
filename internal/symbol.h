@@ -17,8 +17,7 @@
 #endif
 
 /* symbol.c */
-void rb_sym_global_symbols_mark(void);
-void rb_sym_global_symbols_update_references(void);
+void rb_sym_global_symbols_mark_and_move(void);
 #if USE_MMTK
 size_t rb_mmtk_get_sym_set_num_entries(void);
 VALUE rb_mmtk_get_sym_set(void);
@@ -42,6 +41,7 @@ void rb_mmtk_sym_global_symbol_table_foreach_weak_reference_range(size_t begin, 
 #endif
 void rb_gc_free_dsymbol(VALUE);
 int rb_static_id_valid_p(ID id);
+void rb_free_global_symbol_table(void);
 
 #if __has_builtin(__builtin_constant_p)
 #define rb_sym_intern_ascii_cstr(ptr) \

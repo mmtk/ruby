@@ -2091,7 +2091,7 @@ pub extern "C" fn rb_yjit_iseq_update_references(iseq: IseqPtr) {
 
                 // Only write when the VALUE moves, to be copy-on-write friendly.
                 if new_addr != object {
-                    // Since we already set code memory writable before the compacting phase,
+                    // SAFETY: Since we already set code memory writable before the compacting phase,
                     // we can use raw memory accesses directly.
                     unsafe { value_ptr.write_unaligned(new_addr); }
                 }

@@ -1575,6 +1575,33 @@ assert_equal 'true', %q{
   rs.map{|r| r.value} == Array.new(RN){n}
 }
 
+# check method cache invalidation
+assert_equal 'true', %q{
+  class Foo
+    def hello = nil
+  end
+
+  r1 = Ractor.new do
+    1000.times do
+      class Foo
+        def hello = nil
+      end
+    end
+  end
+
+  r2 = Ractor.new do
+    1000.times do
+      o = Foo.new
+      o.hello
+    end
+  end
+
+  r1.value
+  r2.value
+
+  true
+}
+
 # check experimental warning
 assert_match /\Atest_ractor\.rb:1:\s+warning:\s+Ractor is experimental/, %q{
   Warning[:experimental] = $VERBOSE = true
@@ -2317,3 +2344,33 @@ assert_equal "2", %q{
   raise unless $msg.all?{/Ractor#take/ =~ it}
   $msg.size
 }
+
+# Cause lots of inline CC misses.
+assert_equal 'ok', <<~'RUBY'
+  class A; def test; 1 + 1; end; end
+  class B; def test; 1 + 1; end; end
+  class C; def test; 1 + 1; end; end
+  class D; def test; 1 + 1; end; end
+  class E; def test; 1 + 1; end; end
+  class F; def test; 1 + 1; end; end
+  class G; def test; 1 + 1; end; end
+
+  objs = [A.new, B.new, C.new, D.new, E.new, F.new, G.new].freeze
+
+  def call_test(obj)
+    obj.test
+  end
+
+  ractors = 7.times.map do
+    Ractor.new(objs) do |objs|
+      objs = objs.shuffle
+      100_000.times do
+        objs.each do |o|
+          call_test(o)
+        end
+      end
+    end
+  end
+  ractors.each(&:join)
+  :ok
+RUBY

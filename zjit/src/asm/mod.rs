@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::fmt;
+use std::ops::Range;
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::mem;
@@ -7,7 +8,9 @@ use crate::virtualmem::*;
 
 // Lots of manual vertical alignment in there that rustfmt doesn't handle well.
 #[rustfmt::skip]
+#[cfg(target_arch = "x86_64")]
 pub mod x86_64;
+#[cfg(target_arch = "aarch64")]
 pub mod arm64;
 
 /// Index to a label created by cb.new_label()
@@ -122,7 +125,7 @@ impl CodeBlock {
     }
 
     /// Invoke a callback with write_ptr temporarily adjusted to a given address
-    pub fn with_write_ptr(&mut self, code_ptr: CodePtr, callback: impl Fn(&mut CodeBlock)) {
+    pub fn with_write_ptr(&mut self, code_ptr: CodePtr, callback: impl Fn(&mut CodeBlock)) -> Range<CodePtr> {
         // Temporarily update the write_pos. Ignore the dropped_bytes flag at the old address.
         let old_write_pos = self.write_pos;
         let old_dropped_bytes = self.dropped_bytes;
@@ -132,9 +135,13 @@ impl CodeBlock {
         // Invoke the callback
         callback(self);
 
+        // Build a code range modified by the callback
+        let ret = code_ptr..self.get_write_ptr();
+
         // Restore the original write_pos and dropped_bytes flag.
         self.dropped_bytes = old_dropped_bytes;
         self.write_pos = old_write_pos;
+        ret
     }
 
     /// Get a (possibly dangling) direct pointer into the executable memory block
@@ -338,7 +345,6 @@ pub fn uimm_num_bits(uimm: u64) -> u8
     return 64;
 }
 
-/*
 #[cfg(test)]
 mod tests
 {
@@ -374,32 +380,5 @@ mod tests
         assert_eq!(uimm_num_bits((u32::MAX as u64) + 1), 64);
         assert_eq!(uimm_num_bits(u64::MAX), 64);
     }
-
-    #[test]
-    fn test_code_size() {
-        // Write 4 bytes in the first page
-        let mut cb = CodeBlock::new_dummy(CodeBlock::PREFERRED_CODE_PAGE_SIZE * 2);
-        cb.write_bytes(&[0, 0, 0, 0]);
-        assert_eq!(cb.code_size(), 4);
-
-        // Moving to the next page should not increase code_size
-        cb.next_page(cb.get_write_ptr(), |_, _| {});
-        assert_eq!(cb.code_size(), 4);
-
-        // Write 4 bytes in the second page
-        cb.write_bytes(&[0, 0, 0, 0]);
-        assert_eq!(cb.code_size(), 8);
-
-        // Rewrite 4 bytes in the first page
-        let old_write_pos = cb.get_write_pos();
-        cb.set_pos(0);
-        cb.write_bytes(&[1, 1, 1, 1]);
-
-        // Moving from an old page to the next page should not increase code_size
-        cb.next_page(cb.get_write_ptr(), |_, _| {});
-        cb.set_pos(old_write_pos);
-        assert_eq!(cb.code_size(), 8);
-    }
 }
 
-*/
