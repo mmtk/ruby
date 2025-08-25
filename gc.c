@@ -3139,7 +3139,7 @@ rb_mmtk_scan_yjit_roots(void)
 void
 rb_mmtk_scan_global_symbols_roots(void)
 {
-    rb_sym_global_symbols_mark();
+    rb_sym_global_symbols_mark_and_move();
 }
 
 size_t rb_mmtk_get_id2ref_table_size(void)

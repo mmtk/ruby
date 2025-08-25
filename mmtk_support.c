@@ -726,10 +726,8 @@ rb_mmtk_is_initially_ppp(VALUE obj)
       case T_IMEMO:
         switch (imemo_type(obj)) {
           case imemo_tmpbuf:
-          case imemo_ast:
           case imemo_ifunc:
           case imemo_memo:
-          case imemo_parser_strterm:
             return true;
           default:
             return false;
@@ -852,9 +850,6 @@ rb_mmtk_is_initial_obj_free_candidate(VALUE obj)
         return true;
       case T_IMEMO:
         switch (imemo_type(obj)) {
-          case imemo_ast:
-            rb_bug("imemo_ast is obsolete");
-            UNREACHABLE;
           case imemo_callinfo:
           case imemo_env:
           case imemo_iseq:
@@ -911,41 +906,8 @@ rb_mmtk_maybe_register_initial_obj_free_candidate(struct rb_mmtk_mutator_local *
 
 static void
 rb_mmtk_call_obj_free_inner(VALUE obj, bool on_exit) {
-    if (on_exit) {
-        switch (BUILTIN_TYPE(obj)) {
-          case T_DATA:
-            if (!DATA_PTR(obj) || !((struct RData*)obj)->dfree) {
-                RUBY_DEBUG_LOG("Skipped data without dfree: %p: %s", (void*)obj, rb_type_str(RB_BUILTIN_TYPE(obj)));
-                return;
-            }
-            if (rb_obj_is_thread(obj)) {
-                RUBY_DEBUG_LOG("Skipped thread: %p: %s", (void*)obj, rb_type_str(RB_BUILTIN_TYPE(obj)));
-                return;
-            }
-            if (rb_obj_is_mutex(obj)) {
-                RUBY_DEBUG_LOG("Skipped mutex: %p: %s", (void*)obj, rb_type_str(RB_BUILTIN_TYPE(obj)));
-                return;
-            }
-            if (rb_obj_is_fiber(obj)) {
-                RUBY_DEBUG_LOG("Skipped fiber: %p: %s", (void*)obj, rb_type_str(RB_BUILTIN_TYPE(obj)));
-                return;
-            }
-            if (rb_obj_is_main_ractor(obj)) {
-                RUBY_DEBUG_LOG("Skipped main ractor: %p: %s", (void*)obj, rb_type_str(RB_BUILTIN_TYPE(obj)));
-                return;
-            }
-            break;
-          case T_FILE:
-            if (!((struct RFile*)obj)->fptr) {
-                RUBY_DEBUG_LOG("Skipped file without fptr: %p: %s", (void*)obj, rb_type_str(RB_BUILTIN_TYPE(obj)));
-                return;
-            }
-            break;
-          default:
-            RUBY_DEBUG_LOG("Skipped obj-free candidate that is neither T_DATA nor T_FILE: %p: %s",
-                (void*)obj, rb_type_str(RB_BUILTIN_TYPE(obj)));
-            return;
-        }
+    if (on_exit && !rb_gc_shutdown_call_finalizer_p(obj)) {
+        return;
     }
 
     RUBY_DEBUG_LOG("Freeing object: %p: %s", (void*)obj, rb_type_str(RB_BUILTIN_TYPE(obj)));

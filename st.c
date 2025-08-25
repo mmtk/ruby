@@ -2423,7 +2423,7 @@ rb_mmtk_st_update_entries_range(st_table *tab, size_t begin, size_t end, bool we
         }
     }
 
-    rbimpl_atomic_size_sub(&tab->num_entries, deleted_entries);
+    rbimpl_atomic_size_sub(&tab->num_entries, deleted_entries, __ATOMIC_SEQ_CST);
 
     return deleted_entries;
 }
