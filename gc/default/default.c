@@ -5018,6 +5018,18 @@ rb_gc_impl_mark_maybe(void *objspace_ptr, VALUE obj)
 void
 rb_gc_impl_mark_weak(void *objspace_ptr, VALUE *ptr)
 {
+    WHEN_USING_MMTK({
+        VALUE val = *ptr;
+        if (rb_special_const_p(val)) {
+            rb_bug("A weak field %p contains non-ref value %p\n", ptr, (void*)val);
+        }
+        if (!rb_mmtk_is_valid_objref(val)) {
+            rb_bug("A weak field %p contains invalid objref %p\n", ptr, (void*)val);
+        }
+        mmtk_discover_weak_field(ptr);
+        return;
+    })
+
     rb_objspace_t *objspace = objspace_ptr;
 
     GC_ASSERT(objspace->rgengc.parent_object == 0 || FL_TEST(objspace->rgengc.parent_object, FL_WB_PROTECTED));

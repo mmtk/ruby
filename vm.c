@@ -3457,8 +3457,11 @@ rb_execution_context_update(rb_execution_context_t *ec)
 
     ec->storage = rb_gc_location(ec->storage);
 
+    // These are weak fields.  We update then during the weak reference processing phase.
+    WHEN_NOT_USING_MMTK({
     ec->gen_fields_cache.obj = rb_gc_location(ec->gen_fields_cache.obj);
     ec->gen_fields_cache.fields_obj = rb_gc_location(ec->gen_fields_cache.fields_obj);
+    })
 }
 
 static enum rb_id_table_iterator_result

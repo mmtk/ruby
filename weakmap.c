@@ -5,6 +5,12 @@
 #include "internal/sanitizers.h"
 #include "ruby/st.h"
 
+#if USE_MMTK
+#include "internal/mmtk_support.h"
+#endif
+
+#include "internal/mmtk_macros.h"
+
 /* ===== WeakMap =====
  *
  * WeakMap contains one ST table which contains a pointer to the object as the
@@ -99,9 +105,14 @@ wmap_foreach(struct weakmap *w, int (*func)(struct weakmap_entry *, st_data_t), 
 static int
 wmap_mark_weak_table_i(struct weakmap_entry *entry, st_data_t _)
 {
+    WHEN_USING_MMTK2({
+        // FIXME: We temporarily treat keys and values as strong references.
+        rb_gc_mark_movable(entry->key);
+        rb_gc_mark_movable(entry->val);
+    }, {
     rb_gc_mark_weak(&entry->key);
     rb_gc_mark_weak(&entry->val);
-
+    })
     return ST_CONTINUE;
 }
 
@@ -642,7 +653,12 @@ wkmap_mark_table_i(st_data_t key, st_data_t val_obj, st_data_t data)
     VALUE *key_ptr = (VALUE *)key;
 
     if (wmap_live_p(*key_ptr)) {
+        WHEN_USING_MMTK2({
+            // FIXME: We temporarily treat keys and values as strong references.
+            rb_gc_mark_movable(*key_ptr);
+        }, {
         rb_gc_mark_weak(key_ptr);
+        })
         rb_gc_mark_movable((VALUE)val_obj);
 
         return ST_CONTINUE;

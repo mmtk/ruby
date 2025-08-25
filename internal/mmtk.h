@@ -8,7 +8,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
-
+#include "ruby/internal/value.h"
 typedef struct MMTk_Builder MMTk_Builder;
 typedef struct MMTk_Mutator MMTk_Mutator;
 
@@ -297,5 +297,7 @@ bool mmtk_hidden_header_is_sane(const struct MMTk_HiddenHeader *hidden_header);
 bool mmtk_current_gc_may_move_object(void);
 
 bool mmtk_current_gc_is_nursery(void);
+
+void mmtk_discover_weak_field(VALUE *field);
 
 #endif  /* MMTK_H */
