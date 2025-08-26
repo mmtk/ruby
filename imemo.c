@@ -378,9 +378,29 @@ rb_imemo_mark_and_move(VALUE obj, bool reference_updating)
         }
 #if USE_MMTK
         else if (rb_mmtk_enabled_p()) {
-            // When using MMTk, we just treat klass as a weak field, and cme_ as strong field.
+            // When using MMTk, we just treat klass as a weak field.
             rb_gc_mark_weak((VALUE*)&cc->klass);
-            rb_gc_mark_and_move((VALUE*)&cc->cme_);
+            // The cc->cme_ field is conditionally strong or weak.
+            // -   strong when (vm_cc_super_p(cc) || vm_cc_refinement_p(cc))
+            // -   weak otherwise
+            // If cc is cc_type_normal, klass can reach the cme via klass->cc_tbl->key,
+            // in which case cc->cme_ will be a weak field.
+            // Note: The default GC will always forward this field
+            // or invalidate the whole cc during the compaction phase,
+            // so the default GC won't even bother enqueuing this field to clear it.
+            // But MMTk's scavenging GCs don't have a compaction phase.
+            // They need to update this field during transitive closure if it is strong,
+            // or enqueue it to be forwarded or cleared later if it is weak.
+            // So we can't omit the rb_gc_mark_weak.
+            if ((vm_cc_super_p(cc) || vm_cc_refinement_p(cc))) {
+                rb_gc_mark_movable((VALUE)cc->cme_);
+            } else {
+                rb_gc_mark_weak((VALUE*)&cc->cme_);
+            }
+
+            // We never explicitly call vm_cc_invalidate(cc),
+            // but it will be implicitly invalidated if `cc->klass` is cleared during weak ref processing.
+            // I hope it is not a big problem.
 
             // We also don't do assertions because they read the fields of children which are not
             // traced, yet.
