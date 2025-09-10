@@ -21,7 +21,6 @@
 #include "builtin.h"
 #include "insns.inc"
 #include "insns_info.inc"
-#include "vm_sync.h"
 #include "yjit.h"
 #include "zjit.h"
 #include "vm_insnhelper.h"
@@ -38,12 +37,6 @@
 #endif
 
 #include <errno.h>
-
-// Field offsets for the RObject struct
-enum robject_offsets {
-    ROBJECT_OFFSET_AS_HEAP_FIELDS = offsetof(struct RObject, as.heap.fields),
-    ROBJECT_OFFSET_AS_ARY = offsetof(struct RObject, as.ary),
-};
 
 // Field offsets for the RString struct
 enum rstring_offsets {
@@ -420,18 +413,6 @@ rb_iseq_set_yjit_payload(const rb_iseq_t *iseq, void *payload)
     iseq->body->yjit_payload = payload;
 }
 
-void
-rb_iseq_reset_jit_func(const rb_iseq_t *iseq)
-{
-    RUBY_ASSERT_ALWAYS(IMEMO_TYPE_P(iseq, imemo_iseq));
-    iseq->body->jit_entry = NULL;
-    iseq->body->jit_exception = NULL;
-    // Enable re-compiling this ISEQ. Event when it's invalidated for TracePoint,
-    // we'd like to re-compile ISEQs that haven't been converted to trace_* insns.
-    iseq->body->jit_entry_calls = 0;
-    iseq->body->jit_exception_calls = 0;
-}
-
 rb_proc_t *
 rb_yjit_get_proc_ptr(VALUE procv)
 {
@@ -645,50 +626,9 @@ rb_ENCODING_GET(VALUE obj)
 }
 
 bool
-rb_yjit_multi_ractor_p(void)
-{
-    return rb_multi_ractor_p();
-}
-
-bool
 rb_yjit_constcache_shareable(const struct iseq_inline_constant_cache_entry *ice)
 {
     return (ice->flags & IMEMO_CONST_CACHE_SHAREABLE) != 0;
-}
-
-// Used for passing a callback and other data over rb_objspace_each_objects
-struct iseq_callback_data {
-    rb_iseq_callback callback;
-    void *data;
-};
-
-// Heap-walking callback for rb_yjit_for_each_iseq().
-static int
-for_each_iseq_i(void *vstart, void *vend, size_t stride, void *data)
-{
-    const struct iseq_callback_data *callback_data = (struct iseq_callback_data *)data;
-    VALUE v = (VALUE)vstart;
-    for (; v != (VALUE)vend; v += stride) {
-        void *ptr = rb_asan_poisoned_object_p(v);
-        rb_asan_unpoison_object(v, false);
-
-        if (rb_obj_is_iseq(v)) {
-            rb_iseq_t *iseq = (rb_iseq_t *)v;
-            callback_data->callback(iseq, callback_data->data);
-        }
-
-        asan_poison_object_if(ptr, v);
-    }
-    return 0;
-}
-
-// Iterate through the whole GC heap and invoke a callback for each iseq.
-// Used for global code invalidation.
-void
-rb_yjit_for_each_iseq(rb_iseq_callback callback, void *data)
-{
-    struct iseq_callback_data callback_data = { .callback = callback, .data = data };
-    rb_objspace_each_objects(for_each_iseq_i, (void *)&callback_data);
 }
 
 // For running write barriers from Rust. Required when we add a new edge in the
@@ -697,25 +637,6 @@ void
 rb_yjit_obj_written(VALUE old, VALUE young, const char *file, int line)
 {
     rb_obj_written(old, Qundef, young, file, line);
-}
-
-// Acquire the VM lock and then signal all other Ruby threads (ractors) to
-// contend for the VM lock, putting them to sleep. YJIT uses this to evict
-// threads running inside generated code so among other things, it can
-// safely change memory protection of regions housing generated code.
-void
-rb_yjit_vm_lock_then_barrier(unsigned int *recursive_lock_level, const char *file, int line)
-{
-    rb_vm_lock_enter(recursive_lock_level, file, line);
-    rb_vm_barrier();
-}
-
-// Release the VM lock. The lock level must point to the same integer used to
-// acquire the lock.
-void
-rb_yjit_vm_unlock(unsigned int *recursive_lock_level, const char *file, int line)
-{
-    rb_vm_lock_leave(recursive_lock_level, file, line);
 }
 
 void
@@ -734,7 +655,7 @@ rb_yjit_compile_iseq(const rb_iseq_t *iseq, rb_execution_context_t *ec, bool jit
         else {
             iseq->body->jit_entry = (rb_jit_func_t)code_ptr;
         }
-}
+    }
 }
 
 // GC root for interacting with the GC
@@ -756,12 +677,6 @@ rb_object_shape_count(void)
 {
     // next_shape_id starts from 0, so it's the same as the count
     return ULONG2NUM((unsigned long)rb_shapes_count());
-}
-
-bool
-rb_yjit_shape_too_complex_p(shape_id_t shape_id)
-{
-    return rb_shape_too_complex_p(shape_id);
 }
 
 bool

@@ -1,20 +1,29 @@
+//! Configurable options for ZJIT.
+
 use std::{ffi::{CStr, CString}, ptr::null};
 use std::os::raw::{c_char, c_int, c_uint};
 use crate::cruby::*;
 use std::collections::HashSet;
+
+/// Default --zjit-num-profiles
+const DEFAULT_NUM_PROFILES: u8 = 5;
+
+/// Default --zjit-call-threshold. This should be large enough to avoid compiling
+/// warmup code, but small enough to perform well on micro-benchmarks.
+pub const DEFAULT_CALL_THRESHOLD: u64 = 30;
 
 /// Number of calls to start profiling YARV instructions.
 /// They are profiled `rb_zjit_call_threshold - rb_zjit_profile_threshold` times,
 /// which is equal to --zjit-num-profiles.
 #[unsafe(no_mangle)]
 #[allow(non_upper_case_globals)]
-pub static mut rb_zjit_profile_threshold: u64 = 1;
+pub static mut rb_zjit_profile_threshold: u64 = DEFAULT_CALL_THRESHOLD - DEFAULT_NUM_PROFILES as u64;
 
 /// Number of calls to compile ISEQ with ZJIT at jit_compile() in vm.c.
 /// --zjit-call-threshold=1 compiles on first execution without profiling information.
 #[unsafe(no_mangle)]
 #[allow(non_upper_case_globals)]
-pub static mut rb_zjit_call_threshold: u64 = 2;
+pub static mut rb_zjit_call_threshold: u64 = DEFAULT_CALL_THRESHOLD;
 
 /// ZJIT command-line options. This is set before rb_zjit_init() sets
 /// ZJITState so that we can query some options while loading builtins.
@@ -32,6 +41,9 @@ pub struct Options {
     /// Enable YJIT statsitics
     pub stats: bool,
 
+    /// Print stats on exit (when stats is also true)
+    pub print_stats: bool,
+
     /// Enable debug logging
     pub debug: bool,
 
@@ -44,7 +56,8 @@ pub struct Options {
     /// Dump High-level IR after optimization, right before codegen.
     pub dump_hir_opt: Option<DumpHIR>,
 
-    pub dump_hir_graphviz: bool,
+    /// Dump High-level IR to the given file in Graphviz format after optimization
+    pub dump_hir_graphviz: Option<std::path::PathBuf>,
 
     /// Dump low-level IR
     pub dump_lir: bool,
@@ -59,20 +72,21 @@ pub struct Options {
     pub allowed_iseqs: Option<HashSet<String>>,
 
     /// Path to a file where compiled ISEQs will be saved.
-    pub log_compiled_iseqs: Option<String>,
+    pub log_compiled_iseqs: Option<std::path::PathBuf>,
 }
 
 impl Default for Options {
     fn default() -> Self {
         Options {
             exec_mem_bytes: 64 * 1024 * 1024,
-            num_profiles: 1,
+            num_profiles: DEFAULT_NUM_PROFILES,
             stats: false,
+            print_stats: false,
             debug: false,
             disable_hir_opt: false,
             dump_hir_init: None,
             dump_hir_opt: None,
-            dump_hir_graphviz: false,
+            dump_hir_graphviz: None,
             dump_lir: false,
             dump_disasm: false,
             perf: false,
@@ -85,7 +99,7 @@ impl Default for Options {
 /// `ruby --help` descriptions for user-facing options. Do not add options for ZJIT developers.
 /// Note that --help allows only 80 chars per line, including indentation, and it also puts the
 /// description in a separate line if the option name is too long.  80-char limit --> | (any character beyond this `|` column fails the test)
-pub const ZJIT_OPTIONS: &'static [(&str, &str)] = &[
+pub const ZJIT_OPTIONS: &[(&str, &str)] = &[
     // TODO: Hide --zjit-exec-mem-size from ZJIT_OPTIONS once we add --zjit-mem-size (Shopify/ruby#686)
     ("--zjit-exec-mem-size=num",
                      "Size of executable memory block in MiB (default: 64)."),
@@ -93,7 +107,7 @@ pub const ZJIT_OPTIONS: &'static [(&str, &str)] = &[
                      "Number of calls to trigger JIT (default: 2)."),
     ("--zjit-num-profiles=num",
                      "Number of profiled calls before JIT (default: 1, max: 255)."),
-    ("--zjit-stats", "Enable collecting ZJIT statistics."),
+    ("--zjit-stats[=quiet]", "Enable collecting ZJIT statistics (=quiet to suppress output)."),
     ("--zjit-perf",  "Dump ISEQ symbols into /tmp/perf-{}.map for Linux perf."),
     ("--zjit-log-compiled-iseqs=path",
                      "Log compiled ISEQs to the file. The file will be truncated."),
@@ -210,6 +224,11 @@ fn parse_option(str_ptr: *const std::os::raw::c_char) -> Option<()> {
 
         ("stats", "") => {
             options.stats = true;
+            options.print_stats = true;
+        }
+        ("stats", "quiet") => {
+            options.stats = true;
+            options.print_stats = false;
         }
 
         ("debug", "") => options.debug = true,
@@ -220,20 +239,13 @@ fn parse_option(str_ptr: *const std::os::raw::c_char) -> Option<()> {
         ("dump-hir" | "dump-hir-opt", "") => options.dump_hir_opt = Some(DumpHIR::WithoutSnapshot),
         ("dump-hir" | "dump-hir-opt", "all") => options.dump_hir_opt = Some(DumpHIR::All),
         ("dump-hir" | "dump-hir-opt", "debug") => options.dump_hir_opt = Some(DumpHIR::Debug),
-        ("dump-hir-graphviz", "") => options.dump_hir_graphviz = true,
 
         ("dump-hir-init", "") => options.dump_hir_init = Some(DumpHIR::WithoutSnapshot),
         ("dump-hir-init", "all") => options.dump_hir_init = Some(DumpHIR::All),
         ("dump-hir-init", "debug") => options.dump_hir_init = Some(DumpHIR::Debug),
 
-        ("dump-lir", "") => options.dump_lir = true,
-
-        ("dump-disasm", "") => options.dump_disasm = true,
-
-        ("perf", "") => options.perf = true,
-
-        ("allowed-iseqs", _) if opt_val != "" => options.allowed_iseqs = Some(parse_jit_list(opt_val)),
-        ("log-compiled-iseqs", _) if opt_val != "" => {
+        ("dump-hir-graphviz", "") => options.dump_hir_graphviz = Some("/dev/stderr".into()),
+        ("dump-hir-graphviz", _) => {
             // Truncate the file if it exists
             std::fs::OpenOptions::new()
                 .create(true)
@@ -242,7 +254,28 @@ fn parse_option(str_ptr: *const std::os::raw::c_char) -> Option<()> {
                 .open(opt_val)
                 .map_err(|e| eprintln!("Failed to open file '{}': {}", opt_val, e))
                 .ok();
-            options.log_compiled_iseqs = Some(opt_val.into());
+            let opt_val = std::fs::canonicalize(opt_val).unwrap_or_else(|_| opt_val.into());
+            options.dump_hir_graphviz = Some(opt_val);
+        }
+
+        ("dump-lir", "") => options.dump_lir = true,
+
+        ("dump-disasm", "") => options.dump_disasm = true,
+
+        ("perf", "") => options.perf = true,
+
+        ("allowed-iseqs", _) if !opt_val.is_empty() => options.allowed_iseqs = Some(parse_jit_list(opt_val)),
+        ("log-compiled-iseqs", _) if !opt_val.is_empty() => {
+            // Truncate the file if it exists
+            std::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(opt_val)
+                .map_err(|e| eprintln!("Failed to open file '{}': {}", opt_val, e))
+                .ok();
+            let opt_val = std::fs::canonicalize(opt_val).unwrap_or_else(|_| opt_val.into());
+            options.log_compiled_iseqs = Some(opt_val);
         }
 
         _ => return None, // Option name not recognized
@@ -262,6 +295,15 @@ fn update_profile_threshold() {
         let num_profiles = get_option!(num_profiles) as u64;
         unsafe { rb_zjit_profile_threshold = rb_zjit_call_threshold.saturating_sub(num_profiles).max(1) };
     }
+}
+
+#[cfg(test)]
+pub fn internal_set_num_profiles(n: u8) {
+    let options = unsafe { OPTIONS.as_mut().unwrap() };
+    options.num_profiles = n;
+    let call_threshold = n.saturating_add(1);
+    unsafe { rb_zjit_call_threshold = call_threshold as u64; }
+    update_profile_threshold();
 }
 
 /// Print YJIT options for `ruby --help`. `width` is width of option parts, and
@@ -305,7 +347,18 @@ pub extern "C" fn rb_zjit_option_enabled_p(_ec: EcPtr, _self: VALUE) -> VALUE {
 #[unsafe(no_mangle)]
 pub extern "C" fn rb_zjit_stats_enabled_p(_ec: EcPtr, _self: VALUE) -> VALUE {
     // Builtin zjit.rb calls this even if ZJIT is disabled, so OPTIONS may not be set.
-    if unsafe { OPTIONS.as_ref() }.map_or(false, |opts| opts.stats) {
+    if unsafe { OPTIONS.as_ref() }.is_some_and(|opts| opts.stats) {
+        Qtrue
+    } else {
+        Qfalse
+    }
+}
+
+/// Return Qtrue if stats should be printed at exit.
+#[unsafe(no_mangle)]
+pub extern "C" fn rb_zjit_print_stats_p(_ec: EcPtr, _self: VALUE) -> VALUE {
+    // Builtin zjit.rb calls this even if ZJIT is disabled, so OPTIONS may not be set.
+    if unsafe { OPTIONS.as_ref() }.is_some_and(|opts| opts.stats && opts.print_stats) {
         Qtrue
     } else {
         Qfalse

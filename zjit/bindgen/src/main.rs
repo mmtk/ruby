@@ -111,7 +111,6 @@ fn main() {
         .allowlist_function("rb_shape_id_offset")
         .allowlist_function("rb_shape_get_iv_index")
         .allowlist_function("rb_shape_transition_add_ivar_no_warnings")
-        .allowlist_function("rb_zjit_shape_obj_too_complex_p")
         .allowlist_var("SHAPE_ID_NUM_BITS")
 
         // From ruby/internal/intern/object.h
@@ -145,6 +144,7 @@ fn main() {
         .allowlist_function("rb_ary_store")
         .allowlist_function("rb_ary_resurrect")
         .allowlist_function("rb_ary_cat")
+        .allowlist_function("rb_ary_concat")
         .allowlist_function("rb_ary_clear")
         .allowlist_function("rb_ary_dup")
         .allowlist_function("rb_ary_push")
@@ -330,6 +330,7 @@ fn main() {
         .allowlist_type("vm_check_match_type")
         .allowlist_type("vm_opt_newarray_send_type")
         .allowlist_type("rb_iseq_type")
+        .allowlist_type("rb_event_flag_t")
 
         // From zjit.c
         .allowlist_function("rb_object_shape_count")
@@ -347,11 +348,8 @@ fn main() {
         .allowlist_function("rb_set_cfp_(pc|sp)")
         .allowlist_function("rb_c_method_tracing_currently_enabled")
         .allowlist_function("rb_full_cfunc_return")
-        .allowlist_function("rb_zjit_vm_lock_then_barrier")
-        .allowlist_function("rb_zjit_vm_unlock")
         .allowlist_function("rb_assert_(iseq|cme)_handle")
         .allowlist_function("rb_IMEMO_TYPE_P")
-        .allowlist_function("rb_iseq_reset_jit_func")
         .allowlist_function("rb_RSTRING_PTR")
         .allowlist_function("rb_RSTRING_LEN")
         .allowlist_function("rb_ENCODING_GET")
@@ -359,12 +357,21 @@ fn main() {
         .allowlist_function("rb_zjit_icache_invalidate")
         .allowlist_function("rb_zjit_print_exception")
         .allowlist_function("rb_zjit_singleton_class_p")
+        .allowlist_function("rb_zjit_defined_ivar")
+        .allowlist_function("rb_zjit_insn_leaf")
         .allowlist_type("robject_offsets")
         .allowlist_type("rstring_offsets")
         .allowlist_var("RB_INVALID_SHAPE_ID")
 
         // From jit.c
         .allowlist_function("rb_assert_holding_vm_lock")
+        .allowlist_function("rb_jit_shape_too_complex_p")
+        .allowlist_function("rb_jit_multi_ractor_p")
+        .allowlist_function("rb_jit_vm_lock_then_barrier")
+        .allowlist_function("rb_jit_vm_unlock")
+        .allowlist_function("rb_jit_for_each_iseq")
+        .allowlist_function("rb_iseq_reset_jit_func")
+        .allowlist_type("robject_offsets")
 
         // from vm_sync.h
         .allowlist_function("rb_vm_barrier")
@@ -402,7 +409,7 @@ fn main() {
         .allowlist_function("rb_mod_name")
 
         // From internal/vm.h
-        .allowlist_var("rb_vm_insns_count")
+        .allowlist_var("rb_vm_insn_count")
 
         // From include/ruby/internal/intern/vm.h
         .allowlist_function("rb_get_alloc_func")
@@ -410,6 +417,8 @@ fn main() {
         // From internal/object.h
         .allowlist_function("rb_class_allocate_instance")
         .allowlist_function("rb_obj_equal")
+        .allowlist_function("rb_class_new_instance_pass_kw")
+        .allowlist_function("rb_obj_alloc")
 
         // From gc.h and internal/gc.h
         .allowlist_function("rb_obj_info")
@@ -430,7 +439,6 @@ fn main() {
         .allowlist_function("rb_get_cfp_ep")
         .allowlist_function("rb_get_cfp_ep_level")
         .allowlist_function("rb_get_cme_def_type")
-        .allowlist_function("rb_zjit_multi_ractor_p")
         .allowlist_function("rb_zjit_constcache_shareable")
         .allowlist_function("rb_get_cme_def_body_attr_id")
         .allowlist_function("rb_get_symbol_id")

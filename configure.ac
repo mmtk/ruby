@@ -1805,10 +1805,6 @@ RUBY_DECL_ATTRIBUTE([__nonnull__(n)], [RUBY_FUNC_NONNULL(n,x)], [rb_cv_func_nonn
 
 RUBY_APPEND_OPTION(XCFLAGS, -DRUBY_EXPORT)
 
-AC_ARG_ENABLE(mathn,
-    AS_HELP_STRING([--enable-mathn], [enable canonicalization for mathn]),
-    [AC_MSG_ERROR([mathn support has been dropped])])
-
 AC_CACHE_CHECK(for function name string predefined identifier,
     rb_cv_function_name_string,
     [AS_CASE(["$target_os"],[openbsd*],[
@@ -4702,21 +4698,7 @@ AC_CONFIG_FILES(Makefile:template/Makefile.in, [
 
 	echo; echo '$(srcdir)/$(CONFIGURE):RUBY_M4_INCLUDED \
 	$(empty)'
-    } > $tmpmk && AS_IF([! grep '^ruby:' $tmpmk > /dev/null], [
-	AS_IF([test "${gnumake}" = yes], [
-	    tmpgmk=confgmk$$.tmp
-	    {
-		echo "include $tmpmk"
-		echo "-include uncommon.mk"
-	    } > $tmpgmk
-	], [
-	    tmpgmk=$tmpmk
-	]) &&
-	test -z "`${MAKE-make} -f $tmpgmk info-program | grep '^PROGRAM=ruby$'`" &&
-	echo 'ruby: $(PROGRAM);' >> $tmpmk
-	rm -f uncommon.mk # remove stale uncommon.mk, it should be updated by GNUmakefile
-	test "$tmpmk" = "$tmpgmk" || rm -f "$tmpgmk"
-    ]) && mv -f $tmpmk Makefile],
+    } > $tmpmk && mv -f $tmpmk Makefile],
 [EXEEXT='$EXEEXT' MAKE='${MAKE-make}' gnumake='$gnumake' GIT='$GIT' YJIT_SUPPORT='$YJIT_SUPPORT'])
 
 AC_ARG_WITH([ruby-pc],

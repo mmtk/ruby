@@ -452,7 +452,7 @@ jit_compile(rb_execution_context_t *ec)
 
         // At call-threshold, compile the ISEQ with ZJIT.
         if (body->jit_entry_calls == rb_zjit_call_threshold) {
-            rb_zjit_compile_iseq(iseq, ec, false);
+            rb_zjit_compile_iseq(iseq, false);
         }
     }
 #endif
@@ -500,8 +500,25 @@ jit_compile_exception(rb_execution_context_t *ec)
     const rb_iseq_t *iseq = ec->cfp->iseq;
     struct rb_iseq_constant_body *body = ISEQ_BODY(iseq);
 
-    // Increment the ISEQ's call counter and trigger JIT compilation if not compiled
+#if USE_ZJIT
+    if (body->jit_exception == NULL && rb_zjit_enabled_p) {
+        body->jit_exception_calls++;
+
+        // At profile-threshold, rewrite some of the YARV instructions
+        // to zjit_* instructions to profile these instructions.
+        if (body->jit_exception_calls == rb_zjit_profile_threshold) {
+            rb_zjit_profile_enable(iseq);
+        }
+
+        // At call-threshold, compile the ISEQ with ZJIT.
+        if (body->jit_exception_calls == rb_zjit_call_threshold) {
+            rb_zjit_compile_iseq(iseq, true);
+        }
+    }
+#endif
+
 #if USE_YJIT
+    // Increment the ISEQ's call counter and trigger JIT compilation if not compiled
     if (body->jit_exception == NULL && rb_yjit_enabled_p) {
         body->jit_exception_calls++;
         if (body->jit_exception_calls == rb_yjit_call_threshold) {
@@ -584,7 +601,7 @@ rb_current_ec_set(rb_execution_context_t *ec)
 }
 
 
-#if defined(__arm64__) || defined(__aarch64__)
+#if defined(__arm64__) || defined(__aarch64__) || defined(__powerpc64__)
 rb_execution_context_t *
 rb_current_ec(void)
 {
@@ -1051,7 +1068,7 @@ vm_make_env_each(const rb_execution_context_t * const ec, rb_control_frame_t *co
     // Invalidate JIT code that assumes cfp->ep == vm_base_ptr(cfp).
     if (env->iseq) {
         rb_yjit_invalidate_ep_is_bp(env->iseq);
-        rb_zjit_invalidate_ep_is_bp(env->iseq);
+        rb_zjit_invalidate_no_ep_escape(env->iseq);
     }
 
     return (VALUE)env;
@@ -1548,6 +1565,7 @@ rb_binding_add_dynavars(VALUE bindval, rb_binding_t *bind, int dyncount, const I
     rb_node_init(RNODE(&tmp_node), NODE_SCOPE);
     tmp_node.nd_tbl = dyns;
     tmp_node.nd_body = 0;
+    tmp_node.nd_parent = NULL;
     tmp_node.nd_args = 0;
 
     VALUE ast_value = rb_ruby_ast_new(RNODE(&tmp_node));

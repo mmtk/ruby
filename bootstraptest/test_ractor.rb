@@ -417,7 +417,7 @@ assert_equal '{ok: 3}', %q{
   end
 
   3.times.map{Ractor.receive}.tally
-} unless yjit_enabled? || zjit_enabled? # YJIT: `[BUG] Bus Error at 0x000000010b7002d0` in jit_exec(), ZJIT hangs
+} unless yjit_enabled? # YJIT: `[BUG] Bus Error at 0x000000010b7002d0` in jit_exec()
 
 # unshareable object are copied
 assert_equal 'false', %q{
@@ -2329,22 +2329,6 @@ assert_equal '[["Only the successor ractor can take a value", 9], ["ok", 2]]', %
   }.tally.sort
 }
 
-# Ractor#take will warn for compatibility.
-# This method will be removed after 2025/09/01
-assert_equal "2", %q{
-  raise "remove Ractor#take and this test" if Time.now > Time.new(2025, 9, 2)
-  $VERBOSE = true
-  r = Ractor.new{42}
-  $msg = []
-  def Warning.warn(msg)
-    $msg << msg
-  end
-  r.take
-  r.take
-  raise unless $msg.all?{/Ractor#take/ =~ it}
-  $msg.size
-}
-
 # Cause lots of inline CC misses.
 assert_equal 'ok', <<~'RUBY'
   class A; def test; 1 + 1; end; end
@@ -2372,5 +2356,28 @@ assert_equal 'ok', <<~'RUBY'
     end
   end
   ractors.each(&:join)
+  :ok
+RUBY
+
+# This test checks that we do not trigger a GC when we have malloc with Ractor
+# locks. We cannot trigger a GC with Ractor locks because GC requires VM lock
+# and Ractor barrier. If another Ractor is waiting on this Ractor lock, then it
+# will deadlock because the other Ractor will never join the barrier.
+#
+# Creating Ractor::Port requires locking the Ractor and inserting into an
+# st_table, which can call malloc.
+assert_equal 'ok', <<~'RUBY'
+  r = Ractor.new do
+    loop do
+      Ractor::Port.new
+    end
+  end
+
+  10.times do
+    10_000.times do
+      r.send(nil)
+    end
+    sleep(0.01)
+  end
   :ok
 RUBY

@@ -7789,12 +7789,7 @@ rb_str_escape(VALUE str)
  *  call-seq:
  *    inspect -> string
  *
- *  Returns a printable version of +self+, enclosed in double-quotes,
- *  and with special characters escaped:
- *
- *    s = "foo\tbar\tbaz\n"
- *    s.inspect
- *    # => "\"foo\\tbar\\tbaz\\n\""
+ *  :include: doc/string/inspect.rdoc
  *
  */
 
@@ -10217,11 +10212,53 @@ rb_str_each_line(int argc, VALUE *argv, VALUE str)
 
 /*
  *  call-seq:
- *    lines(Line_sep = $/, chomp: false) -> array_of_strings
+ *    lines(record_separator = $/, chomp: false) -> array_of_strings
  *
- *  Forms substrings ("lines") of +self+ according to the given arguments
- *  (see String#each_line for details); returns the lines in an array.
+ *  Returns substrings ("lines") of +self+
+ *  according to the given arguments:
  *
+ *    s = <<~EOT
+ *    This is the first line.
+ *    This is line two.
+ *
+ *    This is line four.
+ *    This is line five.
+ *    EOT
+ *
+ *  With the default argument values:
+ *
+ *    $/ # => "\n"
+ *    s.lines
+ *    # =>
+ *    ["This is the first line.\n",
+ *     "This is line two.\n",
+ *     "\n",
+ *     "This is line four.\n",
+ *     "This is line five.\n"]
+ *
+ *  With a different +record_separator+:
+ *
+ *    record_separator = ' is '
+ *    s.lines(record_separator)
+ *    # =>
+ *    ["This is ",
+ *     "the first line.\nThis is ",
+ *     "line two.\n\nThis is ",
+ *     "line four.\nThis is ",
+ *     "line five.\n"]
+ *
+ *  With keyword argument +chomp+ as +true+,
+ *  removes the trailing newline from each line:
+ *
+ *    s.lines(chomp: true)
+ *    # =>
+ *    ["This is the first line.",
+ *     "This is line two.",
+ *     "",
+ *     "This is line four.",
+ *     "This is line five."]
+ *
+ *  Related: see {Converting to Non-String}[rdoc-ref:String@Converting+to+Non--5CString].
  */
 
 static VALUE
@@ -10848,10 +10885,12 @@ lstrip_offset(VALUE str, const char *s, const char *e, rb_encoding *enc)
  *  call-seq:
  *    lstrip! -> self or nil
  *
- *  Like String#lstrip, except that any modifications are made in +self+;
- *  returns +self+ if any modification are made, +nil+ otherwise.
+ *  Like String#lstrip, except that:
  *
- *  Related: String#rstrip!, String#strip!.
+ *  - Performs stripping in +self+ (not in a copy of +self+).
+ *  - Returns +self+ if any characters are stripped, +nil+ otherwise.
+ *
+ *  Related: see {Modifying}[rdoc-ref:String@Modifying].
  */
 
 static VALUE
@@ -11557,11 +11596,9 @@ rb_str_justify(int argc, VALUE *argv, VALUE str, char jflag)
 
 /*
  *  call-seq:
- *    ljust(size, pad_string = ' ') -> new_string
+ *    ljust(width, pad_string = ' ') -> new_string
  *
  *  :include: doc/string/ljust.rdoc
- *
- *  Related: String#rjust, String#center.
  *
  */
 
