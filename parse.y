@@ -3026,13 +3026,13 @@ rb_parser_ary_free(rb_parser_t *p, rb_parser_ary_t *ary)
                     }
                 ;
 
-%rule mlhs(item) <node>
+%rule mlhs_items(item) <node>
                 : item
                     {
                         $$ = NEW_LIST($1, &@$);
                     /*% ripper: mlhs_add!(mlhs_new!, $:1) %*/
                     }
-                | mlhs(item) ',' item
+                | mlhs_items(item) ',' item
                     {
                         $$ = list_append(p, $1, $3);
                     /*% ripper: mlhs_add!($:1, $:3) %*/
@@ -3676,7 +3676,7 @@ mlhs_basic	: mlhs_head
                         $$ = NEW_MASGN($1, $3, &@$);
                     /*% ripper: mlhs_add_star!($:1, $:3) %*/
                     }
-                | mlhs_head tSTAR mlhs_node ',' mlhs(mlhs_item)
+                | mlhs_head tSTAR mlhs_node ',' mlhs_items(mlhs_item)
                     {
                         $$ = NEW_MASGN($1, NEW_POSTARG($3,$5,&@$), &@$);
                     /*% ripper: mlhs_add_post!(mlhs_add_star!($:1, $:3), $:5) %*/
@@ -3686,7 +3686,7 @@ mlhs_basic	: mlhs_head
                         $$ = NEW_MASGN($1, NODE_SPECIAL_NO_NAME_REST, &@$);
                     /*% ripper: mlhs_add_star!($:1, Qnil) %*/
                     }
-                | mlhs_head tSTAR ',' mlhs(mlhs_item)
+                | mlhs_head tSTAR ',' mlhs_items(mlhs_item)
                     {
                         $$ = NEW_MASGN($1, NEW_POSTARG(NODE_SPECIAL_NO_NAME_REST, $4, &@$), &@$);
                     /*% ripper: mlhs_add_post!(mlhs_add_star!($:1, Qnil), $:4) %*/
@@ -3696,7 +3696,7 @@ mlhs_basic	: mlhs_head
                         $$ = NEW_MASGN(0, $2, &@$);
                     /*% ripper: mlhs_add_star!(mlhs_new!, $:2) %*/
                     }
-                | tSTAR mlhs_node ',' mlhs(mlhs_item)
+                | tSTAR mlhs_node ',' mlhs_items(mlhs_item)
                     {
                         $$ = NEW_MASGN(0, NEW_POSTARG($2,$4,&@$), &@$);
                     /*% ripper: mlhs_add_post!(mlhs_add_star!(mlhs_new!, $:2), $:4) %*/
@@ -3706,7 +3706,7 @@ mlhs_basic	: mlhs_head
                         $$ = NEW_MASGN(0, NODE_SPECIAL_NO_NAME_REST, &@$);
                     /*% ripper: mlhs_add_star!(mlhs_new!, Qnil) %*/
                     }
-                | tSTAR ',' mlhs(mlhs_item)
+                | tSTAR ',' mlhs_items(mlhs_item)
                     {
                         $$ = NEW_MASGN(0, NEW_POSTARG(NODE_SPECIAL_NO_NAME_REST, $3, &@$), &@$);
                     /*% ripper: mlhs_add_post!(mlhs_add_star!(mlhs_new!, Qnil), $:3) %*/
@@ -4194,6 +4194,11 @@ opt_call_args	: none
                 ;
 
 call_args	: value_expr(command)
+                    {
+                        $$ = NEW_LIST($1, &@$);
+                    /*% ripper: args_add!(args_new!, $:1) %*/
+                    }
+                | def_endless_method(endless_command)
                     {
                         $$ = NEW_LIST($1, &@$);
                     /*% ripper: args_add!(args_new!, $:1) %*/
@@ -4912,17 +4917,17 @@ f_marg		: f_norm_arg
                 ;
 
 
-f_margs		: mlhs(f_marg)
+f_margs		: mlhs_items(f_marg)
                     {
                         $$ = NEW_MASGN($1, 0, &@$);
                     /*% ripper: $:1 %*/
                     }
-                | mlhs(f_marg) ',' f_rest_marg
+                | mlhs_items(f_marg) ',' f_rest_marg
                     {
                         $$ = NEW_MASGN($1, $3, &@$);
                     /*% ripper: mlhs_add_star!($:1, $:3) %*/
                     }
-                | mlhs(f_marg) ',' f_rest_marg ',' mlhs(f_marg)
+                | mlhs_items(f_marg) ',' f_rest_marg ',' mlhs_items(f_marg)
                     {
                         $$ = NEW_MASGN($1, NEW_POSTARG($3, $5, &@$), &@$);
                     /*% ripper: mlhs_add_post!(mlhs_add_star!($:1, $:3), $:5) %*/
@@ -4932,7 +4937,7 @@ f_margs		: mlhs(f_marg)
                         $$ = NEW_MASGN(0, $1, &@$);
                     /*% ripper: mlhs_add_star!(mlhs_new!, $:1) %*/
                     }
-                | f_rest_marg ',' mlhs(f_marg)
+                | f_rest_marg ',' mlhs_items(f_marg)
                     {
                         $$ = NEW_MASGN(0, NEW_POSTARG($1, $3, &@$), &@$);
                     /*% ripper: mlhs_add_post!(mlhs_add_star!(mlhs_new!, $:1), $:3) %*/
@@ -5892,7 +5897,8 @@ strings		: string
                     {
                         if (!$1) {
                             $$ = NEW_STR(STRING_NEW0(), &@$);
-                        } else {
+                        }
+                        else {
                             $$ = evstr2dstr(p, $1);
                         }
                     /*% ripper: $:1 %*/
@@ -6917,7 +6923,8 @@ parser_dispatch_delayed_token(struct parser_params *p, enum yytokentype t, int l
     if (p->keep_tokens) {
         /* p->delayed.token is freed by rb_parser_tokens_free */
         parser_append_tokens(p, p->delayed.token, t, line);
-    } else {
+    }
+    else {
         rb_parser_string_free(p, p->delayed.token);
     }
 
@@ -6978,6 +6985,16 @@ static inline int
 is_identchar(struct parser_params *p, const char *ptr, const char *MAYBE_UNUSED(ptr_end), rb_encoding *enc)
 {
     return rb_enc_isalnum((unsigned char)*ptr, enc) || *ptr == '_' || !ISASCII(*ptr);
+}
+
+static inline bool
+peek_word_at(struct parser_params *p, const char *str, size_t len, int at)
+{
+    const char *ptr = p->lex.pcur + at;
+    if (lex_eol_ptr_n_p(p, ptr, len-1)) return false;
+    if (memcmp(ptr, str, len)) return false;
+    if (lex_eol_ptr_n_p(p, ptr, len)) return true;
+    return !is_identchar(p, ptr+len, p->lex.pend, p->enc);
 }
 
 static inline int
@@ -10551,7 +10568,24 @@ parser_yylex(struct parser_params *p)
                     token_flush(p);
                 }
                 goto retry;
+              case 'a':
+                if (peek_word_at(p, "nd", 2, 0)) goto leading_logical;
+                goto bol;
+              case 'o':
+                if (peek_word_at(p, "r", 1, 0)) goto leading_logical;
+                goto bol;
+              case '|':
+                if (peek(p, '|')) goto leading_logical;
+                goto bol;
               case '&':
+                if (peek(p, '&')) {
+                  leading_logical:
+                    pushback(p, c);
+                    dispatch_delayed_token(p, tIGNORED_NL);
+                    cmd_state = FALSE;
+                    goto retry;
+                }
+                /* fall through */
               case '.': {
                 dispatch_delayed_token(p, tIGNORED_NL);
                 if (peek(p, '.') == (c == '&')) {
@@ -10560,6 +10594,7 @@ parser_yylex(struct parser_params *p)
                     goto retry;
                 }
               }
+              bol:
               default:
                 p->ruby_sourceline--;
                 p->lex.nextline = p->lex.lastline;

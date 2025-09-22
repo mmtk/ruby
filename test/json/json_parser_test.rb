@@ -319,6 +319,12 @@ class JSONParserTest < Test::Unit::TestCase
     assert_raise(JSON::ParserError) { parse('"\u111___"') }
   end
 
+  def test_invalid_surogates
+    assert_raise(JSON::ParserError) { parse('"\\uD800"') }
+    assert_raise(JSON::ParserError) { parse('"\\uD800_________________"') }
+    assert_raise(JSON::ParserError) { parse('"\\uD800\\u0041"') }
+  end
+
   def test_parse_big_integers
     json1 = JSON(orig = (1 << 31) - 1)
     assert_equal orig, parse(json1)
@@ -347,7 +353,7 @@ class JSONParserTest < Test::Unit::TestCase
       assert_equal expected_sym, parse('{"a": 1, "a": 2}', symbolize_names: true)
     end
 
-    if RUBY_ENGINE == 'RUBY_ENGINE'
+    if RUBY_ENGINE == 'ruby'
       assert_deprecated_warning(/#{File.basename(__FILE__)}\:#{__LINE__ + 1}/) do
         assert_equal expected, parse('{"a": 1, "a": 2}')
       end
@@ -397,10 +403,8 @@ class JSONParserTest < Test::Unit::TestCase
     assert_predicate parse('[]', :freeze => true), :frozen?
     assert_predicate parse('"foo"', :freeze => true), :frozen?
 
-    if string_deduplication_available?
-      assert_same(-'foo', parse('"foo"', :freeze => true))
-      assert_same(-'foo', parse('{"foo": 1}', :freeze => true).keys.first)
-    end
+    assert_same(-'foo', parse('"foo"', :freeze => true))
+    assert_same(-'foo', parse('{"foo": 1}', :freeze => true).keys.first)
   end
 
   def test_parse_comments
@@ -637,6 +641,7 @@ class JSONParserTest < Test::Unit::TestCase
   def test_parse_array_custom_non_array_derived_class
     res = parse('[1,2]', :array_class => SubArrayWrapper)
     assert_equal([1,2], res.data)
+    assert_equal(1, res[0])
     assert_equal(SubArrayWrapper, res.class)
     assert res.shifted?
   end
@@ -698,6 +703,7 @@ class JSONParserTest < Test::Unit::TestCase
     def test_parse_object_custom_non_hash_derived_class
       res = parse('{"foo":"bar"}', :object_class => SubOpenStruct)
       assert_equal "bar", res.foo
+      assert_equal "bar", res[:foo]
       assert_equal(SubOpenStruct, res.class)
       assert res.item_set?
     end
@@ -793,16 +799,6 @@ class JSONParserTest < Test::Unit::TestCase
   end
 
   private
-
-  def string_deduplication_available?
-    r1 = rand.to_s
-    r2 = r1.dup
-    begin
-      (-r1).equal?(-r2)
-    rescue NoMethodError
-      false # No String#-@
-    end
-  end
 
   def assert_equal_float(expected, actual, delta = 1e-2)
     Array === expected and expected = expected.first

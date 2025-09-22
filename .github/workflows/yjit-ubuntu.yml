@@ -145,6 +145,12 @@ jobs:
         if: ${{ matrix.rust_version }}
         run: rustup install ${{ matrix.rust_version }} --profile minimal
 
+      - name: Remove cargo
+        # Since this tests a `rustc` build for release, remove `cargo` to ensure
+        # that only `rustc` is used.
+        if: ${{ contains(matrix.configure, 'rustc') }}
+        run: sudo rm $(which -a cargo | uniq)
+
       - name: Run configure
         run: ../src/configure -C --disable-install-doc --prefix=$(pwd)/install ${{ matrix.configure }}
 
@@ -162,8 +168,10 @@ jobs:
           ruby -ne 'raise "Disassembly seems broken in dev build (output has too few lines)" unless $_.to_i > 10'
         if: ${{ contains(matrix.configure, 'jit=dev') }}
 
-      - name: Enable YJIT through ENV
-        run: echo "RUBY_YJIT_ENABLE=1" >> $GITHUB_ENV
+      - name: Set ENV for YJIT
+        run: |
+          echo "RUBY_YJIT_ENABLE=1" >> $GITHUB_ENV
+          echo "RUBY_CRASH_REPORT=$(pwd)/rb_crash_%p.txt" >> $GITHUB_ENV
 
       # Check that the binary was built with YJIT
       - name: Check YJIT enabled
@@ -187,6 +195,7 @@ jobs:
           test -n "${LAUNCHABLE_STDOUT}" && exec 1> >(tee "${LAUNCHABLE_STDOUT}")
           test -n "${LAUNCHABLE_STDERR}" && exec 2> >(tee "${LAUNCHABLE_STDERR}")
 
+          set -x
           make -s ${{ matrix.test_task }} ${TESTS:+TESTS="$TESTS"} \
             RUN_OPTS="$RUN_OPTS" MSPECOPT=--debug SPECOPTS="$SPECOPTS" \
             YJIT_BENCH_OPTS="$YJIT_BENCH_OPTS" YJIT_BINDGEN_DIFF_OPTS="$YJIT_BINDGEN_DIFF_OPTS"
@@ -201,6 +210,11 @@ jobs:
           LAUNCHABLE_STDOUT: ${{ steps.launchable.outputs.stdout_report_path }}
           LAUNCHABLE_STDERR: ${{ steps.launchable.outputs.stderr_report_path }}
         continue-on-error: ${{ matrix.continue-on-test_task || false }}
+
+      - name: Dump crash logs
+        if: ${{ failure() }}
+        continue-on-error: true
+        run: tail --verbose --lines=+1 rb_crash_*.txt
 
       - uses: ./.github/actions/slack
         with:

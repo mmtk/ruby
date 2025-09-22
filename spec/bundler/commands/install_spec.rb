@@ -340,38 +340,6 @@ RSpec.describe "bundle install with gem sources" do
         bundle "install"
         expect(the_bundle).to include_gems "myrack 1.0"
       end
-
-      it "allows running bundle install --system without deleting foo" do
-        bundle "install --path vendor"
-        bundle "install --system"
-        FileUtils.rm_r(bundled_app("vendor"))
-        expect(the_bundle).to include_gems "myrack 1.0"
-      end
-
-      it "allows running bundle install --system after deleting foo" do
-        bundle "install --path vendor"
-        FileUtils.rm_r(bundled_app("vendor"))
-        bundle "install --system"
-        expect(the_bundle).to include_gems "myrack 1.0"
-      end
-    end
-
-    it "finds gems in multiple sources" do
-      build_repo2 do
-        build_gem "myrack", "1.2" do |s|
-          s.executables = "myrackup"
-        end
-      end
-
-      install_gemfile <<-G, artifice: "compact_index_extra"
-        source "https://gemserver.test"
-        source "https://gemserver.test/extra"
-
-        gem "activesupport", "1.2.3"
-        gem "myrack", "1.2"
-      G
-
-      expect(the_bundle).to include_gems "myrack 1.2", "activesupport 1.2.3"
     end
 
     it "gives useful errors if no global sources are set, and gems not installed locally, with and without a lockfile" do

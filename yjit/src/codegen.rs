@@ -821,11 +821,11 @@ fn gen_stub_exit(ocb: &mut OutlinedCb) -> Option<CodePtr> {
 
 /// Generate an exit to return to the interpreter
 fn gen_exit(exit_pc: *mut VALUE, asm: &mut Assembler) {
-    #[cfg(all(feature = "disasm", not(test)))]
-    {
+    #[cfg(not(test))]
+    asm_comment!(asm, "exit to interpreter on {}", {
         let opcode = unsafe { rb_vm_insn_addr2opcode((*exit_pc).as_ptr()) };
-        asm_comment!(asm, "exit to interpreter on {}", insn_name(opcode as usize));
-    }
+        insn_name(opcode as usize)
+    });
 
     if asm.ctx.is_return_landing() {
         asm.mov(SP, Opnd::mem(64, CFP, RUBY_OFFSET_CFP_SP));
@@ -1094,11 +1094,7 @@ pub fn gen_entry_prologue(
     let code_ptr = cb.get_write_ptr();
 
     let mut asm = Assembler::new(unsafe { get_iseq_body_local_table_size(iseq) });
-    if get_option_ref!(dump_disasm).is_some() {
-        asm_comment!(asm, "YJIT entry point: {}", iseq_get_location(iseq, 0));
-    } else {
-        asm_comment!(asm, "YJIT entry");
-    }
+    asm_comment!(asm, "YJIT entry point: {}", iseq_get_location(iseq, 0));
 
     asm.frame_setup();
 
@@ -1296,7 +1292,6 @@ pub fn gen_single_block(
     let mut asm = Assembler::new(jit.num_locals());
     asm.ctx = ctx;
 
-    #[cfg(feature = "disasm")]
     if get_option_ref!(dump_disasm).is_some() {
         let blockid_idx = blockid.idx;
         let chain_depth = if asm.ctx.get_chain_depth() > 0 { format!("(chain_depth: {})", asm.ctx.get_chain_depth()) } else { "".to_string() };
@@ -9051,7 +9046,6 @@ fn gen_send_general(
     let recv_opnd: YARVOpnd = recv.into();
 
     // Log the name of the method we're calling to
-    #[cfg(feature = "disasm")]
     asm_comment!(asm, "call to {}", get_method_name(Some(comptime_recv_klass), mid));
 
     // Gather some statistics about sends
@@ -9731,7 +9725,7 @@ fn gen_invokesuper(
         return Some(status);
     }
 
-    // Otherwise, fallback to dynamic dispatch using the interpreter's implementation of send
+    // Otherwise, fallback to dynamic dispatch using the interpreter's implementation of invokesuper
     let blockiseq = jit.get_arg(1).as_iseq();
     gen_send_dynamic(jit, asm, cd, unsafe { rb_yjit_sendish_sp_pops((*cd).ci) }, |asm| {
         extern "C" {
@@ -9748,7 +9742,23 @@ fn gen_invokesuperforward(
     jit: &mut JITState,
     asm: &mut Assembler,
 ) -> Option<CodegenStatus> {
-    return gen_invokesuper(jit, asm);
+    // Generate specialized code if possible
+    let cd = jit.get_arg(0).as_ptr();
+    if let Some(status) = gen_invokesuper_specialized(jit, asm, cd) {
+        return Some(status);
+    }
+
+    // Otherwise, fallback to dynamic dispatch using the interpreter's implementation of invokesuperforward
+    let blockiseq = jit.get_arg(1).as_iseq();
+    gen_send_dynamic(jit, asm, cd, unsafe { rb_yjit_sendish_sp_pops((*cd).ci) }, |asm| {
+        extern "C" {
+            fn rb_vm_invokesuperforward(ec: EcPtr, cfp: CfpPtr, cd: VALUE, blockiseq: IseqPtr) -> VALUE;
+        }
+        asm.ccall(
+            rb_vm_invokesuperforward as *const u8,
+            vec![EC, CFP, (cd as usize).into(), VALUE(blockiseq as usize).into()],
+        )
+    })
 }
 
 fn gen_invokesuper_specialized(
@@ -10935,7 +10945,7 @@ impl CodegenGlobals {
 
         #[cfg(not(test))]
         let (mut cb, mut ocb) = {
-            let virt_block: *mut u8 = unsafe { rb_yjit_reserve_addr_space(exec_mem_size as u32) };
+            let virt_block: *mut u8 = unsafe { rb_jit_reserve_addr_space(exec_mem_size as u32) };
 
             // Memory protection syscalls need page-aligned addresses, so check it here. Assuming
             // `virt_block` is page-aligned, `second_half` should be page-aligned as long as the
@@ -10944,7 +10954,7 @@ impl CodegenGlobals {
             //
             // Basically, we don't support x86-64 2MiB and 1GiB pages. ARMv8 can do up to 64KiB
             // (2¹⁶ bytes) pages, which should be fine. 4KiB pages seem to be the most popular though.
-            let page_size = unsafe { rb_yjit_get_page_size() };
+            let page_size = unsafe { rb_jit_get_page_size() };
             assert_eq!(
                 virt_block as usize % page_size.as_usize(), 0,
                 "Start of virtual address block should be page-aligned",

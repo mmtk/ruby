@@ -875,7 +875,7 @@ ary_alloc_embed(VALUE klass, long capa)
 static VALUE
 ary_alloc_heap(VALUE klass)
 {
-    size_t size = sizeof(struct RString);
+    size_t size = sizeof(struct RArray);
 
 #if USE_MMTK
     if (rb_mmtk_enabled_p()) {
@@ -887,6 +887,11 @@ ary_alloc_heap(VALUE klass)
     NEWOBJ_OF(ary, struct RArray, klass,
                      T_ARRAY | (RGENGC_WB_PROTECTED_ARRAY ? FL_WB_PROTECTED : 0),
                      size, 0);
+
+    ary->as.heap.len = 0;
+    ary->as.heap.aux.capa = 0;
+    ary->as.heap.ptr = NULL;
+
     return (VALUE)ary;
 }
 
@@ -1020,6 +1025,11 @@ ec_ary_alloc_heap(rb_execution_context_t *ec, VALUE klass)
     NEWOBJ_OF(ary, struct RArray, klass,
             T_ARRAY | (RGENGC_WB_PROTECTED_ARRAY ? FL_WB_PROTECTED : 0),
             sizeof(struct RArray), ec);
+
+    ary->as.heap.len = 0;
+    ary->as.heap.aux.capa = 0;
+    ary->as.heap.ptr = NULL;
+
     return (VALUE)ary;
 }
 
@@ -1716,10 +1726,12 @@ rb_ary_pop(VALUE ary)
     {
         ary_resize_capa(ary, n * 2);
     }
-    --n;
-    ARY_SET_LEN(ary, n);
+
+    VALUE obj = RARRAY_AREF(ary, n - 1);
+
+    ARY_SET_LEN(ary, n - 1);
     ary_verify(ary);
-    return RARRAY_AREF(ary, n);
+    return obj;
 }
 
 /*

@@ -108,10 +108,18 @@ HAVE_GIT=yes
 AC_ARG_WITH(git,
 	AS_HELP_STRING([--without-git], [never use git]),
 	[AS_CASE([$withval],
-	    [no],  [GIT=never-use HAVE_GIT=no],
+	    [no],  [HAVE_GIT=no],
 	    [yes], [],
 	    [GIT=$withval])])
-AS_IF([test x"$HAVE_GIT" = xyes], [command -v "$GIT" > /dev/null || HAVE_GIT=no])
+{
+    test x"$HAVE_GIT" = xyes &&
+    command -v "$GIT" > /dev/null &&
+    # `git -C`: 1.8.5
+    # `git log --no-show-signature`: 2.10.0
+    AS_CASE([`$GIT -C . --version 2> /dev/null | sed 's/.* //'`],
+    [0.*|1.*|2.@<:@0-9@:>@.*], [false],
+    [true])
+} || HAVE_GIT=no GIT=never-use
 AC_SUBST(GIT)
 AC_SUBST(HAVE_GIT)
 
@@ -3968,7 +3976,7 @@ AS_CASE(["${ZJIT_SUPPORT}"],
     [yes], [
     ],
     [dev], [
-        rb_cargo_features="$rb_cargo_features,disasm"
+        rb_cargo_features="$rb_cargo_features,disasm,runtime_checks"
         JIT_CARGO_SUPPORT=dev
         AC_DEFINE(RUBY_DEBUG, 1)
     ],
@@ -4021,9 +4029,9 @@ AS_IF([test x"$JIT_CARGO_SUPPORT" != "xno" -o \( x"$YJIT_SUPPORT" != "xno" -a x"
     ])
     CARGO_BUILD_ARGS="--profile ${JIT_CARGO_SUPPORT} --features ${rb_cargo_features}"
     AS_IF([test "${JIT_CARGO_SUPPORT}" = "dev"], [
-        RUST_LIB="target/debug/libjit.a"
+        RUST_LIB="target/debug/libruby.a"
     ], [
-        RUST_LIB="target/${JIT_CARGO_SUPPORT}/libjit.a"
+        RUST_LIB="target/${JIT_CARGO_SUPPORT}/libruby.a"
     ])
 ])
 

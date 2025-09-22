@@ -1,6 +1,11 @@
 //! Counters and associated methods for events when ZJIT is run.
 
 use std::time::Instant;
+use std::sync::atomic::Ordering;
+
+#[cfg(feature = "stats_allocator")]
+#[path = "../../jit/src/lib.rs"]
+mod jit;
 
 use crate::{cruby::*, hir::ParseError, options::get_option, state::{zjit_enabled_p, ZJITState}};
 
@@ -87,7 +92,9 @@ make_counters! {
         // exit_: Side exits reasons
         exit_compile_error,
         exit_unknown_newarray_send,
-        exit_unhandled_call_type,
+        exit_unhandled_tailcall,
+        exit_unhandled_splat,
+        exit_unhandled_kwarg,
         exit_unknown_special_variable,
         exit_unhandled_hir_insn,
         exit_unhandled_yarv_insn,
@@ -102,23 +109,11 @@ make_counters! {
         exit_callee_side_exit,
         exit_obj_to_string_fallback,
         exit_interrupt,
+        exit_stackoverflow,
         exit_optional_arguments,
         exit_block_param_proxy_modified,
         exit_block_param_proxy_not_iseq_or_ifunc,
     }
-
-    // unhanded_call_: Unhandled call types
-    unhandled_call_splat,
-    unhandled_call_block_arg,
-    unhandled_call_kwarg,
-    unhandled_call_kw_splat,
-    unhandled_call_tailcall,
-    unhandled_call_super,
-    unhandled_call_zsuper,
-    unhandled_call_optsend,
-    unhandled_call_kw_splat_mut,
-    unhandled_call_splat_mut,
-    unhandled_call_forwarding,
 
     // compile_error_: Compile error reasons
     compile_error_iseq_stack_too_large,
@@ -130,13 +125,42 @@ make_counters! {
     compile_error_parse_malformed_iseq,
     compile_error_parse_validation,
     compile_error_parse_not_allowed,
-    compile_error_parse_parameter_type_forwardable,
 
     // The number of times YARV instructions are executed on JIT code
     zjit_insn_count,
 
     // The number of times we do a dynamic dispatch from JIT code
     dynamic_send_count,
+    dynamic_send_type_send_without_block,
+    dynamic_send_type_send,
+    dynamic_send_type_send_forward,
+    dynamic_send_type_invokeblock,
+    dynamic_send_type_invokesuper,
+
+    // Method call def_type related to fallback to dynamic dispatch
+    send_fallback_iseq,
+    send_fallback_cfunc,
+    send_fallback_attrset,
+    send_fallback_ivar,
+    send_fallback_bmethod,
+    send_fallback_zsuper,
+    send_fallback_alias,
+    send_fallback_undef,
+    send_fallback_not_implemented,
+    send_fallback_optimized,
+    send_fallback_missing,
+    send_fallback_refined,
+    send_fallback_null,
+
+    // Writes to the VM frame
+    vm_write_pc_count,
+    vm_write_sp_count,
+    vm_write_locals_count,
+    vm_write_stack_count,
+    vm_write_to_parent_iseq_local_count,
+    vm_read_from_parent_iseq_local_count,
+    // TODO(max): Implement
+    // vm_reify_stack_count,
 }
 
 /// Increase a counter by a specified amount
@@ -162,26 +186,6 @@ pub fn exit_counter_ptr_for_opcode(opcode: u32) -> *mut u64 {
     unsafe { exit_counters.get_unchecked_mut(opcode as usize) }
 }
 
-/// Return a raw pointer to the exit counter for a given call type
-pub fn exit_counter_ptr_for_call_type(call_type: crate::hir::CallType) -> *mut u64 {
-    use crate::hir::CallType::*;
-    use crate::stats::Counter::*;
-    let counter = match call_type {
-        Splat      => unhandled_call_splat,
-        BlockArg   => unhandled_call_block_arg,
-        Kwarg      => unhandled_call_kwarg,
-        KwSplat    => unhandled_call_kw_splat,
-        Tailcall   => unhandled_call_tailcall,
-        Super      => unhandled_call_super,
-        Zsuper     => unhandled_call_zsuper,
-        OptSend    => unhandled_call_optsend,
-        KwSplatMut => unhandled_call_kw_splat_mut,
-        SplatMut   => unhandled_call_splat_mut,
-        Forwarding => unhandled_call_forwarding,
-    };
-    counter_ptr(counter)
-}
-
 /// Reason why ZJIT failed to produce any JIT code
 #[derive(Clone, Debug, PartialEq)]
 pub enum CompileError {
@@ -196,7 +200,6 @@ pub enum CompileError {
 /// Return a raw pointer to the exit counter for a given CompileError
 pub fn exit_counter_for_compile_error(compile_error: &CompileError) -> Counter {
     use crate::hir::ParseError::*;
-    use crate::hir::ParameterType::*;
     use crate::stats::CompileError::*;
     use crate::stats::Counter::*;
     match compile_error {
@@ -210,19 +213,19 @@ pub fn exit_counter_for_compile_error(compile_error: &CompileError) -> Counter {
             MalformedIseq(_)  => compile_error_parse_malformed_iseq,
             Validation(_)     => compile_error_parse_validation,
             NotAllowed        => compile_error_parse_not_allowed,
-            UnknownParameterType(parameter_type) => match parameter_type {
-                Forwardable   => compile_error_parse_parameter_type_forwardable,
-            }
         }
     }
 }
 
 pub fn exit_counter_ptr(reason: crate::hir::SideExitReason) -> *mut u64 {
     use crate::hir::SideExitReason::*;
+    use crate::hir::CallType::*;
     use crate::stats::Counter::*;
     let counter = match reason {
         UnknownNewarraySend(_)        => exit_unknown_newarray_send,
-        UnhandledCallType(_)          => exit_unhandled_call_type,
+        UnhandledCallType(Tailcall)   => exit_unhandled_tailcall,
+        UnhandledCallType(Splat)      => exit_unhandled_splat,
+        UnhandledCallType(Kwarg)      => exit_unhandled_kwarg,
         UnknownSpecialVariable(_)     => exit_unknown_special_variable,
         UnhandledHIRInsn(_)           => exit_unhandled_hir_insn,
         UnhandledYARVInsn(_)          => exit_unhandled_yarv_insn,
@@ -237,10 +240,32 @@ pub fn exit_counter_ptr(reason: crate::hir::SideExitReason) -> *mut u64 {
         CalleeSideExit                => exit_callee_side_exit,
         ObjToStringFallback           => exit_obj_to_string_fallback,
         Interrupt                     => exit_interrupt,
+        StackOverflow                 => exit_stackoverflow,
         BlockParamProxyModified       => exit_block_param_proxy_modified,
         BlockParamProxyNotIseqOrIfunc => exit_block_param_proxy_not_iseq_or_ifunc,
     };
     counter_ptr(counter)
+}
+
+pub fn send_fallback_counter(def_type: crate::hir::MethodType) -> Counter {
+    use crate::hir::MethodType::*;
+    use crate::stats::Counter::*;
+
+    match def_type {
+        Iseq => send_fallback_iseq,
+        Cfunc => send_fallback_cfunc,
+        Attrset => send_fallback_attrset,
+        Ivar => send_fallback_ivar,
+        Bmethod => send_fallback_bmethod,
+        Zsuper => send_fallback_zsuper,
+        Alias => send_fallback_alias,
+        Undefined => send_fallback_undef,
+        NotImplemented => send_fallback_not_implemented,
+        Optimized => send_fallback_optimized,
+        Missing => send_fallback_missing,
+        Refined => send_fallback_refined,
+        Null => send_fallback_null,
+    }
 }
 
 /// Primitive called in zjit.rb. Zero out all the counters.
@@ -356,5 +381,5 @@ pub fn with_time_stat<F, R>(counter: Counter, func: F) -> R where F: FnOnce() ->
 
 /// The number of bytes ZJIT has allocated on the Rust heap.
 pub fn zjit_alloc_size() -> usize {
-    0 // TODO: report the actual memory usage to support --zjit-mem-size (Shopify/ruby#686)
+    jit::GLOBAL_ALLOCATOR.alloc_size.load(Ordering::SeqCst)
 }

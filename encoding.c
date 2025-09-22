@@ -152,6 +152,8 @@ enc_list_update(int index, rb_raw_encoding *encoding)
         RBASIC_CLEAR_CLASS(new_list);
         /* initialize encoding data */
         rb_ary_store(new_list, index, enc_new(encoding));
+        rb_ary_freeze(new_list);
+        FL_SET_RAW(new_list, RUBY_FL_SHAREABLE);
         RUBY_ATOMIC_VALUE_SET(rb_encoding_list, new_list);
     }
 }
@@ -349,6 +351,35 @@ enc_table_expand(struct enc_table *enc_table, int newsize)
     return newsize;
 }
 
+/* Load an encoding using the values from base_encoding */
+static void
+enc_load_from_base(struct enc_table *enc_table, int index, rb_encoding *base_encoding)
+{
+    ASSERT_vm_locking();
+
+    struct rb_encoding_entry *ent = &enc_table->list[index];
+
+    if (ent->loaded) {
+        return;
+    }
+
+    rb_raw_encoding *encoding = (rb_raw_encoding *)ent->enc;
+    RUBY_ASSERT(encoding);
+
+    // FIXME: Before the base is loaded, the encoding may be accessed
+    // concurrently by other Ractors.
+    // We're copying all fields from base_encoding except name and
+    // ruby_encoding_index which we preserve from the original. Since these are
+    // the only fields other threads should read it is likely safe despite
+    // technically being a data race.
+    rb_raw_encoding tmp_encoding = *base_encoding;
+    tmp_encoding.name = encoding->name;
+    tmp_encoding.ruby_encoding_index = encoding->ruby_encoding_index;
+    *encoding = tmp_encoding;
+
+    RUBY_ATOMIC_SET(ent->loaded, encoding->max_enc_len);
+}
+
 static int
 enc_register_at(struct enc_table *enc_table, int index, const char *name, rb_encoding *base_encoding)
 {
@@ -357,33 +388,33 @@ enc_register_at(struct enc_table *enc_table, int index, const char *name, rb_enc
     struct rb_encoding_entry *ent = &enc_table->list[index];
     rb_raw_encoding *encoding;
 
-    if (!valid_encoding_name_p(name)) return -1;
-    if (!ent->name) {
-        ent->name = name = strdup(name);
-    }
-    else if (STRCASECMP(name, ent->name)) {
-        return -1;
-    }
-    encoding = (rb_raw_encoding *)ent->enc;
-    if (!encoding) {
-        encoding = xmalloc(sizeof(rb_encoding));
-    }
+    RUBY_ASSERT(!ent->loaded);
+    RUBY_ASSERT(!ent->name);
+    RUBY_ASSERT(!ent->enc);
+    RUBY_ASSERT(!ent->base);
 
-    if (base_encoding) {
-        *encoding = *base_encoding;
-    }
-    else {
-        memset(encoding, 0, sizeof(*ent->enc));
-    }
+    RUBY_ASSERT(valid_encoding_name_p(name));
+
+    ent->name = name = strdup(name);
+
+    encoding = ZALLOC(rb_raw_encoding);
     encoding->name = name;
     encoding->ruby_encoding_index = index;
     ent->enc = encoding;
-    st_insert(enc_table->names, (st_data_t)name, (st_data_t)index);
+
+    if (st_insert(enc_table->names, (st_data_t)name, (st_data_t)index)) {
+        rb_bug("encoding name was somehow registered twice");
+    }
 
     enc_list_update(index, encoding);
 
-    // max_enc_len is used to mark a fully loaded encoding.
-    RUBY_ATOMIC_SET(ent->loaded, encoding->max_enc_len);
+    if (base_encoding) {
+        enc_load_from_base(enc_table, index, base_encoding);
+    }
+    else {
+        /* it should not be loaded yet */
+        RUBY_ASSERT(!encoding->max_enc_len);
+    }
 
     return index;
 }
@@ -392,6 +423,8 @@ static int
 enc_register(struct enc_table *enc_table, const char *name, rb_encoding *encoding)
 {
     ASSERT_vm_locking();
+
+    if (!valid_encoding_name_p(name)) return -1;
 
     int index = enc_table->count;
 
@@ -408,7 +441,9 @@ enc_from_index(struct enc_table *enc_table, int index)
     if (UNLIKELY(index < 0 || enc_table->count <= (index &= ENC_INDEX_MASK))) {
         return 0;
     }
-    return enc_table->list[index].enc;
+    rb_encoding *enc = enc_table->list[index].enc;
+    RUBY_ASSERT(ENC_TO_ENCINDEX(enc) == index);
+    return enc;
 }
 
 rb_encoding *
@@ -431,7 +466,7 @@ rb_enc_register(const char *name, rb_encoding *encoding)
                 index = enc_register(enc_table, name, encoding);
             }
             else if (rb_enc_autoload_p(oldenc) || !ENC_DUMMY_P(oldenc)) {
-                enc_register_at(enc_table, index, name, encoding);
+                enc_load_from_base(enc_table, index, encoding);
             }
             else {
                 rb_raise(rb_eArgError, "encoding %s is already registered", name);
@@ -548,7 +583,7 @@ enc_replicate_with_index(struct enc_table *enc_table, const char *name, rb_encod
         idx = enc_register(enc_table, name, origenc);
     }
     else {
-        idx = enc_register_at(enc_table, idx, name, origenc);
+        enc_load_from_base(enc_table, idx, origenc);
     }
     if (idx >= 0) {
         set_base_encoding(enc_table, idx, origenc);
@@ -802,40 +837,27 @@ enc_autoload_body(rb_encoding *enc)
 
     GLOBAL_ENC_TABLE_LOCKING(enc_table) {
         base = enc_table->list[ENC_TO_ENCINDEX(enc)].base;
-        if (base) {
-            do {
-                if (i >= enc_table->count) {
-                    i = -1;
-                    break;
-                }
-            } while (enc_table->list[i].enc != base && (++i, 1));
-        }
     }
 
-
-    if (i != -1) {
-        if (base) {
-            bool do_register = true;
-            if (rb_enc_autoload_p(base)) {
-                if (rb_enc_autoload(base) < 0) {
-                    do_register = false;
-                    i = -1;
-                }
+    if (base) {
+        bool do_register = true;
+        if (rb_enc_autoload_p(base)) {
+            if (rb_enc_autoload(base) < 0) {
+                do_register = false;
+                i = -1;
             }
+        }
 
-            if (do_register) {
-                GLOBAL_ENC_TABLE_LOCKING(enc_table) {
-                    i = enc->ruby_encoding_index;
-                    enc_register_at(enc_table, i & ENC_INDEX_MASK, rb_enc_name(enc), base);
-                    ((rb_raw_encoding *)enc)->ruby_encoding_index = i;
-                }
+        if (do_register) {
+            GLOBAL_ENC_TABLE_LOCKING(enc_table) {
+                i = ENC_TO_ENCINDEX(enc);
+                enc_load_from_base(enc_table, i, base);
+                RUBY_ASSERT(((rb_raw_encoding *)enc)->ruby_encoding_index == i);
             }
-
-            i &= ENC_INDEX_MASK;
         }
-        else {
-            i = -2;
-        }
+    }
+    else {
+        i = -2;
     }
 
     return i;

@@ -95,9 +95,7 @@ struct vm_ifunc {
 
 struct rb_imemo_tmpbuf_struct {
     VALUE flags;
-    VALUE reserved;
     VALUE *ptr; /* malloc'ed buffer */
-    struct rb_imemo_tmpbuf_struct *next; /* next imemo */
     size_t cnt; /* buffer size in VALUE */
 };
 
@@ -135,16 +133,15 @@ struct MEMO {
 #ifndef RUBY_RUBYPARSER_H
 typedef struct rb_imemo_tmpbuf_struct rb_imemo_tmpbuf_t;
 #endif
-rb_imemo_tmpbuf_t *rb_imemo_tmpbuf_parser_heap(void *buf, rb_imemo_tmpbuf_t *old_heap, size_t cnt);
+VALUE rb_imemo_new(enum imemo_type type, VALUE v0, size_t size);
+VALUE rb_imemo_tmpbuf_new(void);
 struct vm_ifunc *rb_vm_ifunc_new(rb_block_call_func_t func, const void *data, int min_argc, int max_argc);
 static inline enum imemo_type imemo_type(VALUE imemo);
 static inline int imemo_type_p(VALUE imemo, enum imemo_type imemo_type);
 static inline bool imemo_throw_data_p(VALUE imemo);
 static inline struct vm_ifunc *rb_vm_ifunc_proc_new(rb_block_call_func_t func, const void *data);
-static inline VALUE rb_imemo_tmpbuf_auto_free_pointer(void);
 static inline void *RB_IMEMO_TMPBUF_PTR(VALUE v);
 static inline void *rb_imemo_tmpbuf_set_ptr(VALUE v, void *ptr);
-static inline VALUE rb_imemo_tmpbuf_auto_free_pointer_new_from_an_RString(VALUE str);
 static inline void MEMO_V1_SET(struct MEMO *m, VALUE v);
 static inline void MEMO_V2_SET(struct MEMO *m, VALUE v);
 
@@ -153,7 +150,6 @@ void rb_imemo_mark_and_move(VALUE obj, bool reference_updating);
 void rb_imemo_free(VALUE obj);
 
 RUBY_SYMBOL_EXPORT_BEGIN
-VALUE rb_imemo_new(enum imemo_type type, VALUE v0, size_t size);
 const char *rb_imemo_name(enum imemo_type type);
 RUBY_SYMBOL_EXPORT_END
 
@@ -203,12 +199,6 @@ rb_vm_ifunc_proc_new(rb_block_call_func_t func, const void *data)
     return rb_vm_ifunc_new(func, data, 0, UNLIMITED_ARGUMENTS);
 }
 
-static inline VALUE
-rb_imemo_tmpbuf_auto_free_pointer(void)
-{
-    return rb_imemo_new(imemo_tmpbuf, 0, sizeof(rb_imemo_tmpbuf_t));
-}
-
 static inline void *
 RB_IMEMO_TMPBUF_PTR(VALUE v)
 {
@@ -223,7 +213,7 @@ rb_imemo_tmpbuf_set_ptr(VALUE v, void *ptr)
 }
 
 static inline VALUE
-rb_imemo_tmpbuf_auto_free_pointer_new_from_an_RString(VALUE str)
+rb_imemo_tmpbuf_new_from_an_RString(VALUE str)
 {
     const void *src;
     VALUE imemo;
@@ -233,7 +223,7 @@ rb_imemo_tmpbuf_auto_free_pointer_new_from_an_RString(VALUE str)
 
     StringValue(str);
     /* create tmpbuf to keep the pointer before xmalloc */
-    imemo = rb_imemo_tmpbuf_auto_free_pointer();
+    imemo = rb_imemo_tmpbuf_new();
     tmpbuf = (rb_imemo_tmpbuf_t *)imemo;
     len = RSTRING_LEN(str);
     src = RSTRING_PTR(str);

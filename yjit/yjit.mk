@@ -6,6 +6,7 @@ YJIT_SRC_FILES = $(wildcard \
 	$(top_srcdir)/yjit/src/*/*.rs \
 	$(top_srcdir)/yjit/src/*/*/*.rs \
 	$(top_srcdir)/yjit/src/*/*/*/*.rs \
+	$(top_srcdir)/jit/src/lib.rs \
 	)
 
 # Because of Cargo cache, if the actual binary is not changed from the
@@ -34,8 +35,8 @@ endif
 RUST_VERSION = +1.58.0
 
 # Gives quick feedback about YJIT. Not a replacement for a full test run.
-.PHONY: yjit-smoke-test
-yjit-smoke-test:
+.PHONY: yjit-check
+yjit-check:
 ifneq ($(strip $(CARGO)),)
 	$(CARGO) test --all-features -q --manifest-path='$(top_srcdir)/yjit/Cargo.toml'
 endif

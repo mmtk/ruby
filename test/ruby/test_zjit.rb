@@ -439,6 +439,52 @@ class TestZJIT < Test::Unit::TestCase
     }, call_threshold: 2
   end
 
+  def test_send_nil_block_arg
+    assert_compiles 'false', %q{
+      def test = block_given?
+      def entry = test(&nil)
+      test
+    }
+  end
+
+  def test_send_symbol_block_arg
+    assert_compiles '["1", "2"]', %q{
+      def test = [1, 2].map(&:to_s)
+      test
+    }
+  end
+
+  def test_send_splat
+    assert_runs '[1, 2]', %q{
+      def test(a, b) = [a, b]
+      def entry(arr) = test(*arr)
+      entry([1, 2])
+    }
+  end
+
+  def test_send_kwarg
+    assert_runs '[1, 2]', %q{
+      def test(a:, b:) = [a, b]
+      def entry = test(a: 1, b: 2)
+      entry
+    }
+  end
+
+  def test_forwardable_iseq
+    assert_compiles '1', %q{
+      def test(...) = 1
+      test
+    }
+  end
+
+  def test_sendforward
+    assert_compiles '[1, 2]', %q{
+      def callee(a, b) = [a, b]
+      def test(...) = callee(...)
+      test(1, 2)
+    }, insns: [:sendforward]
+  end
+
   def test_iseq_with_optional_arguments
     assert_compiles '[[1, 2], [3, 4]]', %q{
       def test(a, b = 2) = [a, b]
@@ -805,6 +851,41 @@ class TestZJIT < Test::Unit::TestCase
     }, insns: [:opt_new]
   end
 
+  def test_opt_new_invalidate_new
+    assert_compiles '["Foo", "foo"]', %q{
+      class Foo; end
+      def test = Foo.new
+      test; test
+      result = [test.class.name]
+      def Foo.new = "foo"
+      result << test
+      result
+    }, insns: [:opt_new], call_threshold: 2
+  end
+
+  def test_opt_new_with_custom_allocator
+    assert_compiles '"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"', %q{
+      require "digest"
+      def test = Digest::SHA256.new.hexdigest
+      test; test
+    }, insns: [:opt_new], call_threshold: 2
+  end
+
+  def test_opt_new_with_custom_allocator_raises
+    assert_compiles '[42, 42]', %q{
+      require "digest"
+      class C < Digest::Base; end
+      def test
+        begin
+          Digest::Base.new
+        rescue NotImplementedError
+          42
+        end
+      end
+      [test, test]
+    }, insns: [:opt_new], call_threshold: 2
+  end
+
   def test_new_hash_empty
     assert_compiles '{}', %q{
       def test = {}
@@ -916,31 +997,87 @@ class TestZJIT < Test::Unit::TestCase
   end
 
   def test_opt_hash_freeze
-    assert_compiles '{}', <<~RUBY, insns: [:opt_hash_freeze]
+    assert_compiles "[{}, 5]", %q{
+      def test = {}.freeze
+      result = [test]
+      class Hash
+        def freeze = 5
+      end
+      result << test
+    }, insns: [:opt_hash_freeze], call_threshold: 1
+  end
+
+  def test_opt_hash_freeze_rewritten
+    assert_compiles "5", %q{
+      class Hash
+        def freeze = 5
+      end
       def test = {}.freeze
       test
-    RUBY
+    }, insns: [:opt_hash_freeze], call_threshold: 1
   end
 
   def test_opt_ary_freeze
-    assert_compiles '[]', <<~RUBY, insns: [:opt_ary_freeze]
+    assert_compiles "[[], 5]", %q{
+      def test = [].freeze
+      result = [test]
+      class Array
+        def freeze = 5
+      end
+      result << test
+    }, insns: [:opt_ary_freeze], call_threshold: 1
+  end
+
+  def test_opt_ary_freeze_rewritten
+    assert_compiles "5", %q{
+      class Array
+        def freeze = 5
+      end
       def test = [].freeze
       test
-    RUBY
+    }, insns: [:opt_ary_freeze], call_threshold: 1
   end
 
   def test_opt_str_freeze
-    assert_compiles '""', <<~RUBY, insns: [:opt_str_freeze]
-      def test = "".freeze
+    assert_compiles "[\"\", 5]", %q{
+      def test = ''.freeze
+      result = [test]
+      class String
+        def freeze = 5
+      end
+      result << test
+    }, insns: [:opt_str_freeze], call_threshold: 1
+  end
+
+  def test_opt_str_freeze_rewritten
+    assert_compiles "5", %q{
+      class String
+        def freeze = 5
+      end
+      def test = ''.freeze
       test
-    RUBY
+    }, insns: [:opt_str_freeze], call_threshold: 1
   end
 
   def test_opt_str_uminus
-    assert_compiles '""', <<~RUBY, insns: [:opt_str_uminus]
-      def test = -""
+    assert_compiles "[\"\", 5]", %q{
+      def test = -''
+      result = [test]
+      class String
+        def -@ = 5
+      end
+      result << test
+    }, insns: [:opt_str_uminus], call_threshold: 1
+  end
+
+  def test_opt_str_uminus_rewritten
+    assert_compiles "5", %q{
+      class String
+        def -@ = 5
+      end
+      def test = -''
       test
-    RUBY
+    }, insns: [:opt_str_uminus], call_threshold: 1
   end
 
   def test_new_array_empty
@@ -2567,6 +2704,104 @@ class TestZJIT < Test::Unit::TestCase
       results << test(1)
       results
     }, insns: [:opt_case_dispatch]
+  end
+
+  def test_stack_overflow
+    assert_compiles 'nil', %q{
+      def recurse(n)
+        return if n == 0
+        recurse(n-1)
+        nil # no tail call
+      end
+
+      recurse(2)
+      recurse(2)
+      begin
+        recurse(20_000)
+      rescue SystemStackError
+        # Not asserting an exception is raised here since main
+        # thread stack size is environment-sensitive. Only
+        # that we don't crash or infinite loop.
+      end
+    }, call_threshold: 2
+  end
+
+  def test_invokeblock
+    assert_compiles '42', %q{
+      def test
+        yield
+      end
+      test { 42 }
+    }, insns: [:invokeblock]
+  end
+
+  def test_invokeblock_with_args
+    assert_compiles '3', %q{
+      def test(x, y)
+        yield x, y
+      end
+      test(1, 2) { |a, b| a + b }
+    }, insns: [:invokeblock]
+  end
+
+  def test_invokeblock_no_block_given
+    assert_compiles ':error', %q{
+      def test
+        yield rescue :error
+      end
+      test
+    }, insns: [:invokeblock]
+  end
+
+  def test_invokeblock_multiple_yields
+    assert_compiles "[1, 2, 3]", %q{
+      results = []
+      def test
+        yield 1
+        yield 2
+        yield 3
+      end
+      test { |x| results << x }
+      results
+    }, insns: [:invokeblock]
+  end
+
+  def test_ccall_variadic_with_multiple_args
+    assert_compiles "[1, 2, 3]", %q{
+      def test
+        a = []
+        a.push(1, 2, 3)
+        a
+      end
+
+      test
+      test
+    }, insns: [:opt_send_without_block]
+  end
+
+  def test_ccall_variadic_with_no_args
+    assert_compiles "[1]", %q{
+      def test
+        a = [1]
+        a.push
+      end
+
+      test
+      test
+    }, insns: [:opt_send_without_block]
+  end
+
+  def test_ccall_variadic_with_no_args_causing_argument_error
+    assert_compiles ":error", %q{
+      def test
+        format
+      rescue ArgumentError
+        :error
+      end
+
+      test
+      test
+    }, insns: [:opt_send_without_block]
   end
 
   private

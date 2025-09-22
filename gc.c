@@ -637,7 +637,7 @@ typedef struct gc_function_map {
     void (*stress_set)(void *objspace_ptr, VALUE flag);
     VALUE (*stress_get)(void *objspace_ptr);
     // Object allocation
-    VALUE (*new_obj)(void *objspace_ptr, void *cache_ptr, VALUE klass, VALUE flags, VALUE v1, VALUE v2, VALUE v3, bool wb_protected, size_t alloc_size);
+    VALUE (*new_obj)(void *objspace_ptr, void *cache_ptr, VALUE klass, VALUE flags, bool wb_protected, size_t alloc_size);
     size_t (*obj_slot_size)(VALUE obj);
     size_t (*heap_id_for_size)(void *objspace_ptr, size_t size);
     bool (*size_allocatable_p)(size_t size);
@@ -1001,15 +1001,14 @@ gc_validate_pc(void)
 }
 
 static inline VALUE
-newobj_of(rb_ractor_t *cr, VALUE klass, VALUE flags, VALUE v1, VALUE v2, VALUE v3, bool wb_protected, size_t size)
+newobj_of(rb_ractor_t *cr, VALUE klass, VALUE flags, bool wb_protected, size_t size)
 {
-    VALUE obj = rb_gc_impl_new_obj(rb_gc_get_objspace(), cr->newobj_cache, klass, flags, v1, v2, v3, wb_protected, size);
+    VALUE obj = rb_gc_impl_new_obj(rb_gc_get_objspace(), cr->newobj_cache, klass, flags, wb_protected, size);
 
     gc_validate_pc();
 
     if (UNLIKELY(rb_gc_event_hook_required_p(RUBY_INTERNAL_EVENT_NEWOBJ))) {
-        unsigned int lev;
-        RB_VM_LOCK_ENTER_CR_LEV(cr, &lev);
+        int lev = RB_GC_VM_LOCK_NO_BARRIER();
         {
             memset((char *)obj + RVALUE_SIZE, 0, rb_gc_obj_slot_size(obj) - RVALUE_SIZE);
 
@@ -1024,8 +1023,20 @@ newobj_of(rb_ractor_t *cr, VALUE klass, VALUE flags, VALUE v1, VALUE v2, VALUE v
             }
             if (!gc_disabled) rb_gc_enable();
         }
-        RB_VM_LOCK_LEAVE_CR_LEV(cr, &lev);
+        RB_GC_VM_UNLOCK_NO_BARRIER(lev);
     }
+
+#if RGENGC_CHECK_MODE
+# ifndef GC_DEBUG_SLOT_FILL_SPECIAL_VALUE
+#  define GC_DEBUG_SLOT_FILL_SPECIAL_VALUE 255
+# endif
+
+    memset(
+        (void *)(obj + sizeof(struct RBasic)),
+        GC_DEBUG_SLOT_FILL_SPECIAL_VALUE,
+        rb_gc_obj_slot_size(obj) - sizeof(struct RBasic)
+    );
+#endif
 
     return obj;
 }
@@ -1034,14 +1045,14 @@ VALUE
 rb_wb_unprotected_newobj_of(VALUE klass, VALUE flags, size_t size)
 {
     GC_ASSERT((flags & FL_WB_PROTECTED) == 0);
-    return newobj_of(GET_RACTOR(), klass, flags, 0, 0, 0, FALSE, size);
+    return newobj_of(GET_RACTOR(), klass, flags, FALSE, size);
 }
 
 VALUE
 rb_wb_protected_newobj_of(rb_execution_context_t *ec, VALUE klass, VALUE flags, size_t size)
 {
     GC_ASSERT((flags & FL_WB_PROTECTED) == 0);
-    return newobj_of(rb_ec_ractor_ptr(ec), klass, flags, 0, 0, 0, TRUE, size);
+    return newobj_of(rb_ec_ractor_ptr(ec), klass, flags, TRUE, size);
 }
 
 #define UNEXPECTED_NODE(func) \
@@ -1062,7 +1073,14 @@ rb_data_object_wrap(VALUE klass, void *datap, RUBY_DATA_FUNC dmark, RUBY_DATA_FU
 {
     RUBY_ASSERT_ALWAYS(dfree != (RUBY_DATA_FUNC)1);
     if (klass) rb_data_object_check(klass);
-    return newobj_of(GET_RACTOR(), klass, T_DATA, (VALUE)dmark, (VALUE)dfree, (VALUE)datap, !dmark, sizeof(struct RTypedData));
+    VALUE obj = newobj_of(GET_RACTOR(), klass, T_DATA, !dmark, sizeof(struct RTypedData));
+
+    struct RData *data = (struct RData *)obj;
+    data->dmark = dmark;
+    data->dfree = dfree;
+    data->data = datap;
+
+    return obj;
 }
 
 VALUE
@@ -1079,7 +1097,13 @@ typed_data_alloc(VALUE klass, VALUE typed_flag, void *datap, const rb_data_type_
     RBIMPL_NONNULL_ARG(type);
     if (klass) rb_data_object_check(klass);
     bool wb_protected = (type->flags & RUBY_FL_WB_PROTECTED) || !type->function.dmark;
-    VALUE result = newobj_of(GET_RACTOR(), klass, T_DATA | RUBY_TYPED_FL_IS_TYPED_DATA, 0, ((VALUE)type) | typed_flag, (VALUE)datap, wb_protected, size);
+    VALUE obj = newobj_of(GET_RACTOR(), klass, T_DATA | RUBY_TYPED_FL_IS_TYPED_DATA, wb_protected, size);
+
+    struct RTypedData *data = (struct RTypedData *)obj;
+    data->fields_obj = 0;
+    *(VALUE *)&data->type = ((VALUE)type) | typed_flag;
+    data->data = datap;
+
     WHEN_USING_MMTK({
         // Although MMTk allow the allocation of arbitrarily sized objects,
         // the current newobj_of still assumes the object fits in one of the size pools,
@@ -1090,10 +1114,11 @@ typed_data_alloc(VALUE klass, VALUE typed_flag, void *datap, const rb_data_type_
         bool using_default_free = type->function.dfree == RUBY_TYPED_DEFAULT_FREE;
         if (!(is_embedded && using_default_free)) {
             // Embedded objects using default free do not need obj_free.
-            rb_mmtk_register_obj_free_candidate(rb_mmtk_get_mutator_local(), result);
+            rb_mmtk_register_obj_free_candidate(rb_mmtk_get_mutator_local(), obj);
         }
     })
-    return result;
+
+    return obj;
 }
 
 VALUE
@@ -5197,12 +5222,6 @@ rb_raw_obj_info(char *const buff, const size_t buff_size, VALUE obj)
 #undef APPEND_F
 #undef BUFF_ARGS
 
-#if RGENGC_OBJ_INFO
-#define OBJ_INFO_BUFFERS_NUM  10
-#define OBJ_INFO_BUFFERS_SIZE 0x100
-static rb_atomic_t obj_info_buffers_index = 0;
-static char obj_info_buffers[OBJ_INFO_BUFFERS_NUM][OBJ_INFO_BUFFERS_SIZE];
-
 /* Increments *var atomically and resets *var to 0 when maxval is
  * reached. Returns the wraparound old *var value (0...maxval). */
 static rb_atomic_t
@@ -5220,17 +5239,18 @@ atomic_inc_wraparound(rb_atomic_t *var, const rb_atomic_t maxval)
 static const char *
 obj_info(VALUE obj)
 {
-    rb_atomic_t index = atomic_inc_wraparound(&obj_info_buffers_index, OBJ_INFO_BUFFERS_NUM);
-    char *const buff = obj_info_buffers[index];
-    return rb_raw_obj_info(buff, OBJ_INFO_BUFFERS_SIZE, obj);
-}
-#else
-static const char *
-obj_info(VALUE obj)
-{
+    if (RGENGC_OBJ_INFO) {
+        static struct {
+            rb_atomic_t index;
+            char buffers[10][0x100];
+        } info = {0};
+
+        rb_atomic_t index = atomic_inc_wraparound(&info.index, numberof(info.buffers));
+        char *const buff = info.buffers[index];
+        return rb_raw_obj_info(buff, sizeof(info.buffers[0]), obj);
+    }
     return obj_type_name(obj);
 }
-#endif
 
 /*
   ------------------------ Extended allocator ------------------------

@@ -53,27 +53,26 @@ rb_imemo_new(enum imemo_type type, VALUE v0, size_t size)
     return (VALUE)obj;
 }
 
-static rb_imemo_tmpbuf_t *
+VALUE
 rb_imemo_tmpbuf_new(void)
 {
-    size_t size = sizeof(struct rb_imemo_tmpbuf_struct);
     VALUE flags = T_IMEMO | (imemo_tmpbuf << FL_USHIFT);
-    NEWOBJ_OF(obj, struct rb_imemo_tmpbuf_struct, 0, flags, size, 0);
+    NEWOBJ_OF(obj, rb_imemo_tmpbuf_t, 0, flags, sizeof(rb_imemo_tmpbuf_t), NULL);
 
-    return obj;
+    obj->ptr = NULL;
+    obj->cnt = 0;
+
+    return (VALUE)obj;
 }
 
 void *
 rb_alloc_tmp_buffer_with_count(volatile VALUE *store, size_t size, size_t cnt)
 {
-    void *ptr;
-    rb_imemo_tmpbuf_t *tmpbuf;
-
     /* Keep the order; allocate an empty imemo first then xmalloc, to
      * get rid of potential memory leak */
-    tmpbuf = rb_imemo_tmpbuf_new();
+    rb_imemo_tmpbuf_t *tmpbuf = (rb_imemo_tmpbuf_t *)rb_imemo_tmpbuf_new();
     *store = (VALUE)tmpbuf;
-    ptr = ruby_xmalloc(size);
+    void *ptr = ruby_xmalloc(size);
     tmpbuf->ptr = ptr;
     tmpbuf->cnt = cnt;
 
@@ -103,17 +102,6 @@ rb_free_tmp_buffer(volatile VALUE *store)
     }
 }
 
-rb_imemo_tmpbuf_t *
-rb_imemo_tmpbuf_parser_heap(void *buf, rb_imemo_tmpbuf_t *old_heap, size_t cnt)
-{
-    rb_imemo_tmpbuf_t *tmpbuf = rb_imemo_tmpbuf_new();
-    tmpbuf->ptr = buf;
-    tmpbuf->next = old_heap;
-    tmpbuf->cnt = cnt;
-
-    return tmpbuf;
-}
-
 static VALUE
 imemo_fields_new(VALUE owner, size_t capa)
 {
@@ -140,7 +128,7 @@ rb_imemo_fields_new(VALUE owner, size_t capa)
 static VALUE
 imemo_fields_new_complex(VALUE owner, size_t capa)
 {
-    VALUE fields = imemo_fields_new(owner, 1);
+    VALUE fields = rb_imemo_new(imemo_fields, owner, sizeof(struct rb_fields));
     IMEMO_OBJ_FIELDS(fields)->as.complex.table = st_init_numtable_with_size(capa);
     FL_SET_RAW(fields, OBJ_FIELD_HEAP);
     return fields;
@@ -170,7 +158,7 @@ imemo_fields_complex_wb_i(st_data_t key, st_data_t value, st_data_t arg)
 VALUE
 rb_imemo_fields_new_complex_tbl(VALUE owner, st_table *tbl)
 {
-    VALUE fields = imemo_fields_new(owner, sizeof(struct rb_fields));
+    VALUE fields = rb_imemo_new(imemo_fields, owner, sizeof(struct rb_fields));
     IMEMO_OBJ_FIELDS(fields)->as.complex.table = tbl;
     FL_SET_RAW(fields, OBJ_FIELD_HEAP);
     st_foreach(tbl, imemo_fields_trigger_wb_i, (st_data_t)fields);
@@ -184,11 +172,14 @@ rb_imemo_fields_clone(VALUE fields_obj)
     VALUE clone;
 
     if (rb_shape_too_complex_p(shape_id)) {
-        clone = rb_imemo_fields_new_complex(rb_imemo_fields_owner(fields_obj), 0);
-        RBASIC_SET_SHAPE_ID(clone, shape_id);
         st_table *src_table = rb_imemo_fields_complex_tbl(fields_obj);
-        st_table *dest_table = rb_imemo_fields_complex_tbl(clone);
+
+        st_table *dest_table = xcalloc(1, sizeof(st_table));
+        clone = rb_imemo_fields_new_complex_tbl(rb_imemo_fields_owner(fields_obj), dest_table);
+
         st_replace(dest_table, src_table);
+        RBASIC_SET_SHAPE_ID(clone, shape_id);
+
         st_foreach(dest_table, imemo_fields_complex_wb_i, (st_data_t)clone);
     }
     else {
@@ -533,9 +524,7 @@ rb_imemo_mark_and_move(VALUE obj, bool reference_updating)
         const rb_imemo_tmpbuf_t *m = (const rb_imemo_tmpbuf_t *)obj;
 
         if (!reference_updating) {
-            do {
-                rb_gc_mark_locations(m->ptr, m->ptr + m->cnt);
-            } while ((m = m->next) != NULL);
+            rb_gc_mark_locations(m->ptr, m->ptr + m->cnt);
         }
 
         break;
