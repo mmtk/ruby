@@ -2610,7 +2610,7 @@ rb_gc_impl_new_obj(void *objspace_ptr, void *cache_ptr, VALUE klass, VALUE flags
         // We first calculate the object size if the object were allocated using Ruby's own GC.
         size_t size_pool_size = heap_slot_size(heap_idx);
         RUBY_ASSERT(size_pool_size % MMTK_MIN_OBJ_ALIGN == 0);
-        return rb_mmtk_new_obj(objspace_ptr, cache_ptr, klass, flags, v1, v2, v3, wb_protected, alloc_size, size_pool_size);
+        return rb_mmtk_new_obj(objspace_ptr, cache_ptr, klass, flags, wb_protected, alloc_size, size_pool_size);
     })
 
     rb_ractor_newobj_cache_t *cache = (rb_ractor_newobj_cache_t *)cache_ptr;
@@ -2976,7 +2976,7 @@ void
 rb_mmtk_each_object_safe(void (*func)(VALUE, void *), void *data)
 {
     // Allocate a tmpbuf object.  It's OK if it triggers GC now.
-    volatile VALUE tmpbuf = rb_imemo_tmpbuf_auto_free_pointer();
+    volatile VALUE tmpbuf = rb_imemo_tmpbuf_new();
 
     // Build an array of object references.
     const size_t initial_capacity = 512;

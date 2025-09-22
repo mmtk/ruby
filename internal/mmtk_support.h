@@ -86,7 +86,7 @@ size_t rb_mmtk_get_payload_size(VALUE object);
 
 // Allocation
 VALUE
-rb_mmtk_new_obj(void *objspace_ptr, void *cache_ptr, VALUE klass, VALUE flags, VALUE v1, VALUE v2, VALUE v3, bool wb_protected, size_t alloc_size, size_t size_pool_size);
+rb_mmtk_new_obj(void *objspace_ptr, void *cache_ptr, VALUE klass, VALUE flags, bool wb_protected, size_t alloc_size, size_t size_pool_size);
 
 // Write barrier
 void rb_mmtk_object_reference_write_post(struct rb_mmtk_mutator_local *local, MMTk_ObjectReference object);

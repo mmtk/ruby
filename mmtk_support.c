@@ -560,7 +560,7 @@ rb_mmtk_new_obj_raw(struct rb_mmtk_mutator_local *local, VALUE klass, VALUE flag
 // Use this to allocate any other Ruby objects.
 // Copied from mmtk.c, with lots of modification.
 VALUE
-rb_mmtk_new_obj(void *objspace_ptr, void *cache_ptr, VALUE klass, VALUE flags, VALUE v1, VALUE v2, VALUE v3, bool wb_protected, size_t alloc_size, size_t size_pool_size)
+rb_mmtk_new_obj(void *objspace_ptr, void *cache_ptr, VALUE klass, VALUE flags, bool wb_protected, size_t alloc_size, size_t size_pool_size)
 {
     #define MMTK_ALLOCATION_SEMANTICS_DEFAULT 0
     // struct objspace *objspace = objspace_ptr;
@@ -573,11 +573,6 @@ rb_mmtk_new_obj(void *objspace_ptr, void *cache_ptr, VALUE klass, VALUE flags, V
     // The size pool size of default.c is a bit subtle when ractor checking mode is enabled.
     // We just let default.c work out the size pool size and we shall allocate that size.
     VALUE obj = rb_mmtk_new_obj_raw(local, klass, flags, wb_protected, size_pool_size);
-
-    VALUE *alloc_obj = (VALUE*)obj;
-    if (alloc_size > 16) alloc_obj[2] = v1;
-    if (alloc_size > 24) alloc_obj[3] = v2;
-    if (alloc_size > 32) alloc_obj[4] = v3;
 
     rb_mmtk_maybe_register_initial_obj_free_candidate(local, obj);
     rb_mmtk_maybe_register_initial_ppp(local, obj);
