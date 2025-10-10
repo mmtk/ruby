@@ -1,12 +1,11 @@
 //! This module is responsible for marking/moving objects on GC.
 
-use std::cell::RefCell;
-use std::rc::Rc;
 use std::{ffi::c_void, ops::Range};
-use crate::codegen::IseqCall;
+use crate::codegen::IseqCallRef;
 use crate::stats::CompileError;
 use crate::{cruby::*, profile::IseqProfile, state::ZJITState, stats::with_time_stat, virtualmem::CodePtr};
 use crate::stats::Counter::gc_time_ns;
+use crate::state::gc_mark_raw_samples;
 
 /// This is all the data ZJIT stores on an ISEQ. We mark objects in this struct on GC.
 #[derive(Debug)]
@@ -21,7 +20,7 @@ pub struct IseqPayload {
     pub gc_offsets: Vec<CodePtr>,
 
     /// JIT-to-JIT calls in the ISEQ. The IseqPayload's ISEQ is the caller of it.
-    pub iseq_calls: Vec<Rc<RefCell<IseqCall>>>,
+    pub iseq_calls: Vec<IseqCallRef>,
 }
 
 impl IseqPayload {
@@ -35,10 +34,18 @@ impl IseqPayload {
     }
 }
 
+/// Set of CodePtrs for an ISEQ
+#[derive(Clone, Debug, PartialEq)]
+pub struct IseqCodePtrs {
+    /// Entry for the interpreter
+    pub start_ptr: CodePtr,
+    /// Entries for JIT-to-JIT calls
+    pub jit_entry_ptrs: Vec<CodePtr>,
+}
+
 #[derive(Debug, PartialEq)]
 pub enum IseqStatus {
-    /// CodePtr has the JIT code address of the first block
-    Compiled(CodePtr),
+    Compiled(IseqCodePtrs),
     CantCompile(CompileError),
     NotCompiled,
 }
@@ -120,6 +127,37 @@ pub extern "C" fn rb_zjit_iseq_update_references(payload: *mut c_void) {
     with_time_stat(gc_time_ns, || iseq_update_references(payload));
 }
 
+/// GC callback for finalizing an ISEQ
+#[unsafe(no_mangle)]
+pub extern "C" fn rb_zjit_iseq_free(iseq: IseqPtr) {
+    if !ZJITState::has_instance() {
+        return;
+    }
+    // TODO(Shopify/ruby#682): Free `IseqPayload`
+    let invariants = ZJITState::get_invariants();
+    invariants.forget_iseq(iseq);
+}
+
+/// GC callback for finalizing a CME
+#[unsafe(no_mangle)]
+pub extern "C" fn rb_zjit_cme_free(cme: *const rb_callable_method_entry_struct) {
+    if !ZJITState::has_instance() {
+        return;
+    }
+    let invariants = ZJITState::get_invariants();
+    invariants.forget_cme(cme);
+}
+
+/// GC callback for finalizing a class
+#[unsafe(no_mangle)]
+pub extern "C" fn rb_zjit_klass_free(klass: VALUE) {
+    if !ZJITState::has_instance() {
+        return;
+    }
+    let invariants = ZJITState::get_invariants();
+    invariants.forget_klass(klass);
+}
+
 /// GC callback for updating object references after all object moves
 #[unsafe(no_mangle)]
 pub extern "C" fn rb_zjit_root_update_references() {
@@ -162,10 +200,10 @@ fn iseq_update_references(payload: &mut IseqPayload) {
 
     // Move ISEQ references in IseqCall
     for iseq_call in payload.iseq_calls.iter_mut() {
-        let old_iseq = iseq_call.borrow().iseq;
+        let old_iseq = iseq_call.iseq.get();
         let new_iseq = unsafe { rb_gc_location(VALUE(old_iseq as usize)) }.0 as IseqPtr;
         if old_iseq != new_iseq {
-            iseq_call.borrow_mut().iseq = new_iseq;
+            iseq_call.iseq.set(new_iseq);
         }
     }
 
@@ -222,4 +260,10 @@ pub fn remove_gc_offsets(payload_ptr: *mut IseqPayload, removed_range: &Range<Co
 /// Return true if given `Range<CodePtr>` ranges overlap with each other
 fn ranges_overlap<T>(left: &Range<T>, right: &Range<T>) -> bool where T: PartialOrd {
     left.start < right.end && right.start < left.end
+}
+
+/// Callback for marking GC objects inside [Invariants].
+#[unsafe(no_mangle)]
+pub extern "C" fn rb_zjit_root_mark() {
+    gc_mark_raw_samples();
 }

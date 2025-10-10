@@ -1095,12 +1095,7 @@ rb_bug_without_die_internal(const char *fmt, va_list args)
     const char *file = NULL;
     int line = 0;
 
-#if USE_MMTK
-    if (rb_mmtk_enabled_p() && rb_mmtk_is_mmtk_worker()) {
-        file = NULL;
-    } else
-#endif
-    if (GET_EC()) {
+    if (rb_current_execution_context(false)) {
         file = rb_source_location_cstr(&line);
     }
 
@@ -1133,13 +1128,7 @@ rb_bug_for_fatal_signal(ruby_sighandler_t default_sighandler, int sig, const voi
     const char *file = NULL;
     int line = 0;
 
-#if USE_MMTK
-    // When using MMTk, this function may be called from GC worker threads,
-    // in which case there will not be a Ruby execution context.
-    if (rb_current_execution_context(!rb_mmtk_enabled_p())) {
-#else
-    if (GET_EC()) {
-#endif
+    if (rb_current_execution_context(false)) {
         file = rb_source_location_cstr(&line);
     }
 
@@ -2635,7 +2624,7 @@ name_err_mesg_to_str(VALUE obj)
     VALUE mesg = ptr->mesg;
     if (NIL_P(mesg)) return Qnil;
     else {
-        struct RString s_str, c_str, d_str;
+        struct RString s_str = {RBASIC_INIT}, c_str = {RBASIC_INIT}, d_str = {RBASIC_INIT};
         VALUE c, s, d = 0, args[4], c2;
         int state = 0;
         rb_encoding *usascii = rb_usascii_encoding();

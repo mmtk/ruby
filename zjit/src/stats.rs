@@ -2,6 +2,7 @@
 
 use std::time::Instant;
 use std::sync::atomic::Ordering;
+use crate::options::OPTIONS;
 
 #[cfg(feature = "stats_allocator")]
 #[path = "../../jit/src/lib.rs"]
@@ -17,6 +18,12 @@ macro_rules! make_counters {
         exit {
             $($exit_counter_name:ident,)+
         }
+        dynamic_send {
+            $($dynamic_send_counter_name:ident,)+
+        }
+        optimized_send {
+            $($optimized_send_counter_name:ident,)+
+        }
         $($counter_name:ident,)+
     ) => {
         /// Struct containing the counter values
@@ -24,6 +31,8 @@ macro_rules! make_counters {
         pub struct Counters {
             $(pub $default_counter_name: u64,)+
             $(pub $exit_counter_name: u64,)+
+            $(pub $dynamic_send_counter_name: u64,)+
+            $(pub $optimized_send_counter_name: u64,)+
             $(pub $counter_name: u64,)+
         }
 
@@ -33,15 +42,19 @@ macro_rules! make_counters {
         pub enum Counter {
             $($default_counter_name,)+
             $($exit_counter_name,)+
+            $($dynamic_send_counter_name,)+
+            $($optimized_send_counter_name,)+
             $($counter_name,)+
         }
 
         impl Counter {
-            pub fn name(&self) -> String {
+            pub fn name(&self) -> &'static str {
                 match self {
-                    $( Counter::$default_counter_name => stringify!($default_counter_name).to_string(), )+
-                    $( Counter::$exit_counter_name => stringify!($exit_counter_name).to_string(), )+
-                    $( Counter::$counter_name => stringify!($counter_name).to_string(), )+
+                    $( Counter::$default_counter_name => stringify!($default_counter_name), )+
+                    $( Counter::$exit_counter_name => stringify!($exit_counter_name), )+
+                    $( Counter::$dynamic_send_counter_name => stringify!($dynamic_send_counter_name), )+
+                    $( Counter::$optimized_send_counter_name => stringify!($optimized_send_counter_name), )+
+                    $( Counter::$counter_name => stringify!($counter_name), )+
                 }
             }
         }
@@ -52,6 +65,8 @@ macro_rules! make_counters {
             match counter {
                 $( Counter::$default_counter_name => std::ptr::addr_of_mut!(counters.$default_counter_name), )+
                 $( Counter::$exit_counter_name => std::ptr::addr_of_mut!(counters.$exit_counter_name), )+
+                $( Counter::$dynamic_send_counter_name => std::ptr::addr_of_mut!(counters.$dynamic_send_counter_name), )+
+                $( Counter::$optimized_send_counter_name => std::ptr::addr_of_mut!(counters.$optimized_send_counter_name), )+
                 $( Counter::$counter_name => std::ptr::addr_of_mut!(counters.$counter_name), )+
             }
         }
@@ -65,6 +80,16 @@ macro_rules! make_counters {
         /// List of other counters that are summed as side_exit_count.
         pub const EXIT_COUNTERS: &'static [Counter] = &[
             $( Counter::$exit_counter_name, )+
+        ];
+
+        /// List of other counters that are summed as dynamic_send_count.
+        pub const DYNAMIC_SEND_COUNTERS: &'static [Counter] = &[
+            $( Counter::$dynamic_send_counter_name, )+
+        ];
+
+        /// List of other counters that are summed as optimized_send_count.
+        pub const OPTIMIZED_SEND_COUNTERS: &'static [Counter] = &[
+            $( Counter::$optimized_send_counter_name, )+
         ];
 
         /// List of other counters that are available only for --zjit-stats.
@@ -110,9 +135,30 @@ make_counters! {
         exit_obj_to_string_fallback,
         exit_interrupt,
         exit_stackoverflow,
-        exit_optional_arguments,
         exit_block_param_proxy_modified,
         exit_block_param_proxy_not_iseq_or_ifunc,
+    }
+
+    // Send fallback counters that are summed as dynamic_send_count
+    dynamic_send {
+        // send_fallback_: Fallback reasons for send-ish instructions
+        send_fallback_send_without_block_polymorphic,
+        send_fallback_send_without_block_no_profiles,
+        send_fallback_send_without_block_cfunc_not_variadic,
+        send_fallback_send_without_block_cfunc_array_variadic,
+        send_fallback_send_without_block_not_optimized_method_type,
+        send_fallback_send_without_block_direct_too_many_args,
+        send_fallback_ccall_with_frame_too_many_args,
+        send_fallback_obj_to_string_not_string,
+        send_fallback_not_optimized_instruction,
+    }
+
+    // Optimized send counters that are summed as optimized_send_count
+    optimized_send {
+        iseq_optimized_send_count,
+        inline_cfunc_optimized_send_count,
+        non_variadic_cfunc_optimized_send_count,
+        variadic_cfunc_optimized_send_count,
     }
 
     // compile_error_: Compile error reasons
@@ -123,34 +169,36 @@ make_counters! {
     compile_error_register_spill_on_alloc,
     compile_error_parse_stack_underflow,
     compile_error_parse_malformed_iseq,
-    compile_error_parse_validation,
+    compile_error_parse_failed_optional_arguments,
     compile_error_parse_not_allowed,
+    compile_error_validation_block_has_no_terminator,
+    compile_error_validation_terminator_not_at_end,
+    compile_error_validation_mismatched_block_arity,
+    compile_error_validation_jump_target_not_in_rpo,
+    compile_error_validation_operand_not_defined,
+    compile_error_validation_duplicate_instruction,
 
     // The number of times YARV instructions are executed on JIT code
     zjit_insn_count,
 
-    // The number of times we do a dynamic dispatch from JIT code
-    dynamic_send_count,
-    dynamic_send_type_send_without_block,
-    dynamic_send_type_send,
-    dynamic_send_type_send_forward,
-    dynamic_send_type_invokeblock,
-    dynamic_send_type_invokesuper,
+    // The number of times we do a dynamic ivar lookup from JIT code
+    dynamic_getivar_count,
+    dynamic_setivar_count,
 
     // Method call def_type related to fallback to dynamic dispatch
-    send_fallback_iseq,
-    send_fallback_cfunc,
-    send_fallback_attrset,
-    send_fallback_ivar,
-    send_fallback_bmethod,
-    send_fallback_zsuper,
-    send_fallback_alias,
-    send_fallback_undef,
-    send_fallback_not_implemented,
-    send_fallback_optimized,
-    send_fallback_missing,
-    send_fallback_refined,
-    send_fallback_null,
+    unspecialized_def_type_iseq,
+    unspecialized_def_type_cfunc,
+    unspecialized_def_type_attrset,
+    unspecialized_def_type_ivar,
+    unspecialized_def_type_bmethod,
+    unspecialized_def_type_zsuper,
+    unspecialized_def_type_alias,
+    unspecialized_def_type_undef,
+    unspecialized_def_type_not_implemented,
+    unspecialized_def_type_optimized,
+    unspecialized_def_type_missing,
+    unspecialized_def_type_refined,
+    unspecialized_def_type_null,
 
     // Writes to the VM frame
     vm_write_pc_count,
@@ -178,12 +226,18 @@ macro_rules! incr_counter {
 pub(crate) use incr_counter;
 
 /// The number of side exits from each YARV instruction
-pub type ExitCounters = [u64; VM_INSTRUCTION_SIZE as usize];
+pub type InsnCounters = [u64; VM_INSTRUCTION_SIZE as usize];
 
 /// Return a raw pointer to the exit counter for a given YARV opcode
 pub fn exit_counter_ptr_for_opcode(opcode: u32) -> *mut u64 {
     let exit_counters = ZJITState::get_exit_counters();
     unsafe { exit_counters.get_unchecked_mut(opcode as usize) }
+}
+
+/// Return a raw pointer to the fallback counter for a given YARV opcode
+pub fn send_fallback_counter_ptr_for_opcode(opcode: u32) -> *mut u64 {
+    let fallback_counters = ZJITState::get_send_fallback_counters();
+    unsafe { fallback_counters.get_unchecked_mut(opcode as usize) }
 }
 
 /// Reason why ZJIT failed to produce any JIT code
@@ -200,6 +254,7 @@ pub enum CompileError {
 /// Return a raw pointer to the exit counter for a given CompileError
 pub fn exit_counter_for_compile_error(compile_error: &CompileError) -> Counter {
     use crate::hir::ParseError::*;
+    use crate::hir::ValidationError::*;
     use crate::stats::CompileError::*;
     use crate::stats::Counter::*;
     match compile_error {
@@ -209,10 +264,18 @@ pub fn exit_counter_for_compile_error(compile_error: &CompileError) -> Counter {
         RegisterSpillOnAlloc  => compile_error_register_spill_on_alloc,
         RegisterSpillOnCCall  => compile_error_register_spill_on_ccall,
         ParseError(parse_error) => match parse_error {
-            StackUnderflow(_) => compile_error_parse_stack_underflow,
-            MalformedIseq(_)  => compile_error_parse_malformed_iseq,
-            Validation(_)     => compile_error_parse_validation,
-            NotAllowed        => compile_error_parse_not_allowed,
+            StackUnderflow(_)       => compile_error_parse_stack_underflow,
+            MalformedIseq(_)        => compile_error_parse_malformed_iseq,
+            FailedOptionalArguments => compile_error_parse_failed_optional_arguments,
+            NotAllowed              => compile_error_parse_not_allowed,
+            Validation(validation) => match validation {
+                BlockHasNoTerminator(_)       => compile_error_validation_block_has_no_terminator,
+                TerminatorNotAtEnd(_, _, _)   => compile_error_validation_terminator_not_at_end,
+                MismatchedBlockArity(_, _, _) => compile_error_validation_mismatched_block_arity,
+                JumpTargetNotInRPO(_)         => compile_error_validation_jump_target_not_in_rpo,
+                OperandNotDefined(_, _, _)    => compile_error_validation_operand_not_defined,
+                DuplicateInstruction(_, _)    => compile_error_validation_duplicate_instruction,
+            },
         }
     }
 }
@@ -247,24 +310,40 @@ pub fn exit_counter_ptr(reason: crate::hir::SideExitReason) -> *mut u64 {
     counter_ptr(counter)
 }
 
-pub fn send_fallback_counter(def_type: crate::hir::MethodType) -> Counter {
+pub fn send_fallback_counter(reason: crate::hir::SendFallbackReason) -> Counter {
+    use crate::hir::SendFallbackReason::*;
+    use crate::stats::Counter::*;
+    match reason {
+        SendWithoutBlockPolymorphic               => send_fallback_send_without_block_polymorphic,
+        SendWithoutBlockNoProfiles                => send_fallback_send_without_block_no_profiles,
+        SendWithoutBlockCfuncNotVariadic          => send_fallback_send_without_block_cfunc_not_variadic,
+        SendWithoutBlockCfuncArrayVariadic        => send_fallback_send_without_block_cfunc_array_variadic,
+        SendWithoutBlockNotOptimizedMethodType(_) => send_fallback_send_without_block_not_optimized_method_type,
+        SendWithoutBlockDirectTooManyArgs         => send_fallback_send_without_block_direct_too_many_args,
+        CCallWithFrameTooManyArgs                 => send_fallback_ccall_with_frame_too_many_args,
+        ObjToStringNotString                      => send_fallback_obj_to_string_not_string,
+        NotOptimizedInstruction(_)                => send_fallback_not_optimized_instruction,
+    }
+}
+
+pub fn send_fallback_counter_for_method_type(method_type: crate::hir::MethodType) -> Counter {
     use crate::hir::MethodType::*;
     use crate::stats::Counter::*;
 
-    match def_type {
-        Iseq => send_fallback_iseq,
-        Cfunc => send_fallback_cfunc,
-        Attrset => send_fallback_attrset,
-        Ivar => send_fallback_ivar,
-        Bmethod => send_fallback_bmethod,
-        Zsuper => send_fallback_zsuper,
-        Alias => send_fallback_alias,
-        Undefined => send_fallback_undef,
-        NotImplemented => send_fallback_not_implemented,
-        Optimized => send_fallback_optimized,
-        Missing => send_fallback_missing,
-        Refined => send_fallback_refined,
-        Null => send_fallback_null,
+    match method_type {
+        Iseq => unspecialized_def_type_iseq,
+        Cfunc => unspecialized_def_type_cfunc,
+        Attrset => unspecialized_def_type_attrset,
+        Ivar => unspecialized_def_type_ivar,
+        Bmethod => unspecialized_def_type_bmethod,
+        Zsuper => unspecialized_def_type_zsuper,
+        Alias => unspecialized_def_type_alias,
+        Undefined => unspecialized_def_type_undef,
+        NotImplemented => unspecialized_def_type_not_implemented,
+        Optimized => unspecialized_def_type_optimized,
+        Missing => unspecialized_def_type_missing,
+        Refined => unspecialized_def_type_refined,
+        Null => unspecialized_def_type_null,
     }
 }
 
@@ -355,6 +434,33 @@ pub extern "C" fn rb_zjit_stats(_ec: EcPtr, _self: VALUE, target_key: VALUE) -> 
         set_stat_usize!(hash, &key_string, *count);
     }
 
+    // Set send fallback counters for each DynamicSendReason
+    let mut dynamic_send_count = 0;
+    for &counter in DYNAMIC_SEND_COUNTERS {
+        let count = unsafe { *counter_ptr(counter) };
+        dynamic_send_count += count;
+        set_stat_usize!(hash, &counter.name(), count);
+    }
+    set_stat_usize!(hash, "dynamic_send_count", dynamic_send_count);
+
+    // Set optimized send counters
+    let mut optimized_send_count = 0;
+    for &counter in OPTIMIZED_SEND_COUNTERS {
+        let count = unsafe { *counter_ptr(counter) };
+        optimized_send_count += count;
+        set_stat_usize!(hash, &counter.name(), count);
+    }
+    set_stat_usize!(hash, "optimized_send_count", optimized_send_count);
+    set_stat_usize!(hash, "send_count", dynamic_send_count + optimized_send_count);
+
+    // Set send fallback counters for NotOptimizedInstruction
+    let send_fallback_counters = ZJITState::get_send_fallback_counters();
+    for (op_idx, count) in send_fallback_counters.iter().enumerate().take(VM_INSTRUCTION_SIZE as usize) {
+        let op_name = insn_name(op_idx);
+        let key_string = "not_optimized_yarv_insn_".to_owned() + &op_name;
+        set_stat_usize!(hash, &key_string, *count);
+    }
+
     // Only ZJIT_STATS builds support rb_vm_insn_count
     if unsafe { rb_vm_insn_count } > 0 {
         let vm_insn_count = unsafe { rb_vm_insn_count };
@@ -365,6 +471,20 @@ pub extern "C" fn rb_zjit_stats(_ec: EcPtr, _self: VALUE, target_key: VALUE) -> 
         set_stat_usize!(hash, "total_insn_count", total_insn_count);
 
         set_stat_f64!(hash, "ratio_in_zjit", 100.0 * zjit_insn_count as f64 / total_insn_count as f64);
+    }
+
+    // Set not inlined cfunc counters
+    let not_inlined_cfuncs = ZJITState::get_not_inlined_cfunc_counter_pointers();
+    for (signature, counter) in not_inlined_cfuncs.iter() {
+        let key_string = format!("not_inlined_cfuncs_{}", signature);
+        set_stat_usize!(hash, &key_string, **counter);
+    }
+
+    // Set not annotated cfunc counters
+    let not_annotated_cfuncs = ZJITState::get_not_annotated_cfunc_counter_pointers();
+    for (signature, counter) in not_annotated_cfuncs.iter() {
+        let key_string = format!("not_annotated_cfuncs_{}", signature);
+        set_stat_usize!(hash, &key_string, **counter);
     }
 
     hash
@@ -382,4 +502,55 @@ pub fn with_time_stat<F, R>(counter: Counter, func: F) -> R where F: FnOnce() ->
 /// The number of bytes ZJIT has allocated on the Rust heap.
 pub fn zjit_alloc_size() -> usize {
     jit::GLOBAL_ALLOCATOR.alloc_size.load(Ordering::SeqCst)
+}
+
+/// Struct of arrays for --zjit-trace-exits.
+#[derive(Default)]
+pub struct SideExitLocations {
+    /// Control frames of method entries.
+    pub raw_samples: Vec<VALUE>,
+    /// Line numbers of the iseq caller.
+    pub line_samples: Vec<i32>,
+    /// Skipped samples
+    pub skipped_samples: usize
+}
+
+/// Primitive called in zjit.rb
+///
+/// Check if trace_exits generation is enabled.
+#[unsafe(no_mangle)]
+pub extern "C" fn rb_zjit_trace_exit_locations_enabled_p(_ec: EcPtr, _ruby_self: VALUE) -> VALUE {
+    // Builtin zjit.rb calls this even if ZJIT is disabled, so OPTIONS may not be set.
+    if unsafe { OPTIONS.as_ref() }.is_some_and(|opts| opts.trace_side_exits) {
+        Qtrue
+    } else {
+        Qfalse
+    }
+}
+
+/// Call the C function to parse the raw_samples and line_samples
+/// into raw, lines, and frames hash for RubyVM::YJIT.exit_locations.
+#[unsafe(no_mangle)]
+pub extern "C" fn rb_zjit_get_exit_locations(_ec: EcPtr, _ruby_self: VALUE) -> VALUE {
+    if !zjit_enabled_p() || !get_option!(trace_side_exits) {
+        return Qnil;
+    }
+
+    // Can safely unwrap since `trace_side_exits` must be true at this point
+    let zjit_raw_samples = ZJITState::get_raw_samples().unwrap();
+    let zjit_line_samples = ZJITState::get_line_samples().unwrap();
+
+    assert_eq!(zjit_raw_samples.len(), zjit_line_samples.len());
+
+    // zjit_raw_samples and zjit_line_samples are the same length so
+    // pass only one of the lengths in the C function.
+    let samples_len = zjit_raw_samples.len() as i32;
+
+    unsafe {
+        rb_zjit_exit_locations_dict(
+            zjit_raw_samples.as_mut_ptr(),
+            zjit_line_samples.as_mut_ptr(),
+            samples_len
+        )
+    }
 }

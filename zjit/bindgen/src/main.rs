@@ -281,6 +281,7 @@ fn main() {
         .allowlist_function("rb_RSTRING_PTR")
         .allowlist_function("rb_RSTRING_LEN")
         .allowlist_function("rb_ENCODING_GET")
+        .allowlist_function("rb_zjit_exit_locations_dict")
         .allowlist_function("rb_optimized_call")
         .allowlist_function("rb_jit_icache_invalidate")
         .allowlist_function("rb_zjit_print_exception")
@@ -289,7 +290,7 @@ fn main() {
         .allowlist_function("rb_zjit_insn_leaf")
         .allowlist_type("robject_offsets")
         .allowlist_type("rstring_offsets")
-        .allowlist_var("RB_INVALID_SHAPE_ID")
+        .allowlist_type("zjit_exported_constants")
         .allowlist_function("rb_assert_holding_vm_lock")
         .allowlist_function("rb_jit_shape_too_complex_p")
         .allowlist_function("rb_jit_multi_ractor_p")
@@ -327,6 +328,8 @@ fn main() {
         .allowlist_function("rb_class_new_instance_pass_kw")
         .allowlist_function("rb_obj_alloc")
         .allowlist_function("rb_obj_info")
+        // From include/ruby/debug.h
+        .allowlist_function("rb_profile_frames")
         .allowlist_function("ruby_xfree")
         .allowlist_function("rb_profile_frames")
 

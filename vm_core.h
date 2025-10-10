@@ -316,7 +316,6 @@ struct rb_calling_info {
     int argc;
     bool kw_splat;
     VALUE heap_argv;
-    const rb_namespace_t *proc_ns;
 };
 
 #ifndef VM_ARGC_STACK_MAX
@@ -500,6 +499,12 @@ struct rb_iseq_constant_body {
     } insns_info;
 
     const ID *local_table;		/* must free */
+
+    enum lvar_state {
+        lvar_uninitialized,
+        lvar_initialized,
+        lvar_reassigned,
+    } *lvar_states;
 
     /* catch table */
     struct iseq_catch_table *catch_table;
@@ -754,20 +759,10 @@ typedef struct rb_vm_struct {
     const VALUE special_exceptions[ruby_special_error_count];
 
     /* namespace */
+    rb_namespace_t *root_namespace;
     rb_namespace_t *main_namespace;
 
     /* load */
-    VALUE top_self;
-    VALUE load_path;
-    VALUE load_path_snapshot;
-    VALUE load_path_check_cache;
-    VALUE expanded_load_path;
-    VALUE loaded_features;
-    VALUE loaded_features_snapshot;
-    VALUE loaded_features_realpaths;
-    VALUE loaded_features_realpath_map;
-    struct st_table *loaded_features_index;
-    struct st_table *loading_table;
     // For running the init function of statically linked
     // extensions when they are loaded
     struct st_table *static_ext_inits;
@@ -831,9 +826,6 @@ typedef struct rb_vm_struct {
         size_t fiber_vm_stack_size;
         size_t fiber_machine_stack_size;
     } default_params;
-
-    // TODO: a single require_stack can't support multi-threaded require trees
-    VALUE require_stack;
 } rb_vm_t;
 
 /* default values */
@@ -1140,9 +1132,6 @@ typedef struct rb_thread_struct {
     /* for load(true) */
     VALUE top_self;
     VALUE top_wrapper;
-    /* for namespace */
-    VALUE namespaces; // Stack of namespaces
-    rb_namespace_t *ns; // The current one
 
     /* thread control */
 
@@ -1282,7 +1271,6 @@ RUBY_SYMBOL_EXPORT_END
 
 typedef struct {
     const struct rb_block block;
-    const rb_namespace_t *ns;
     unsigned int is_from_method: 1;	/* bool */
     unsigned int is_lambda: 1;		/* bool */
     unsigned int is_isolated: 1;        /* bool */
@@ -1290,8 +1278,8 @@ typedef struct {
 
 RUBY_SYMBOL_EXPORT_BEGIN
 VALUE rb_proc_isolate(VALUE self);
-VALUE rb_proc_isolate_bang(VALUE self);
-VALUE rb_proc_ractor_make_shareable(VALUE self);
+VALUE rb_proc_isolate_bang(VALUE self, VALUE replace_self);
+VALUE rb_proc_ractor_make_shareable(VALUE proc, VALUE replace_self);
 RUBY_SYMBOL_EXPORT_END
 
 typedef struct {
@@ -1374,11 +1362,11 @@ typedef rb_control_frame_t *
 
 enum vm_frame_env_flags {
     /* Frame/Environment flag bits:
-     *   MMMM MMMM MMMM MMMM __FF FFFF FFFE EEEX (LSB)
+     *   MMMM MMMM MMMM MMMM ___F FFFF FFFE EEEX (LSB)
      *
      * X   : tag for GC marking (It seems as Fixnum)
      * EEE : 4 bits Env flags
-     * FF..: 9 bits Frame flags
+     * FF..: 8 bits Frame flags
      * MM..: 15 bits frame magic (to check frame corruption)
      */
 
@@ -1401,10 +1389,9 @@ enum vm_frame_env_flags {
     VM_FRAME_FLAG_CFRAME    = 0x0080,
     VM_FRAME_FLAG_LAMBDA    = 0x0100,
     VM_FRAME_FLAG_MODIFIED_BLOCK_PARAM = 0x0200,
-    VM_FRAME_FLAG_CFRAME_KW = 0x0400,
-    VM_FRAME_FLAG_PASSED    = 0x0800,
-    VM_FRAME_FLAG_NS_SWITCH = 0x1000,
-    VM_FRAME_FLAG_LOAD_ISEQ = 0x2000,
+    VM_FRAME_FLAG_CFRAME_KW  = 0x0400,
+    VM_FRAME_FLAG_PASSED     = 0x0800,
+    VM_FRAME_FLAG_NS_REQUIRE = 0x1000,
 
     /* env flag */
     VM_ENV_FLAG_LOCAL       = 0x0002,
@@ -1449,9 +1436,28 @@ VM_ENV_FLAGS(const VALUE *ep, long flag)
 }
 
 static inline unsigned long
+VM_ENV_FLAGS_UNCHECKED(const VALUE *ep, long flag)
+{
+    VALUE flags = ep[VM_ENV_DATA_INDEX_FLAGS];
+    return flags & flag;
+}
+
+static inline unsigned long
+VM_ENV_FRAME_TYPE_P(const VALUE *ep, unsigned long frame_type)
+{
+    return VM_ENV_FLAGS(ep, VM_FRAME_MAGIC_MASK) == frame_type;
+}
+
+static inline unsigned long
 VM_FRAME_TYPE(const rb_control_frame_t *cfp)
 {
     return VM_ENV_FLAGS(cfp->ep, VM_FRAME_MAGIC_MASK);
+}
+
+static inline unsigned long
+VM_FRAME_TYPE_UNCHECKED(const rb_control_frame_t *cfp)
+{
+    return VM_ENV_FLAGS_UNCHECKED(cfp->ep, VM_FRAME_MAGIC_MASK);
 }
 
 static inline int
@@ -1470,6 +1476,12 @@ static inline int
 VM_FRAME_FINISHED_P(const rb_control_frame_t *cfp)
 {
     return VM_ENV_FLAGS(cfp->ep, VM_FRAME_FLAG_FINISH) != 0;
+}
+
+static inline int
+VM_FRAME_FINISHED_P_UNCHECKED(const rb_control_frame_t *cfp)
+{
+    return VM_ENV_FLAGS_UNCHECKED(cfp->ep, VM_FRAME_FLAG_FINISH) != 0;
 }
 
 static inline int
@@ -1498,15 +1510,27 @@ VM_FRAME_CFRAME_P(const rb_control_frame_t *cfp)
 }
 
 static inline int
+VM_FRAME_CFRAME_P_UNCHECKED(const rb_control_frame_t *cfp)
+{
+    return VM_ENV_FLAGS_UNCHECKED(cfp->ep, VM_FRAME_FLAG_CFRAME) != 0;
+}
+
+static inline int
 VM_FRAME_RUBYFRAME_P(const rb_control_frame_t *cfp)
 {
     return !VM_FRAME_CFRAME_P(cfp);
 }
 
 static inline int
-VM_FRAME_NS_SWITCH_P(const rb_control_frame_t *cfp)
+VM_FRAME_RUBYFRAME_P_UNCHECKED(const rb_control_frame_t *cfp)
 {
-    return VM_ENV_FLAGS(cfp->ep, VM_FRAME_FLAG_NS_SWITCH) != 0;
+    return !VM_FRAME_CFRAME_P_UNCHECKED(cfp);
+}
+
+static inline int
+VM_FRAME_NS_REQUIRE_P(const rb_control_frame_t *cfp)
+{
+    return VM_ENV_FLAGS(cfp->ep, VM_FRAME_FLAG_NS_REQUIRE) != 0;
 }
 
 #define RUBYVM_CFUNC_FRAME_P(cfp) \
@@ -1521,18 +1545,55 @@ VM_ENV_LOCAL_P(const VALUE *ep)
     return VM_ENV_FLAGS(ep, VM_ENV_FLAG_LOCAL) ? 1 : 0;
 }
 
+static inline int
+VM_ENV_LOCAL_P_UNCHECKED(const VALUE *ep)
+{
+    return VM_ENV_FLAGS_UNCHECKED(ep, VM_ENV_FLAG_LOCAL) ? 1 : 0;
+}
+
+static inline const VALUE *
+VM_ENV_PREV_EP_UNCHECKED(const VALUE *ep)
+{
+    return GC_GUARDED_PTR_REF(ep[VM_ENV_DATA_INDEX_SPECVAL]);
+}
+
 static inline const VALUE *
 VM_ENV_PREV_EP(const VALUE *ep)
 {
     VM_ASSERT(VM_ENV_LOCAL_P(ep) == 0);
-    return GC_GUARDED_PTR_REF(ep[VM_ENV_DATA_INDEX_SPECVAL]);
+    return VM_ENV_PREV_EP_UNCHECKED(ep);
+}
+
+static inline bool
+VM_ENV_NAMESPACED_P(const VALUE *ep)
+{
+    return VM_ENV_FRAME_TYPE_P(ep, VM_FRAME_MAGIC_CLASS) || VM_ENV_FRAME_TYPE_P(ep, VM_FRAME_MAGIC_TOP);
 }
 
 static inline VALUE
 VM_ENV_BLOCK_HANDLER(const VALUE *ep)
 {
+    if (VM_ENV_NAMESPACED_P(ep)) {
+        VM_ASSERT(VM_ENV_LOCAL_P(ep));
+        return VM_BLOCK_HANDLER_NONE;
+    }
+
     VM_ASSERT(VM_ENV_LOCAL_P(ep));
     return ep[VM_ENV_DATA_INDEX_SPECVAL];
+}
+
+static inline const rb_namespace_t *
+VM_ENV_NAMESPACE(const VALUE *ep)
+{
+    VM_ASSERT(VM_ENV_NAMESPACED_P(ep));
+    VM_ASSERT(VM_ENV_LOCAL_P(ep));
+    return (const rb_namespace_t *)GC_GUARDED_PTR_REF(ep[VM_ENV_DATA_INDEX_SPECVAL]);
+}
+
+static inline const rb_namespace_t *
+VM_ENV_NAMESPACE_UNCHECKED(const VALUE *ep)
+{
+    return (const rb_namespace_t *)GC_GUARDED_PTR_REF(ep[VM_ENV_DATA_INDEX_SPECVAL]);
 }
 
 #if VM_CHECK_MODE > 0
@@ -1875,8 +1936,7 @@ NORETURN(void rb_bug_for_fatal_signal(ruby_sighandler_t default_sighandler, int 
 
 /* functions about thread/vm execution */
 RUBY_SYMBOL_EXPORT_BEGIN
-VALUE rb_iseq_eval(const rb_iseq_t *iseq);
-VALUE rb_iseq_eval_with_refinement(const rb_iseq_t *iseq, VALUE mod);
+VALUE rb_iseq_eval(const rb_iseq_t *iseq, const rb_namespace_t *ns);
 VALUE rb_iseq_eval_main(const rb_iseq_t *iseq);
 VALUE rb_iseq_path(const rb_iseq_t *iseq);
 VALUE rb_iseq_realpath(const rb_iseq_t *iseq);
@@ -1936,6 +1996,7 @@ VALUE *rb_vm_svar_lep(const rb_execution_context_t *ec, const rb_control_frame_t
 int rb_vm_get_sourceline(const rb_control_frame_t *);
 void rb_vm_stack_to_heap(rb_execution_context_t *ec);
 void ruby_thread_init_stack(rb_thread_t *th, void *local_in_parent_frame);
+void rb_thread_malloc_stack_set(rb_thread_t *th, void *stack);
 rb_thread_t * ruby_thread_from_native(void);
 int ruby_thread_set_native(rb_thread_t *th);
 int rb_vm_control_frame_id_and_class(const rb_control_frame_t *cfp, ID *idp, ID *called_idp, VALUE *klassp);
@@ -1953,6 +2014,7 @@ void rb_gc_mark_machine_context(const rb_execution_context_t *ec);
 rb_cref_t *rb_vm_rewrite_cref(rb_cref_t *node, VALUE old_klass, VALUE new_klass);
 
 const rb_callable_method_entry_t *rb_vm_frame_method_entry(const rb_control_frame_t *cfp);
+const rb_callable_method_entry_t *rb_vm_frame_method_entry_unchecked(const rb_control_frame_t *cfp);
 
 #define sysstack_error GET_VM()->special_exceptions[ruby_error_sysstack]
 

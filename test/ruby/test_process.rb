@@ -58,6 +58,8 @@ class TestProcess < Test::Unit::TestCase
 
   def test_rlimit_nofile
     return unless rlimit_exist?
+    omit "LSAN needs to open proc file" if Test::Sanitizers.lsan_enabled?
+
     with_tmpchdir {
       File.write 's', <<-"End"
         # Too small RLIMIT_NOFILE, such as zero, causes problems.
@@ -280,7 +282,7 @@ class TestProcess < Test::Unit::TestCase
     end;
   end
 
-  MANDATORY_ENVS = %w[RUBYLIB GEM_HOME GEM_PATH]
+  MANDATORY_ENVS = %w[RUBYLIB GEM_HOME GEM_PATH RUBY_FREE_AT_EXIT]
   case RbConfig::CONFIG['target_os']
   when /linux/
     MANDATORY_ENVS << 'LD_PRELOAD'

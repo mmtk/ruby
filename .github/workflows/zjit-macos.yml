@@ -39,8 +39,8 @@ jobs:
             test_all_opts: '--seed=46450'
 
           - test_task: 'check'
-            run_opts: '--zjit-call-threshold=1 --zjit-disable-hir-opt'
-            specopts: '-T --zjit-call-threshold=1 -T --zjit-disable-hir-opt'
+            run_opts: '--zjit-disable-hir-opt --zjit-call-threshold=1'
+            specopts: '-T --zjit-disable-hir-opt -T --zjit-call-threshold=1'
             configure: '--enable-zjit=dev'
             test_all_opts: '--seed=46450'
 
@@ -101,9 +101,6 @@ jobs:
       - name: Run configure
         run: ../src/configure -C --disable-install-doc ${{ matrix.configure }}
 
-      - run: make prepare-gems
-        if: ${{ matrix.test_task == 'test-bundled-gems' }}
-
       - run: make
 
       - name: Verify that --zjit-dump-disasm works
@@ -136,7 +133,9 @@ jobs:
       - name: Dump crash logs
         if: ${{ failure() }}
         continue-on-error: true
-        run: tail --verbose --lines=+1 rb_crash_*.txt
+        run: |
+          tail --verbose --lines=+1 rb_crash_*.txt
+          exit 1
 
       - uses: ./.github/actions/slack
         with:

@@ -178,6 +178,9 @@ rb_iseq_free(const rb_iseq_t *iseq)
             rb_yjit_live_iseq_count--;
         }
 #endif
+#if USE_ZJIT
+        rb_zjit_iseq_free(iseq);
+#endif
         ruby_xfree((void *)body->iseq_encoded);
         ruby_xfree((void *)body->insns_info.body);
         ruby_xfree((void *)body->insns_info.positions);
@@ -202,8 +205,11 @@ rb_iseq_free(const rb_iseq_t *iseq)
             }
             ruby_xfree((void *)body->param.keyword);
         }
-        if (LIKELY(body->local_table != rb_iseq_shared_exc_local_tbl))
+        if (LIKELY(body->local_table != rb_iseq_shared_exc_local_tbl)) {
             ruby_xfree((void *)body->local_table);
+        }
+        ruby_xfree((void *)body->lvar_states);
+
         compile_data_free(ISEQ_COMPILE_DATA(iseq));
         if (body->outer_variables) rb_id_table_free(body->outer_variables);
         ruby_xfree(body);
@@ -1174,6 +1180,21 @@ rb_iseq_load_iseq(VALUE fname)
     return NULL;
 }
 
+const rb_iseq_t *
+rb_iseq_compile_iseq(VALUE str, VALUE fname)
+{
+    VALUE args[] = {
+        str, fname
+    };
+    VALUE iseqv = rb_check_funcall(rb_cISeq, rb_intern("compile"), 2, args);
+
+    if (!SPECIAL_CONST_P(iseqv) && RBASIC_CLASS(iseqv) == rb_cISeq) {
+        return iseqw_check(iseqv);
+    }
+
+    return NULL;
+}
+
 #define CHECK_ARRAY(v)   rb_to_array_type(v)
 #define CHECK_HASH(v)    rb_to_hash_type(v)
 #define CHECK_STRING(v)  rb_str_to_str(v)
@@ -1979,7 +2000,7 @@ iseqw_eval(VALUE self)
     if (0 == ISEQ_BODY(iseq)->iseq_size) {
         rb_raise(rb_eTypeError, "attempt to evaluate dummy InstructionSequence");
     }
-    return rb_iseq_eval(iseq);
+    return rb_iseq_eval(iseq, rb_current_namespace());
 }
 
 /*

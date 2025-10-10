@@ -284,14 +284,11 @@ impl CodeBlock {
 
     /// Call a func with the disasm of generated code for testing
     #[allow(unused_variables)]
-    #[cfg(test)]
-    pub fn with_disasm<T>(&self, func: T) where T: Fn(String) {
-        #[cfg(feature = "disasm")]
-        {
-            let start_addr = self.get_ptr(0).raw_addr(self);
-            let end_addr = self.get_write_ptr().raw_addr(self);
-            func(crate::disasm::disasm_addr_range(self, start_addr, end_addr));
-        }
+    #[cfg(all(test, feature = "disasm"))]
+    pub fn disasm(&self) -> String {
+        let start_addr = self.get_ptr(0).raw_addr(self);
+        let end_addr = self.get_write_ptr().raw_addr(self);
+        crate::disasm::disasm_addr_range(self, start_addr, end_addr)
     }
 
     /// Return the hex dump of generated code for testing
@@ -299,6 +296,46 @@ impl CodeBlock {
     pub fn hexdump(&self) -> String {
         format!("{:x}", self)
     }
+}
+
+/// Run assert_snapshot! only if cfg!(feature = "disasm").
+/// $actual can be not only `cb.disasm()` but also `disasms!(cb1, cb2, ...)`.
+#[cfg(test)]
+#[macro_export]
+macro_rules! assert_disasm_snapshot {
+    ($actual: expr, @$($tt: tt)*) => {{
+        #[cfg(feature = "disasm")]
+        assert_snapshot!($actual, @$($tt)*)
+    }};
+}
+
+/// Combine multiple cb.disasm() results to match all of them at once, which allows
+/// us to avoid running the set of zjit-test -> zjit-test-update multiple times.
+#[cfg(all(test, feature = "disasm"))]
+#[macro_export]
+macro_rules! disasms {
+    ($( $cb:expr ),+ $(,)?) => {{
+        crate::disasms_with!("", $( $cb ),+)
+    }};
+}
+
+/// Basically `disasms!` but allows a non-"" delimiter, such as "\n"
+#[cfg(all(test, feature = "disasm"))]
+#[macro_export]
+macro_rules! disasms_with {
+    ($join:expr, $( $cb:expr ),+ $(,)?) => {{
+        vec![$( $cb.disasm() ),+].join($join)
+    }};
+}
+
+/// Combine multiple cb.hexdump() results to match all of them at once, which allows
+/// us to avoid running the set of zjit-test -> zjit-test-update multiple times.
+#[cfg(test)]
+#[macro_export]
+macro_rules! hexdumps {
+    ($( $cb:expr ),+ $(,)?) => {{
+        vec![$( $cb.hexdump() ),+].join("\n")
+    }};
 }
 
 /// Produce hex string output from the bytes in a code block
@@ -317,19 +354,13 @@ impl fmt::LowerHex for CodeBlock {
 impl CodeBlock {
     /// Stubbed CodeBlock for testing. Can't execute generated code.
     pub fn new_dummy() -> Self {
-        const DEFAULT_MEM_SIZE: usize = 1024;
+        const DEFAULT_MEM_SIZE: usize = 1024 * 1024;
         CodeBlock::new_dummy_sized(DEFAULT_MEM_SIZE)
     }
 
     pub fn new_dummy_sized(mem_size: usize) -> Self {
-        use std::ptr::NonNull;
         use crate::virtualmem::*;
-        use crate::virtualmem::tests::TestingAllocator;
-
-        let alloc = TestingAllocator::new(mem_size);
-        let mem_start: *const u8 = alloc.mem_start();
-        let virt_mem = VirtualMem::new(alloc, 1, NonNull::new(mem_start as *mut u8).unwrap(), mem_size, 128 * 1024 * 1024);
-
+        let virt_mem = VirtualMem::alloc(mem_size, None);
         Self::new(Rc::new(RefCell::new(virt_mem)), false)
     }
 }

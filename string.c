@@ -910,14 +910,14 @@ rb_setup_fake_str(struct RString *fake_str, const char *name, long len, rb_encod
 VALUE
 rb_fstring_new(const char *ptr, long len)
 {
-    struct RString fake_str;
+    struct RString fake_str = {RBASIC_INIT};
     return register_fstring(setup_fake_str(&fake_str, ptr, len, ENCINDEX_US_ASCII), false, false);
 }
 
 VALUE
 rb_fstring_enc_new(const char *ptr, long len, rb_encoding *enc)
 {
-    struct RString fake_str;
+    struct RString fake_str = {RBASIC_INIT};
     return register_fstring(rb_setup_fake_str(&fake_str, ptr, len, enc), false, false);
 }
 
@@ -4567,15 +4567,14 @@ rb_ascii8bit_appendable_encoding_index(rb_encoding *enc, unsigned int code)
 
 /*
  *  call-seq:
- *    prepend(*other_strings)  -> string
+ *    prepend(*other_strings) -> new_string
  *
- *  Prepends each string in +other_strings+ to +self+ and returns +self+:
+ *  Prefixes to +self+ the concatenation of the given +other_strings+; returns +self+:
  *
- *    s = 'foo'
- *    s.prepend('bar', 'baz') # => "barbazfoo"
- *    s                       # => "barbazfoo"
+ *    'baz'.prepend('foo', 'bar') # => "foobarbaz"
  *
- *  Related: String#concat.
+ *  Related: see {Modifying}[rdoc-ref:String@Modifying].
+ *
  */
 
 static VALUE
@@ -6984,7 +6983,7 @@ str_gsub(int argc, VALUE *argv, VALUE str, int bang)
                 val = rb_obj_as_string(rb_yield(match0));
             }
             else {
-                struct RString fake_str;
+                struct RString fake_str = {RBASIC_INIT};
                 VALUE key;
                 if (mode == FAST_MAP) {
                     // It is safe to use a fake_str here because we established that it won't escape,
@@ -7135,11 +7134,13 @@ rb_str_gsub(int argc, VALUE *argv, VALUE str)
  *  call-seq:
  *    replace(other_string) -> self
  *
- *  Replaces the contents of +self+ with the contents of +other_string+:
+ *  Replaces the contents of +self+ with the contents of +other_string+;
+ *  returns +self+:
  *
  *    s = 'foo'        # => "foo"
  *    s.replace('bar') # => "bar"
  *
+ *  Related: see {Modifying}[rdoc-ref:String@Modifying].
  */
 
 VALUE
@@ -7470,12 +7471,16 @@ rb_str_bytesplice(int argc, VALUE *argv, VALUE str)
 
 /*
  *  call-seq:
- *    reverse -> string
+ *    reverse -> new_string
  *
  *  Returns a new string with the characters from +self+ in reverse order.
  *
- *    'stressed'.reverse # => "desserts"
+ *    'drawer'.reverse       # => "reward"
+ *    'reviled'.reverse      # => "deliver"
+ *    'stressed'.reverse     # => "desserts"
+ *    'semordnilaps'.reverse # => "spalindromes"
  *
+ *  Related: see {Converting to New String}[rdoc-ref:String@Converting+to+New+String].
  */
 
 static VALUE
@@ -7535,10 +7540,12 @@ rb_str_reverse(VALUE str)
  *
  *  Returns +self+ with its characters reversed:
  *
- *    s = 'stressed'
- *    s.reverse! # => "desserts"
- *    s          # => "desserts"
+ *    'drawer'.reverse!       # => "reward"
+ *    'reviled'.reverse!      # => "deliver"
+ *    'stressed'.reverse!     # => "desserts"
+ *    'semordnilaps'.reverse! # => "spalindromes"
  *
+ *  Related: see {Modifying}[rdoc-ref:String@Modifying].
  */
 
 static VALUE
@@ -11252,19 +11259,44 @@ rb_str_scan(VALUE str, VALUE pat)
  *  call-seq:
  *    hex -> integer
  *
- *  Interprets the leading substring of +self+ as hexadecimal;
- *  returns its integer value:
+ *  Interprets the leading substring of +self+ as hexadecimal, possibly signed;
+ *  returns its value as an integer.
  *
- *    '0xFFFF'.hex     # => 65535
- *    'FFzzzFF'.hex    # =>   255  # Hex ends at first non-hex character, 'z'.
- *    'ffzzzFF'.hex    # =>   255  # Case does not matter.
- *    '-FFzzzFF'.hex   # =>  -255  # May have leading '-'.
- *    '0xFFzzzFF'.hex  # =>   255  # May have leading '0x'.
- *    '-0xFFzzzFF'.hex # =>  -255  # May have leading '-0x'.
+ *  The leading substring is interpreted as hexadecimal when it begins with:
  *
- *  Returns zero if there is no such leading substring:
+ *  - One or more character representing hexadecimal digits
+ *    (each in one of the ranges <tt>'0'..'9'</tt>, <tt>'a'..'f'</tt>, or <tt>'A'..'F'</tt>);
+ *    the string to be interpreted ends at the first character that does not represent a hexadecimal digit:
  *
- *    'zzz'.hex # => 0
+ *      'f'.hex        # => 15
+ *      '11'.hex       # => 17
+ *      'FFF'.hex      # => 4095
+ *      'fffg'.hex     # => 4095
+ *      'foo'.hex      # => 15   # 'f' hexadecimal, 'oo' not.
+ *      'bar'.hex      # => 186  # 'ba' hexadecimal, 'r' not.
+ *      'deadbeef'.hex # => 3735928559
+ *
+ *  - <tt>'0x'</tt> or <tt>'0X'</tt>, followed by one or more hexadecimal digits:
+ *
+ *      '0xfff'.hex    # => 4095
+ *      '0xfffg'.hex   # => 4095
+ *
+ *  Any of the above may prefixed with <tt>'-'</tt>, which negates the interpreted value:
+ *
+ *    '-fff'.hex      # => -4095
+ *    '-0xFFF'.hex    # => -4095
+ *
+ *  For any substring not described above, returns zero:
+ *
+ *    'xxx'.hex     # => 0
+ *    ''.hex        # => 0
+ *
+ *  Note that, unlike #oct, this method interprets only hexadecimal,
+ *  and not binary, octal, or decimal notations:
+ *
+ *    '0b111'.hex   # => 45329
+ *    '0o777'.hex   # => 0
+ *    '0d999'.hex   # => 55705
  *
  *  Related: See {Converting to Non-String}[rdoc-ref:String@Converting+to+Non--5CString].
  */
@@ -11717,7 +11749,7 @@ rb_str_center(int argc, VALUE *argv, VALUE str)
 
 /*
  *  call-seq:
- *    partition(string_or_regexp) -> [head, match, tail]
+ *    partition(pattern) -> [pre_match, first_match, post_match]
  *
  *  :include: doc/string/partition.rdoc
  *
@@ -13239,7 +13271,7 @@ rb_str_to_interned_str(VALUE str)
 VALUE
 rb_interned_str(const char *ptr, long len)
 {
-    struct RString fake_str;
+    struct RString fake_str = {RBASIC_INIT};
     return register_fstring(setup_fake_str(&fake_str, ptr, len, ENCINDEX_US_ASCII), true, false);
 }
 
@@ -13256,7 +13288,7 @@ rb_enc_interned_str(const char *ptr, long len, rb_encoding *enc)
         rb_enc_autoload(enc);
     }
 
-    struct RString fake_str;
+    struct RString fake_str = {RBASIC_INIT};
     return register_fstring(rb_setup_fake_str(&fake_str, ptr, len, enc), true, false);
 }
 
@@ -13267,7 +13299,7 @@ rb_enc_literal_str(const char *ptr, long len, rb_encoding *enc)
         rb_enc_autoload(enc);
     }
 
-    struct RString fake_str;
+    struct RString fake_str = {RBASIC_INIT};
     return register_fstring(rb_setup_fake_str(&fake_str, ptr, len, enc), true, true);
 }
 
@@ -13314,6 +13346,7 @@ Init_String(void)
     rb_define_singleton_method(rb_cString, "new", rb_str_s_new, -1);
     rb_define_singleton_method(rb_cString, "try_convert", rb_str_s_try_convert, 1);
     rb_define_method(rb_cString, "initialize", rb_str_init, -1);
+    rb_define_method(rb_cString, "replace", rb_str_replace, 1);
     rb_define_method(rb_cString, "initialize_copy", rb_str_replace, 1);
     rb_define_method(rb_cString, "<=>", rb_str_cmp_m, 1);
     rb_define_method(rb_cString, "==", rb_str_equal, 1);
@@ -13344,7 +13377,6 @@ Init_String(void)
     rb_define_method(rb_cString, "byteindex", rb_str_byteindex_m, -1);
     rb_define_method(rb_cString, "rindex", rb_str_rindex_m, -1);
     rb_define_method(rb_cString, "byterindex", rb_str_byterindex_m, -1);
-    rb_define_method(rb_cString, "replace", rb_str_replace, 1);
     rb_define_method(rb_cString, "clear", rb_str_clear, 0);
     rb_define_method(rb_cString, "chr", rb_str_chr, 0);
     rb_define_method(rb_cString, "getbyte", rb_str_getbyte, 1);

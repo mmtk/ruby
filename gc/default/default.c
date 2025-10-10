@@ -605,7 +605,9 @@ typedef struct rb_objspace {
     VALUE gc_stress_mode;
 
     struct {
+        bool parent_object_old_p;
         VALUE parent_object;
+
         int need_major_gc;
         size_t last_major_gc;
         size_t uncollectible_wb_unprotected_objects;
@@ -4812,15 +4814,11 @@ init_mark_stack(mark_stack_t *stack)
 static void
 rgengc_check_relation(rb_objspace_t *objspace, VALUE obj)
 {
-    const VALUE old_parent = objspace->rgengc.parent_object;
-
-    if (old_parent) { /* parent object is old */
+    if (objspace->rgengc.parent_object_old_p) {
         if (RVALUE_WB_UNPROTECTED(objspace, obj) || !RVALUE_OLD_P(objspace, obj)) {
-            rgengc_remember(objspace, old_parent);
+            rgengc_remember(objspace, objspace->rgengc.parent_object);
         }
     }
-
-    GC_ASSERT(old_parent == objspace->rgengc.parent_object);
 }
 
 static inline int
@@ -4888,12 +4886,7 @@ gc_mark_check_t_none(rb_objspace_t *objspace, VALUE obj)
         rb_raw_obj_info(obj_info_buf, info_size, obj);
 
         char parent_obj_info_buf[info_size];
-        if (objspace->rgengc.parent_object == Qfalse) {
-            strlcpy(parent_obj_info_buf, "(none)", info_size);
-        }
-        else {
-            rb_raw_obj_info(parent_obj_info_buf, info_size, objspace->rgengc.parent_object);
-        }
+        rb_raw_obj_info(parent_obj_info_buf, info_size, objspace->rgengc.parent_object);
 
         rb_bug("try to mark T_NONE object (obj: %s, parent: %s)", obj_info_buf, parent_obj_info_buf);
     }
@@ -4909,19 +4902,15 @@ gc_mark(rb_objspace_t *objspace, VALUE obj)
     })
 
     GC_ASSERT(during_gc);
+    GC_ASSERT(!objspace->flags.during_reference_updating);
 
     rgengc_check_relation(objspace, obj);
     if (!gc_mark_set(objspace, obj)) return; /* already marked */
 
     if (0) { // for debug GC marking miss
-        if (objspace->rgengc.parent_object) {
-            RUBY_DEBUG_LOG("%p (%s) parent:%p (%s)",
-                            (void *)obj, obj_type_name(obj),
-                            (void *)objspace->rgengc.parent_object, obj_type_name(objspace->rgengc.parent_object));
-        }
-        else {
-            RUBY_DEBUG_LOG("%p (%s)", (void *)obj, obj_type_name(obj));
-        }
+        RUBY_DEBUG_LOG("%p (%s) parent:%p (%s)",
+                        (void *)obj, obj_type_name(obj),
+                        (void *)objspace->rgengc.parent_object, obj_type_name(objspace->rgengc.parent_object));
     }
 
     gc_mark_check_t_none(objspace, obj);
@@ -5037,8 +5026,6 @@ rb_gc_impl_mark_weak(void *objspace_ptr, VALUE *ptr)
 
     rb_objspace_t *objspace = objspace_ptr;
 
-    GC_ASSERT(objspace->rgengc.parent_object == 0 || !RVALUE_WB_UNPROTECTED(objspace, objspace->rgengc.parent_object));
-
     VALUE obj = *ptr;
 
     gc_mark_check_t_none(objspace, obj);
@@ -5089,6 +5076,28 @@ pin_value(st_data_t key, st_data_t value, st_data_t data)
     return ST_CONTINUE;
 }
 
+static inline void
+gc_mark_set_parent_raw(rb_objspace_t *objspace, VALUE obj, bool old_p)
+{
+    asan_unpoison_memory_region(&objspace->rgengc.parent_object, sizeof(objspace->rgengc.parent_object), false);
+    asan_unpoison_memory_region(&objspace->rgengc.parent_object_old_p, sizeof(objspace->rgengc.parent_object_old_p), false);
+    objspace->rgengc.parent_object = obj;
+    objspace->rgengc.parent_object_old_p = old_p;
+}
+
+static inline void
+gc_mark_set_parent(rb_objspace_t *objspace, VALUE obj)
+{
+    gc_mark_set_parent_raw(objspace, obj, RVALUE_OLD_P(objspace, obj));
+}
+
+static inline void
+gc_mark_set_parent_invalid(rb_objspace_t *objspace)
+{
+    asan_poison_memory_region(&objspace->rgengc.parent_object, sizeof(objspace->rgengc.parent_object));
+    asan_poison_memory_region(&objspace->rgengc.parent_object_old_p, sizeof(objspace->rgengc.parent_object_old_p));
+}
+
 static void
 mark_roots(rb_objspace_t *objspace, const char **categoryp)
 {
@@ -5097,7 +5106,7 @@ mark_roots(rb_objspace_t *objspace, const char **categoryp)
 } while (0)
 
     MARK_CHECKPOINT("objspace");
-    objspace->rgengc.parent_object = Qfalse;
+    gc_mark_set_parent_raw(objspace, Qundef, false);
 
     if (finalizer_table != NULL) {
         st_foreach(finalizer_table, pin_value, (st_data_t)objspace);
@@ -5107,6 +5116,7 @@ mark_roots(rb_objspace_t *objspace, const char **categoryp)
 
     rb_gc_save_machine_context();
     rb_gc_mark_roots(objspace, categoryp);
+    gc_mark_set_parent_invalid(objspace);
 }
 
 #if USE_MMTK
@@ -5152,22 +5162,12 @@ rb_mmtk_scan_final_jobs_roots(void)
 }
 #endif
 
-static inline void
-gc_mark_set_parent(rb_objspace_t *objspace, VALUE obj)
-{
-    if (RVALUE_OLD_P(objspace, obj)) {
-        objspace->rgengc.parent_object = obj;
-    }
-    else {
-        objspace->rgengc.parent_object = Qfalse;
-    }
-}
-
 static void
 gc_mark_children(rb_objspace_t *objspace, VALUE obj)
 {
     gc_mark_set_parent(objspace, obj);
     rb_gc_mark_children(objspace, obj);
+    gc_mark_set_parent_invalid(objspace);
 }
 
 /**
@@ -6590,9 +6590,11 @@ gc_mark_from(rb_objspace_t *objspace, VALUE obj, VALUE parent)
 {
     gc_mark_set_parent(objspace, parent);
     rgengc_check_relation(objspace, obj);
-    if (gc_mark_set(objspace, obj) == FALSE) return;
-    gc_aging(objspace, obj);
-    gc_grey(objspace, obj);
+    if (gc_mark_set(objspace, obj) != FALSE) {
+        gc_aging(objspace, obj);
+        gc_grey(objspace, obj);
+    }
+    gc_mark_set_parent_invalid(objspace);
 }
 
 NOINLINE(static void gc_writebarrier_incremental(VALUE a, VALUE b, rb_objspace_t *objspace));
@@ -6650,6 +6652,7 @@ rb_gc_impl_writebarrier(void *objspace_ptr, VALUE a, VALUE b)
 
     if (SPECIAL_CONST_P(b)) return;
 
+    GC_ASSERT(!during_gc);
     GC_ASSERT(RB_BUILTIN_TYPE(a) != T_NONE);
     GC_ASSERT(RB_BUILTIN_TYPE(a) != T_MOVED);
     GC_ASSERT(RB_BUILTIN_TYPE(a) != T_ZOMBIE);

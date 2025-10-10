@@ -6951,7 +6951,7 @@ static const rb_data_type_t env_data_type = {
  *  A \Hash object maps each of its unique keys to a specific value.
  *
  *  A hash has certain similarities to an Array, but:
-
+ *
  *  - An array index is always an integer.
  *  - A hash key can be (almost) any object.
  *
@@ -7352,7 +7352,7 @@ static const rb_data_type_t env_data_type = {
  *  - #keys: Returns an array containing all keys in +self+.
  *  - #rassoc: Returns a 2-element array consisting of the key and value
  *    of the first-found entry having a given value.
- *  - #values: Returns an array containing all values in +self+/
+ *  - #values: Returns an array containing all values in +self+.
  *  - #values_at: Returns an array containing values for given keys.
  *
  *  ==== Methods for Assigning
@@ -7401,7 +7401,6 @@ static const rb_data_type_t env_data_type = {
  *
  *  ==== Methods for Transforming Keys and Values
  *
- *  - #flatten!: Returns +self+, flattened.
  *  - #invert: Returns a hash with the each key-value pair inverted.
  *  - #transform_keys: Returns a copy of +self+ with modified keys.
  *  - #transform_keys!: Modifies keys in +self+

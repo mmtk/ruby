@@ -127,6 +127,7 @@
 #include "vm_callinfo.h"
 #include "ractor_core.h"
 #include "yjit.h"
+#include "zjit.h"
 
 #include "builtin.h"
 #include "shape.h"
@@ -988,14 +989,19 @@ rb_gc_obj_slot_size(VALUE obj)
 }
 
 static inline void
-gc_validate_pc(void)
+gc_validate_pc(VALUE obj)
 {
 #if RUBY_DEBUG
+    // IMEMOs and objects without a class (e.g managed id table) are not traceable
+    if (RB_TYPE_P(obj, T_IMEMO) || !CLASS_OF(obj)) return;
+
     rb_execution_context_t *ec = GET_EC();
     const rb_control_frame_t *cfp = ec->cfp;
     if (cfp && VM_FRAME_RUBYFRAME_P(cfp) && cfp->pc) {
-        RUBY_ASSERT(cfp->pc >= ISEQ_BODY(cfp->iseq)->iseq_encoded);
-        RUBY_ASSERT(cfp->pc <= ISEQ_BODY(cfp->iseq)->iseq_encoded + ISEQ_BODY(cfp->iseq)->iseq_size);
+        const VALUE *iseq_encoded = ISEQ_BODY(cfp->iseq)->iseq_encoded;
+        const VALUE *iseq_encoded_end = iseq_encoded + ISEQ_BODY(cfp->iseq)->iseq_size;
+        RUBY_ASSERT(cfp->pc >= iseq_encoded, "PC not set when allocating, breaking tracing");
+        RUBY_ASSERT(cfp->pc <= iseq_encoded_end, "PC not set when allocating, breaking tracing");
     }
 #endif
 }
@@ -1005,7 +1011,7 @@ newobj_of(rb_ractor_t *cr, VALUE klass, VALUE flags, bool wb_protected, size_t s
 {
     VALUE obj = rb_gc_impl_new_obj(rb_gc_get_objspace(), cr->newobj_cache, klass, flags, wb_protected, size);
 
-    gc_validate_pc();
+    gc_validate_pc(obj);
 
     if (UNLIKELY(rb_gc_event_hook_required_p(RUBY_INTERNAL_EVENT_NEWOBJ))) {
         int lev = RB_GC_VM_LOCK_NO_BARRIER();
@@ -1336,6 +1342,9 @@ rb_gc_obj_free(void *objspace, VALUE obj)
         break;
       case T_MODULE:
       case T_CLASS:
+#if USE_ZJIT
+        rb_zjit_klass_free(obj);
+#endif
         args.klass = obj;
         rb_class_classext_foreach(obj, classext_free, (void *)&args);
         if (RCLASS_CLASSEXT_TBL(obj)) {
@@ -3121,6 +3130,14 @@ rb_gc_mark_roots(void *objspace, const char **categoryp)
     }
 #endif
 
+#if USE_ZJIT
+    void rb_zjit_root_mark(void);
+    if (rb_zjit_enabled_p) {
+        MARK_CHECKPOINT("ZJIT");
+        rb_zjit_root_mark();
+    }
+#endif
+
     MARK_CHECKPOINT("machine_context");
     mark_current_machine_context(ec);
 
@@ -4261,6 +4278,14 @@ rb_gc_update_vm_references(void *objspace)
 
     if (rb_yjit_enabled_p) {
         rb_yjit_root_update_references();
+    }
+#endif
+
+#if USE_ZJIT
+    void rb_zjit_root_update_references(void); // in Rust
+
+    if (rb_zjit_enabled_p) {
+        rb_zjit_root_update_references();
     }
 #endif
 }

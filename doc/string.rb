@@ -388,6 +388,7 @@
 # - #<<: Returns +self+ concatenated with a given string or integer.
 # - #append_as_bytes: Returns +self+ concatenated with strings without performing any
 #   encoding validation or conversion.
+# - #prepend: Prefixes to +self+ the concatenation of given other strings.
 #
 # _Substitution_
 #
@@ -397,7 +398,7 @@
 # - #gsub!: Replaces each substring that matches a given pattern with a given replacement string;
 #   returns +self+ if any changes, +nil+ otherwise.
 # - #succ! (aliased as #next!): Returns +self+ modified to become its own successor.
-# - #initialize_copy (aliased as #replace): Returns +self+ with its entire content replaced by a given string.
+# - #replace: Returns +self+ with its entire content replaced by a given string.
 # - #reverse!: Returns +self+ with its characters in reverse order.
 # - #setbyte: Sets the byte at a given integer offset to a given value; returns the argument.
 # - #tr!: Replaces specified characters in +self+ with specified replacement characters;
@@ -448,7 +449,6 @@
 # - #+: Returns the concatenation of +self+ and a given other string.
 # - #center: Returns a copy of +self+, centered by specified padding.
 # - #concat: Returns the concatenation of +self+ with given other strings.
-# - #prepend: Returns the concatenation of a given other string with +self+.
 # - #ljust: Returns a copy of +self+ of a given length, right-padded with a given other string.
 # - #rjust: Returns a copy of +self+ of a given length, left-padded with a given other string.
 #

@@ -390,8 +390,7 @@ pub const VM_FRAME_FLAG_LAMBDA: vm_frame_env_flags = 256;
 pub const VM_FRAME_FLAG_MODIFIED_BLOCK_PARAM: vm_frame_env_flags = 512;
 pub const VM_FRAME_FLAG_CFRAME_KW: vm_frame_env_flags = 1024;
 pub const VM_FRAME_FLAG_PASSED: vm_frame_env_flags = 2048;
-pub const VM_FRAME_FLAG_NS_SWITCH: vm_frame_env_flags = 4096;
-pub const VM_FRAME_FLAG_LOAD_ISEQ: vm_frame_env_flags = 8192;
+pub const VM_FRAME_FLAG_NS_REQUIRE: vm_frame_env_flags = 4096;
 pub const VM_ENV_FLAG_LOCAL: vm_frame_env_flags = 2;
 pub const VM_ENV_FLAG_ESCAPED: vm_frame_env_flags = 4;
 pub const VM_ENV_FLAG_WB_REQUIRED: vm_frame_env_flags = 8;
@@ -697,9 +696,10 @@ pub const YARVINSN_zjit_opt_gt: ruby_vminsn_type = 231;
 pub const YARVINSN_zjit_opt_ge: ruby_vminsn_type = 232;
 pub const YARVINSN_zjit_opt_and: ruby_vminsn_type = 233;
 pub const YARVINSN_zjit_opt_or: ruby_vminsn_type = 234;
-pub const YARVINSN_zjit_opt_empty_p: ruby_vminsn_type = 235;
-pub const YARVINSN_zjit_opt_not: ruby_vminsn_type = 236;
-pub const VM_INSTRUCTION_SIZE: ruby_vminsn_type = 237;
+pub const YARVINSN_zjit_opt_aref: ruby_vminsn_type = 235;
+pub const YARVINSN_zjit_opt_empty_p: ruby_vminsn_type = 236;
+pub const YARVINSN_zjit_opt_not: ruby_vminsn_type = 237;
+pub const VM_INSTRUCTION_SIZE: ruby_vminsn_type = 238;
 pub type ruby_vminsn_type = u32;
 pub type rb_iseq_callback = ::std::option::Option<
     unsafe extern "C" fn(arg1: *const rb_iseq_t, arg2: *mut ::std::os::raw::c_void),
@@ -723,8 +723,8 @@ pub const DEFINED_REF: defined_type = 15;
 pub const DEFINED_FUNC: defined_type = 16;
 pub const DEFINED_CONST_FROM: defined_type = 17;
 pub type defined_type = u32;
-pub const RB_INVALID_SHAPE_ID: _bindgen_ty_38 = 4294967295;
-pub type _bindgen_ty_38 = u32;
+pub const RB_INVALID_SHAPE_ID: zjit_exported_constants = 4294967295;
+pub type zjit_exported_constants = u32;
 pub const ROBJECT_OFFSET_AS_HEAP_FIELDS: robject_offsets = 16;
 pub const ROBJECT_OFFSET_AS_ARY: robject_offsets = 16;
 pub type robject_offsets = u32;
@@ -922,6 +922,11 @@ unsafe extern "C" {
         lines: *mut ::std::os::raw::c_int,
     ) -> ::std::os::raw::c_int;
     pub fn rb_jit_cont_each_iseq(callback: rb_iseq_callback, data: *mut ::std::os::raw::c_void);
+    pub fn rb_zjit_exit_locations_dict(
+        zjit_raw_samples: *mut VALUE,
+        zjit_line_samples: *mut ::std::os::raw::c_int,
+        samples_len: ::std::os::raw::c_int,
+    ) -> VALUE;
     pub fn rb_zjit_profile_disable(iseq: *const rb_iseq_t);
     pub fn rb_vm_base_ptr(cfp: *mut rb_control_frame_struct) -> *mut VALUE;
     pub fn rb_zjit_constcache_shareable(ice: *const iseq_inline_constant_cache_entry) -> bool;
