@@ -317,6 +317,8 @@ RCLASS_SET_CLASSEXT_TBL(VALUE klass, st_table *tbl)
 rb_classext_t * rb_class_duplicate_classext(rb_classext_t *orig, VALUE obj, const rb_namespace_t *ns);
 void rb_class_ensure_writable(VALUE obj);
 
+void rb_class_set_namespace_classext(VALUE obj, const rb_namespace_t *ns, rb_classext_t *ext);
+
 static inline int
 RCLASS_SET_NAMESPACE_CLASSEXT(VALUE obj, const rb_namespace_t *ns, rb_classext_t *ext)
 {
@@ -332,7 +334,9 @@ RCLASS_SET_NAMESPACE_CLASSEXT(VALUE obj, const rb_namespace_t *ns, rb_classext_t
     if (rb_st_table_size(tbl) == 0) {
         first_set = 1;
     }
-    rb_st_insert(tbl, (st_data_t)ns->ns_object, (st_data_t)ext);
+
+    rb_class_set_namespace_classext(obj, ns, ext);
+
     return first_set;
 }
 
@@ -486,7 +490,7 @@ void rb_class_classext_foreach(VALUE klass, rb_class_classext_foreach_callback_f
 void rb_class_subclass_add(VALUE super, VALUE klass);
 void rb_class_remove_from_super_subclasses(VALUE);
 void rb_class_remove_from_module_subclasses(VALUE);
-void rb_class_classext_free_subclasses(rb_classext_t *, VALUE);
+void rb_class_classext_free_subclasses(rb_classext_t *, VALUE, bool);
 void rb_class_foreach_subclass(VALUE klass, void (*f)(VALUE, VALUE), VALUE);
 void rb_class_detach_subclasses(VALUE);
 void rb_class_detach_module_subclasses(VALUE);
@@ -514,6 +518,9 @@ VALUE rb_singleton_class_get(VALUE obj);
 void rb_undef_methods_from(VALUE klass, VALUE super);
 VALUE rb_class_inherited(VALUE, VALUE);
 VALUE rb_keyword_error_new(const char *, VALUE);
+
+void rb_class_classext_free(VALUE klass, rb_classext_t *ext, bool is_prime);
+void rb_iclass_classext_free(VALUE klass, rb_classext_t *ext, bool is_prime);
 
 RUBY_SYMBOL_EXPORT_BEGIN
 
@@ -548,7 +555,7 @@ RCLASS_WRITABLE_ENSURE_FIELDS_OBJ(VALUE obj)
     RUBY_ASSERT(RB_TYPE_P(obj, RUBY_T_CLASS) || RB_TYPE_P(obj, RUBY_T_MODULE));
     rb_classext_t *ext = RCLASS_EXT_WRITABLE(obj);
     if (!ext->fields_obj) {
-        RB_OBJ_WRITE(obj, &ext->fields_obj, rb_imemo_fields_new(obj, 1));
+        RB_OBJ_WRITE(obj, &ext->fields_obj, rb_imemo_fields_new(obj, 1, true));
     }
     return ext->fields_obj;
 }
@@ -755,6 +762,7 @@ RCLASS_SET_CLASSPATH(VALUE klass, VALUE classpath, bool permanent)
     rb_classext_t *ext = RCLASS_EXT_READABLE(klass);
     assert(BUILTIN_TYPE(klass) == T_CLASS || BUILTIN_TYPE(klass) == T_MODULE);
     assert(classpath == 0 || BUILTIN_TYPE(classpath) == T_STRING);
+    assert(FL_TEST_RAW(classpath, RUBY_FL_SHAREABLE));
 
     RB_OBJ_WRITE(klass, &(RCLASSEXT_CLASSPATH(ext)), classpath);
     RCLASSEXT_PERMANENT_CLASSPATH(ext) = permanent;
@@ -766,6 +774,7 @@ RCLASS_WRITE_CLASSPATH(VALUE klass, VALUE classpath, bool permanent)
     rb_classext_t *ext = RCLASS_EXT_WRITABLE(klass);
     assert(BUILTIN_TYPE(klass) == T_CLASS || BUILTIN_TYPE(klass) == T_MODULE);
     assert(classpath == 0 || BUILTIN_TYPE(classpath) == T_STRING);
+    assert(!RB_FL_ABLE(classpath) || FL_TEST_RAW(classpath, RUBY_FL_SHAREABLE));
 
     RB_OBJ_WRITE(klass, &(RCLASSEXT_CLASSPATH(ext)), classpath);
     RCLASSEXT_PERMANENT_CLASSPATH(ext) = permanent;

@@ -225,17 +225,32 @@ strio_s_allocate(VALUE klass)
  * call-seq:
  *   StringIO.new(string = '', mode = 'r+') -> new_stringio
  *
- * Note that +mode+ defaults to <tt>'r'</tt> if +string+ is frozen.
- *
  * Returns a new \StringIO instance formed from +string+ and +mode+;
- * see {Access Modes}[rdoc-ref:File@Access+Modes]:
+ * the instance should be closed when no longer needed:
  *
- *   strio = StringIO.new # => #<StringIO>
+ *   strio = StringIO.new
+ *   strio.string        # => ""
+ *   strio.closed_read?  # => false
+ *   strio.closed_write? # => false
  *   strio.close
  *
- * The instance should be closed when no longer needed.
+ * If +string+ is frozen, the default +mode+ is <tt>'r'</tt>:
  *
- * Related: StringIO.open (accepts block; closes automatically).
+ *   strio = StringIO.new('foo'.freeze)
+ *   strio.string        # => "foo"
+ *   strio.closed_read?  # => false
+ *   strio.closed_write? # => true
+ *   strio.close
+ *
+ * Argument +mode+ must be a valid
+ * {Access Mode}[rdoc-ref:File@Access+Modes],
+ * which may be a string or an integer constant:
+ *
+ *   StringIO.new('foo', 'w+')
+ *   StringIO.new('foo', File::RDONLY)
+ *
+ * Related: StringIO.open
+ * (passes the \StringIO object to the block; closes the object automatically on block exit).
  */
 static VALUE
 strio_initialize(int argc, VALUE *argv, VALUE self)
@@ -370,23 +385,20 @@ strio_finalize(VALUE self)
 
 /*
  * call-seq:
- *   StringIO.open(string = '', mode = 'r+') {|strio| ... }
+ *   StringIO.open(string = '', mode = 'r+') -> new_stringio
+ *   StringIO.open(string = '', mode = 'r+') {|strio| ... } -> object
  *
- * Note that +mode+ defaults to <tt>'r'</tt> if +string+ is frozen.
+ * Creates new \StringIO instance by calling <tt>StringIO.new(string, mode)</tt>.
  *
- * Creates a new \StringIO instance formed from +string+ and +mode+;
- * see {Access Modes}[rdoc-ref:File@Access+Modes].
- *
- * With no block, returns the new instance:
+ * With no block given, returns the new instance:
  *
  *   strio = StringIO.open # => #<StringIO>
  *
- * With a block, calls the block with the new instance
+ * With a block given, calls the block with the new instance
  * and returns the block's value;
- * closes the instance on block exit.
+ * closes the instance on block exit:
  *
- *   StringIO.open {|strio| p strio }
- *   # => #<StringIO>
+ *   StringIO.open('foo') {|strio| strio.string.upcase } # => "FOO"
  *
  * Related: StringIO.new.
  */
@@ -537,11 +549,16 @@ strio_set_string(VALUE self, VALUE string)
  * call-seq:
  *   close -> nil
  *
- * Closes +self+ for both reading and writing.
+ * Closes +self+ for both reading and writing; returns +nil+:
  *
- * Raises IOError if reading or writing is attempted.
+ *   strio = StringIO.new
+ *   strio.closed? # => false
+ *   strio.close   # => nil
+ *   strio.closed? # => true
+ *   strio.read    # Raises IOError: not opened for reading
+ *   strio.write   # Raises IOError: not opened for writing
  *
- * Related: StringIO#close_read, StringIO#close_write.
+ * Related: StringIO#close_read, StringIO#close_write, StringIO.closed?.
  */
 static VALUE
 strio_close(VALUE self)
@@ -555,9 +572,16 @@ strio_close(VALUE self)
  * call-seq:
  *   close_read -> nil
  *
- * Closes +self+ for reading; closed-write setting remains unchanged.
+ * Closes +self+ for reading;
+ * closed-write setting remains unchanged;
+ * returns +nil+:
  *
- * Raises IOError if reading is attempted.
+ *   strio = StringIO.new
+ *   strio.closed_read?  # => false
+ *   strio.close_read    # => nil
+ *   strio.closed_read?  # => true
+ *   strio.closed_write? # => false
+ *   strio.read          # Raises IOError: not opened for reading
  *
  * Related: StringIO#close, StringIO#close_write.
  */
@@ -576,11 +600,16 @@ strio_close_read(VALUE self)
  * call-seq:
  *   close_write -> nil
  *
- * Closes +self+ for writing; closed-read setting remains unchanged.
+ * Closes +self+ for writing; closed-read setting remains unchanged; returns +nil+:
  *
- * Raises IOError if writing is attempted.
+ *   strio = StringIO.new
+ *   strio.closed_write? # => false
+ *   strio.close_write   # => nil
+ *   strio.closed_write? # => true
+ *   strio.closed_read?  # => false
+ *   strio.write('foo')  # Raises IOError: not opened for writing
  *
- * Related: StringIO#close, StringIO#close_read.
+ * Related: StringIO#close, StringIO#close_read, StringIO#closed_write?.
  */
 static VALUE
 strio_close_write(VALUE self)
@@ -597,8 +626,16 @@ strio_close_write(VALUE self)
  * call-seq:
  *   closed? -> true or false
  *
- * Returns +true+ if +self+ is closed for both reading and writing,
- * +false+ otherwise.
+ * Returns whether +self+ is closed for both reading and writing:
+ *
+ *   strio = StringIO.new
+ *   strio.closed?     # => false  # Open for reading and writing.
+ *   strio.close_read
+ *   strio.closed?     # => false  # Still open for writing.
+ *   strio.close_write
+ *   strio.closed?     # => true   # Now closed for both.
+ *
+ * Related: StringIO.closed_read?, StringIO.closed_write?.
  */
 static VALUE
 strio_closed(VALUE self)
@@ -612,7 +649,14 @@ strio_closed(VALUE self)
  * call-seq:
  *   closed_read? -> true or false
  *
- * Returns +true+ if +self+ is closed for reading, +false+ otherwise.
+ * Returns whether +self+ is closed for reading:
+ *
+ *   strio = StringIO.new
+ *   strio.closed_read?   # => false
+ *   strio.close_read
+ *   strio.closed_read?   # => true
+ *
+ * Related: StringIO#closed?, StringIO#closed_write?, StringIO#close_read.
  */
 static VALUE
 strio_closed_read(VALUE self)
@@ -626,7 +670,14 @@ strio_closed_read(VALUE self)
  * call-seq:
  *   closed_write? -> true or false
  *
- * Returns +true+ if +self+ is closed for writing, +false+ otherwise.
+ * Returns whether +self+ is closed for writing:
+ *
+ *   strio = StringIO.new
+ *   strio.closed_write? # => false
+ *   strio.close_write
+ *   strio.closed_write? # => true
+ *
+ * Related: StringIO#close_write, StringIO#closed?, StringIO#closed_read?.
  */
 static VALUE
 strio_closed_write(VALUE self)
@@ -885,10 +936,9 @@ strio_get_sync(VALUE self)
  * call-seq:
  *   each_byte {|byte| ... } -> self
  *
- * With a block given, calls the block with each remaining byte in the stream;
- * see {Byte IO}[rdoc-ref:IO@Byte+IO].
+ * :include: stringio/each_byte.rdoc
  *
- * With no block given, returns an enumerator.
+ * Related: StringIO#each_char, StringIO#each_codepoint, StringIO#each_line.
  */
 static VALUE
 strio_each_byte(VALUE self)
@@ -1111,12 +1161,11 @@ strio_readbyte(VALUE self)
 
 /*
  * call-seq:
- *   each_char {|c| ... } -> self
+ *   each_char {|char| ... } -> self
  *
- * With a block given, calls the block with each remaining character in the stream;
- * see {Character IO}[rdoc-ref:IO@Character+IO].
+ * :include: stringio/each_char.rdoc
  *
- * With no block given, returns an enumerator.
+ * Related: StringIO#each_byte, StringIO#each_codepoint, StringIO#each_line.
  */
 static VALUE
 strio_each_char(VALUE self)
@@ -1135,10 +1184,9 @@ strio_each_char(VALUE self)
  * call-seq:
  *   each_codepoint {|codepoint| ... } -> self
  *
- * With a block given, calls the block with each remaining codepoint in the stream;
- * see {Codepoint IO}[rdoc-ref:IO@Codepoint+IO].
+ * :include: stringio/each_codepoint.rdoc
  *
- * With no block given, returns an enumerator.
+ * Related: StringIO#each_byte, StringIO#each_char, StringIO#each_line.
  */
 static VALUE
 strio_each_codepoint(VALUE self)
@@ -1411,15 +1459,177 @@ strio_readline(int argc, VALUE *argv, VALUE self)
 }
 
 /*
+ * :markup: markdown
+ *
  * call-seq:
  *   each_line(sep = $/, chomp: false) {|line| ... }   -> self
  *   each_line(limit, chomp: false) {|line| ... }      -> self
  *   each_line(sep, limit, chomp: false) {|line| ... } -> self
  *
- * Calls the block with each remaining line read from the stream;
- * does nothing if already at end-of-file;
- * returns +self+.
- * See {Line IO}[rdoc-ref:IO@Line+IO].
+ * With a block given calls the block with each remaining line (see "Position" below) in the stream;
+ * returns `self`.
+ *
+ * Leaves stream position as end-of-stream.
+ *
+ * **No Arguments**
+ *
+ * With no arguments given,
+ * reads lines using the default record separator global variable `$/`, whose initial value is `"\n"`.
+ *
+ * ```
+ * strio = StringIO.new(TEXT)
+ * strio.each_line {|line| p line }
+ * strio.eof? # => true
+ * ```
+ *
+ * Output:
+ *
+ * ```
+ * "First line\n"
+ * "Second line\n"
+ * "\n"
+ * "Fourth line\n"
+ * "Fifth line\n"
+ * ```
+ *
+ * **Argument `sep`**
+ *
+ * With only string argument `sep` given,
+ * reads lines using that string as the record separator:
+ *
+ * ```
+ * strio = StringIO.new(TEXT)
+ * strio.each_line(' ') {|line| p line }
+ * ```
+ *
+ * Output:
+ *
+ * ```
+ * "First "
+ * "line\nSecond "
+ * "line\n\nFourth "
+ * "line\nFifth "
+ * "line\n"
+ * ```
+ *
+ * **Argument `limit`**
+ *
+ * With only integer argument `limit` given,
+ * reads lines using the default record separator global variable `$/`, whose initial value is `"\n"`;
+ * also limits the size (in characters) of each line to the given limit:
+ *
+ * ```
+ * strio = StringIO.new(TEXT)
+ * strio.each_line(10) {|line| p line }
+ * ```
+ *
+ * Output:
+ *
+ * ```
+ * "First line"
+ * "\n"
+ * "Second lin"
+ * "e\n"
+ * "\n"
+ * "Fourth lin"
+ * "e\n"
+ * "Fifth line"
+ * "\n"
+ * ```
+ * **Arguments `sep` and `limit`**
+ *
+ * With arguments `sep` and `limit` both given,
+ * honors both:
+ *
+ * ```
+ * strio = StringIO.new(TEXT)
+ * strio.each_line(' ', 10) {|line| p line }
+ * ```
+ *
+ * Output:
+ *
+ * ```
+ * "First "
+ * "line\nSecon"
+ * "d "
+ * "line\n\nFour"
+ * "th "
+ * "line\nFifth"
+ * " "
+ * "line\n"
+ * ```
+ *
+ * **Position**
+ *
+ * As stated above, method `each` _remaining_ line in the stream.
+ *
+ * In the examples above each `strio` object starts with its position at beginning-of-stream;
+ * but in other cases the position may be anywhere (see StringIO#pos):
+ *
+ * ```
+ * strio = StringIO.new(TEXT)
+ * strio.pos = 30 # Set stream position to character 30.
+ * strio.each_line {|line| p line }
+ * ```
+ *
+ * Output:
+ *
+ * ```
+ * " line\n"
+ * "Fifth line\n"
+ * ```
+ *
+ * **Special Record Separators**
+ *
+ * Like some methds in class `IO`, StringIO.each honors two special record separators;
+ * see {Special Line Separators}[rdoc-ref:IO@Special+Line+Separator+Values].
+ *
+ * ```
+ * strio = StringIO.new(TEXT)
+ * strio.each_line('') {|line| p line } # Read as paragraphs (separated by blank lines).
+ * ```
+ *
+ * Output:
+ *
+ * ```
+ * "First line\nSecond line\n\n"
+ * "Fourth line\nFifth line\n"
+ * ```
+ *
+ * ```
+ * strio = StringIO.new(TEXT)
+ * strio.each_line(nil) {|line| p line } # "Slurp"; read it all.
+ * ```
+ *
+ * Output:
+ *
+ * ```
+ * "First line\nSecond line\n\nFourth line\nFifth line\n"
+ * ```
+ *
+ * **Keyword Argument `chomp`**
+ *
+ * With keyword argument `chomp` given as `true` (the default is `false`),
+ * removes trailing newline (if any) from each line:
+ *
+ * ```
+ * strio = StringIO.new(TEXT)
+ * strio.each_line(chomp: true) {|line| p line }
+ * ```
+ *
+ * Output:
+ *
+ * ```
+ * "First line"
+ * "Second line"
+ * ""
+ * "Fourth line"
+ * "Fifth line"
+ * ```
+ *
+ * With no block given, returns a new {Enumerator}[rdoc-ref:Enumerator].
+ *
+ * Related: StringIO.each_byte, StringIO.each_char, StringIO.each_codepoint.
  */
 static VALUE
 strio_each(int argc, VALUE *argv, VALUE self)
@@ -1918,16 +2128,9 @@ strio_set_encoding_by_bom(VALUE self)
 }
 
 /*
- * \IO streams for strings, with access similar to
- * {IO}[rdoc-ref:IO];
- * see {IO}[rdoc-ref:IO].
+ * :markup: markdown
  *
- * === About the Examples
- *
- * Examples on this page assume that \StringIO has been required:
- *
- *   require 'stringio'
- *
+ * :include: stringio/stringio.md
  */
 void
 Init_stringio(void)

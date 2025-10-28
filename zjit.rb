@@ -103,9 +103,6 @@ class << RubyVM::ZJIT
     # These values are mandatory to include for stackprof, but we don't use them.
     results[:missed_samples] = 0
     results[:gc_samples] = 0
-
-    results[:frames].reject! { |k, v| v[:samples] == 0 }
-
     results
   end
 
@@ -156,10 +153,12 @@ class << RubyVM::ZJIT
 
     # Show counters independent from exit_* or dynamic_send_*
     print_counters_with_prefix(prefix: 'not_inlined_cfuncs_', prompt: 'not inlined C methods', buf:, stats:, limit: 20)
-    print_counters_with_prefix(prefix: 'not_annotated_cfuncs_', prompt: 'not annotated C methods', buf:, stats:, limit: 20)
+    # Don't show not_annotated_cfuncs right now because it mostly duplicates not_inlined_cfuncs
+    # print_counters_with_prefix(prefix: 'not_annotated_cfuncs_', prompt: 'not annotated C methods', buf:, stats:, limit: 20)
 
     # Show fallback counters, ordered by the typical amount of fallbacks for the prefix at the time
-    print_counters_with_prefix(prefix: 'unspecialized_def_type_', prompt: 'not optimized method types', buf:, stats:, limit: 20)
+    print_counters_with_prefix(prefix: 'unspecialized_send_def_type_', prompt: 'not optimized method types for send', buf:, stats:, limit: 20)
+    print_counters_with_prefix(prefix: 'unspecialized_send_without_block_def_type_', prompt: 'not optimized method types for send_without_block', buf:, stats:, limit: 20)
     print_counters_with_prefix(prefix: 'not_optimized_yarv_insn_', prompt: 'not optimized instructions', buf:, stats:, limit: 20)
     print_counters_with_prefix(prefix: 'send_fallback_', prompt: 'send fallback reasons', buf:, stats:, limit: 20)
 
@@ -175,6 +174,7 @@ class << RubyVM::ZJIT
       :optimized_send_count,
       :iseq_optimized_send_count,
       :inline_cfunc_optimized_send_count,
+      :inline_iseq_optimized_send_count,
       :non_variadic_cfunc_optimized_send_count,
       :variadic_cfunc_optimized_send_count,
     ], buf:, stats:, right_align: true, base: :send_count)
@@ -283,6 +283,7 @@ class << RubyVM::ZJIT
     filename = "zjit_exits_#{Process.pid}.dump"
     n_bytes = dump_exit_locations(filename)
 
-    $stderr.puts("#{n_bytes} bytes written to #{filename}.")
+    absolute_filename = File.expand_path(filename)
+    $stderr.puts("#{n_bytes} bytes written to #{absolute_filename}")
   end
 end

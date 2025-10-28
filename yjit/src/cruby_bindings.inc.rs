@@ -636,8 +636,8 @@ pub const VM_ENV_FLAG_ISOLATED: vm_frame_env_flags = 16;
 pub type vm_frame_env_flags = u32;
 pub type attr_index_t = u16;
 pub type shape_id_t = u32;
-pub const SHAPE_ID_HAS_IVAR_MASK: _bindgen_ty_37 = 134742014;
-pub type _bindgen_ty_37 = u32;
+pub const SHAPE_ID_HAS_IVAR_MASK: shape_id_mask = 134742014;
+pub type shape_id_mask = u32;
 #[repr(C)]
 pub struct rb_cvar_class_tbl_entry {
     pub index: u32,
@@ -943,12 +943,11 @@ pub const DEFINED_REF: defined_type = 15;
 pub const DEFINED_FUNC: defined_type = 16;
 pub const DEFINED_CONST_FROM: defined_type = 17;
 pub type defined_type = u32;
-pub const RUBY_OFFSET_RSTRING_LEN: rstring_offsets = 16;
-pub type rstring_offsets = u32;
 pub type rb_seq_param_keyword_struct = rb_iseq_constant_body__bindgen_ty_1_rb_iseq_param_keyword;
-pub const ROBJECT_OFFSET_AS_HEAP_FIELDS: robject_offsets = 16;
-pub const ROBJECT_OFFSET_AS_ARY: robject_offsets = 16;
-pub type robject_offsets = u32;
+pub const ROBJECT_OFFSET_AS_HEAP_FIELDS: jit_bindgen_constants = 16;
+pub const ROBJECT_OFFSET_AS_ARY: jit_bindgen_constants = 16;
+pub const RUBY_OFFSET_RSTRING_LEN: jit_bindgen_constants = 16;
+pub type jit_bindgen_constants = u32;
 pub type rb_iseq_param_keyword_struct = rb_iseq_constant_body__bindgen_ty_1_rb_iseq_param_keyword;
 extern "C" {
     pub fn ruby_xfree(ptr: *mut ::std::os::raw::c_void);
@@ -1115,7 +1114,6 @@ extern "C" {
         lines: *mut ::std::os::raw::c_int,
     ) -> ::std::os::raw::c_int;
     pub fn rb_jit_cont_each_iseq(callback: rb_iseq_callback, data: *mut ::std::os::raw::c_void);
-    pub fn rb_yjit_array_len(a: VALUE) -> ::std::os::raw::c_long;
     pub fn rb_yjit_exit_locations_dict(
         yjit_raw_samples: *mut VALUE,
         yjit_line_samples: *mut ::std::os::raw::c_int,
@@ -1125,9 +1123,7 @@ extern "C" {
     pub fn rb_full_cfunc_return(ec: *mut rb_execution_context_t, return_value: VALUE);
     pub fn rb_iseq_get_yjit_payload(iseq: *const rb_iseq_t) -> *mut ::std::os::raw::c_void;
     pub fn rb_iseq_set_yjit_payload(iseq: *const rb_iseq_t, payload: *mut ::std::os::raw::c_void);
-    pub fn rb_yjit_get_proc_ptr(procv: VALUE) -> *mut rb_proc_t;
     pub fn rb_get_symbol_id(namep: VALUE) -> ID;
-    pub fn rb_get_def_bmethod_proc(def: *mut rb_method_definition_t) -> VALUE;
     pub fn rb_optimized_call(
         recv: *mut VALUE,
         ec: *mut rb_execution_context_t,
@@ -1136,16 +1132,13 @@ extern "C" {
         kw_splat: ::std::os::raw::c_int,
         block_handler: VALUE,
     ) -> VALUE;
-    pub fn rb_yjit_iseq_builtin_attrs(iseq: *const rb_iseq_t) -> ::std::os::raw::c_uint;
     pub fn rb_yjit_builtin_function(iseq: *const rb_iseq_t) -> *const rb_builtin_function;
     pub fn rb_yjit_str_simple_append(str1: VALUE, str2: VALUE) -> VALUE;
     pub fn rb_vm_base_ptr(cfp: *mut rb_control_frame_struct) -> *mut VALUE;
-    pub fn rb_yarv_str_eql_internal(str1: VALUE, str2: VALUE) -> VALUE;
     pub fn rb_str_neq_internal(str1: VALUE, str2: VALUE) -> VALUE;
     pub fn rb_ary_unshift_m(argc: ::std::os::raw::c_int, argv: *mut VALUE, ary: VALUE) -> VALUE;
     pub fn rb_yjit_rb_ary_subseq_length(ary: VALUE, beg: ::std::os::raw::c_long) -> VALUE;
     pub fn rb_yjit_fix_div_fix(recv: VALUE, obj: VALUE) -> VALUE;
-    pub fn rb_yjit_fix_mod_fix(recv: VALUE, obj: VALUE) -> VALUE;
     pub fn rb_yjit_ruby2_keywords_splat_p(obj: VALUE) -> usize;
     pub fn rb_yjit_splat_varg_checks(
         sp: *mut VALUE,
@@ -1204,6 +1197,9 @@ extern "C" {
     ) -> *mut rb_method_cfunc_t;
     pub fn rb_get_def_method_serial(def: *const rb_method_definition_t) -> usize;
     pub fn rb_get_def_original_id(def: *const rb_method_definition_t) -> ID;
+    pub fn rb_get_def_bmethod_proc(def: *mut rb_method_definition_t) -> VALUE;
+    pub fn rb_jit_get_proc_ptr(procv: VALUE) -> *mut rb_proc_t;
+    pub fn rb_jit_iseq_builtin_attrs(iseq: *const rb_iseq_t) -> ::std::os::raw::c_uint;
     pub fn rb_get_mct_argc(mct: *const rb_method_cfunc_t) -> ::std::os::raw::c_int;
     pub fn rb_get_mct_func(mct: *const rb_method_cfunc_t) -> *mut ::std::os::raw::c_void;
     pub fn rb_get_def_iseq_ptr(def: *mut rb_method_definition_t) -> *const rb_iseq_t;
@@ -1252,6 +1248,7 @@ extern "C" {
     pub fn rb_IMEMO_TYPE_P(imemo: VALUE, imemo_type: imemo_type) -> ::std::os::raw::c_int;
     pub fn rb_assert_cme_handle(handle: VALUE);
     pub fn rb_yarv_ary_entry_internal(ary: VALUE, offset: ::std::os::raw::c_long) -> VALUE;
+    pub fn rb_jit_array_len(a: VALUE) -> ::std::os::raw::c_long;
     pub fn rb_set_cfp_pc(cfp: *mut rb_control_frame_struct, pc: *const VALUE);
     pub fn rb_set_cfp_sp(cfp: *mut rb_control_frame_struct, sp: *mut VALUE);
     pub fn rb_jit_shape_too_complex_p(shape_id: shape_id_t) -> bool;
@@ -1277,4 +1274,6 @@ extern "C" {
         start: *mut ::std::os::raw::c_void,
         end: *mut ::std::os::raw::c_void,
     );
+    pub fn rb_jit_fix_mod_fix(recv: VALUE, obj: VALUE) -> VALUE;
+    pub fn rb_yarv_str_eql_internal(str1: VALUE, str2: VALUE) -> VALUE;
 }

@@ -16,6 +16,7 @@
 #include "ruby/internal/globals.h"
 #include "ruby/util.h"
 #include "vm_core.h"
+#include "darray.h"
 
 #include <stdio.h>
 
@@ -118,6 +119,12 @@ namespace_generate_id(void)
     return id;
 }
 
+static VALUE
+namespace_main_to_s(VALUE obj)
+{
+    return rb_str_new2("main");
+}
+
 static void
 namespace_entry_initialize(rb_namespace_t *ns)
 {
@@ -128,9 +135,8 @@ namespace_entry_initialize(rb_namespace_t *ns)
     ns->ns_id = 0;
 
     ns->top_self = rb_obj_alloc(rb_cObject);
-    // TODO:
-    // rb_define_singleton_method(rb_vm_top_self(), "to_s", main_to_s, 0);
-    // rb_define_alias(rb_singleton_class(rb_vm_top_self()), "inspect", "to_s");
+    rb_define_singleton_method(ns->top_self, "to_s", namespace_main_to_s, 0);
+    rb_define_alias(rb_singleton_class(ns->top_self), "inspect", "to_s");
     ns->load_path = rb_ary_dup(root->load_path);
     ns->expanded_load_path = rb_ary_dup(root->expanded_load_path);
     ns->load_path_snapshot = rb_ary_new();
@@ -202,8 +208,17 @@ free_loading_table_entry(st_data_t key, st_data_t value, st_data_t arg)
     return ST_DELETE;
 }
 
+static int
+free_loaded_feature_index_i(st_data_t key, st_data_t value, st_data_t arg)
+{
+    if (!FIXNUM_P(value)) {
+        rb_darray_free((void *)value);
+    }
+    return ST_CONTINUE;
+}
+
 static void
-namespace_entry_free(void *ptr)
+namespace_root_free(void *ptr)
 {
     rb_namespace_t *ns = (rb_namespace_t *)ptr;
     if (ns->loading_table) {
@@ -211,6 +226,18 @@ namespace_entry_free(void *ptr)
         st_free_table(ns->loading_table);
         ns->loading_table = 0;
     }
+
+    if (ns->loaded_features_index) {
+        st_foreach(ns->loaded_features_index, free_loaded_feature_index_i, 0);
+        st_free_table(ns->loaded_features_index);
+    }
+}
+
+static void
+namespace_entry_free(void *ptr)
+{
+    namespace_root_free(ptr);
+    xfree(ptr);
 }
 
 static size_t
@@ -231,6 +258,17 @@ const rb_data_type_t rb_namespace_data_type = {
         rb_namespace_gc_update_references,
     },
     0, 0, RUBY_TYPED_FREE_IMMEDIATELY // TODO: enable RUBY_TYPED_WB_PROTECTED when inserting write barriers
+};
+
+const rb_data_type_t rb_root_namespace_data_type = {
+    "Namespace::Root",
+    {
+        rb_namespace_entry_mark,
+        namespace_root_free,
+        namespace_entry_memsize,
+        rb_namespace_gc_update_references,
+    },
+    &rb_namespace_data_type, 0, RUBY_TYPED_FREE_IMMEDIATELY // TODO: enable RUBY_TYPED_WB_PROTECTED when inserting write barriers
 };
 
 VALUE
@@ -347,20 +385,6 @@ rb_namespace_s_current(VALUE recv)
     ns = rb_vm_current_namespace(GET_EC());
     VM_ASSERT(ns && ns->ns_object);
     return ns->ns_object;
-}
-
-/*
- *  call-seq:
- *    Namespace.is_builtin?(klass) -> true or false
- *
- *  Returns +true+ if +klass+ is only in a user namespace.
- */
-static VALUE
-rb_namespace_s_is_builtin_p(VALUE recv, VALUE klass)
-{
-    if (RCLASS_PRIME_CLASSEXT_READABLE_P(klass) && !RCLASS_PRIME_CLASSEXT_WRITABLE_P(klass))
-        return Qtrue;
-    return Qfalse;
 }
 
 /*
@@ -497,6 +521,10 @@ copy_ext_file_error(char *message, size_t size, int copy_retvalue, char *src_pat
         snprintf(message, size, "failed to read the extension path: %s", src_path);
       case 4:
         snprintf(message, size, "failed to write the extension path: %s", dst_path);
+      case 5:
+        snprintf(message, size, "failed to stat the extension path to copy permissions: %s", src_path);
+      case 6:
+        snprintf(message, size, "failed to set permissions to the copied extension path: %s", dst_path);
       default:
         rb_bug("unknown return value of copy_ext_file: %d", copy_retvalue);
     }
@@ -572,6 +600,19 @@ copy_ext_file(char *src_path, char *dst_path)
     }
     fclose(src);
     fclose(dst);
+#if defined(__CYGWIN__)
+    // On Cygwin, CopyFile-like operations may strip executable bits.
+    // Explicitly match destination file permissions to source.
+    if (retvalue == 0) {
+        struct stat st;
+        if (stat(src_path, &st) != 0) {
+            retvalue = 5;
+        }
+        else if (chmod(dst_path, st.st_mode & 0777) != 0) {
+            retvalue = 6;
+        }
+    }
+#endif
     return retvalue;
 #endif
 }
@@ -717,7 +758,7 @@ initialize_root_namespace(void)
         root->ns_id = namespace_generate_id();
         root->ns_object = root_namespace;
 
-        entry = TypedData_Wrap_Struct(rb_cNamespaceEntry, &rb_namespace_data_type, root);
+        entry = TypedData_Wrap_Struct(rb_cNamespaceEntry, &rb_root_namespace_data_type, root);
         rb_ivar_set(root_namespace, id_namespace_entry, entry);
     }
     else {
@@ -1056,7 +1097,6 @@ Init_Namespace(void)
 
     rb_define_singleton_method(rb_cNamespace, "enabled?", rb_namespace_s_getenabled, 0);
     rb_define_singleton_method(rb_cNamespace, "current", rb_namespace_s_current, 0);
-    rb_define_singleton_method(rb_cNamespace, "is_builtin?", rb_namespace_s_is_builtin_p, 1);
 
     rb_define_method(rb_cNamespace, "load_path", rb_namespace_load_path, 0);
     rb_define_method(rb_cNamespace, "load", rb_namespace_load, -1);

@@ -43,7 +43,7 @@ module SyncDefaultGems
     prism: ["ruby/prism", "main"],
     psych: 'ruby/psych',
     resolv: "ruby/resolv",
-    rubygems: 'rubygems/rubygems',
+    rubygems: 'ruby/rubygems',
     securerandom: "ruby/securerandom",
     shellwords: "ruby/shellwords",
     singleton: "ruby/singleton",
@@ -63,6 +63,10 @@ module SyncDefaultGems
   }.transform_keys(&:to_s)
 
   CLASSICAL_DEFAULT_BRANCH = "master"
+
+  # Allow synchronizing commits up to this FETCH_DEPTH. We've historically merged PRs
+  # with about 250 commits to ruby/ruby, so we use this depth for ruby/ruby in general.
+  FETCH_DEPTH = 500
 
   class << REPOSITORIES
     def [](gem)
@@ -662,7 +666,7 @@ module SyncDefaultGems
         `git remote add #{gem} https://github.com/#{repo}.git`
       end
     end
-    system(*%W"git fetch --no-tags #{gem}")
+    system(*%W"git fetch --no-tags --depth=#{FETCH_DEPTH} #{gem} #{default_branch}")
 
     commits = commits_in_ranges(gem, repo, default_branch, ranges)
 

@@ -438,7 +438,7 @@ impl<'a> JITState<'a> {
     fn flush_perf_symbols(&self, cb: &CodeBlock) {
         assert_eq!(0, self.perf_stack.len());
         let path = format!("/tmp/perf-{}.map", std::process::id());
-        let mut f = std::fs::File::options().create(true).append(true).open(path).unwrap();
+        let mut f = std::io::BufWriter::new(std::fs::File::options().create(true).append(true).open(path).unwrap());
         for sym in self.perf_map.borrow().iter() {
             if let (start, Some(end), name) = sym {
                 // In case the code straddles two pages, part of it belongs to the symbol.
@@ -2305,7 +2305,7 @@ fn gen_expandarray(
     }
 
     // Get the compile-time array length
-    let comptime_len = unsafe { rb_yjit_array_len(comptime_recv) as u32 };
+    let comptime_len = unsafe { rb_jit_array_len(comptime_recv) as u32 };
 
     // Move the array from the stack and check that it's an array.
     guard_object_is_array(
@@ -7367,7 +7367,7 @@ fn gen_send_bmethod(
 ) -> Option<CodegenStatus> {
     let procv = unsafe { rb_get_def_bmethod_proc((*cme).def) };
 
-    let proc = unsafe { rb_yjit_get_proc_ptr(procv) };
+    let proc = unsafe { rb_jit_get_proc_ptr(procv) };
     let proc_block = unsafe { &(*proc).block };
 
     if proc_block.type_ != block_type_iseq {
@@ -7603,7 +7603,7 @@ fn gen_send_iseq(
             gen_counter_incr(jit, asm, Counter::send_iseq_splat_not_array);
             return None;
         } else {
-            unsafe { rb_yjit_array_len(array) as u32}
+            unsafe { rb_jit_array_len(array) as u32}
         };
 
         // Arity check accounting for size of the splat. When callee has rest parameters, we insert
@@ -7694,7 +7694,7 @@ fn gen_send_iseq(
     gen_counter_incr(jit, asm, Counter::num_send_iseq);
 
     // Shortcut for special `Primitive.attr! :leaf` builtins
-    let builtin_attrs = unsafe { rb_yjit_iseq_builtin_attrs(iseq) };
+    let builtin_attrs = unsafe { rb_jit_iseq_builtin_attrs(iseq) };
     let builtin_func_raw = unsafe { rb_yjit_builtin_function(iseq) };
     let builtin_func = if builtin_func_raw.is_null() { None } else { Some(builtin_func_raw) };
     let opt_send_call = flags & VM_CALL_OPT_SEND != 0; // .send call is not currently supported for builtins
@@ -9635,7 +9635,7 @@ fn gen_invokeblock_specialized(
 
         // If the current ISEQ is annotated to be inlined but it's not being inlined here,
         // generate a dynamic dispatch to avoid making this yield megamorphic.
-        if unsafe { rb_yjit_iseq_builtin_attrs(jit.iseq) } & BUILTIN_ATTR_INLINE_BLOCK != 0 && !asm.ctx.inline() {
+        if unsafe { rb_jit_iseq_builtin_attrs(jit.iseq) } & BUILTIN_ATTR_INLINE_BLOCK != 0 && !asm.ctx.inline() {
             gen_counter_incr(jit, asm, Counter::invokeblock_iseq_not_inlined);
             return None;
         }

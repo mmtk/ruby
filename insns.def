@@ -846,6 +846,7 @@ send
 (CALL_DATA cd, ISEQ blockiseq)
 (...)
 (VALUE val)
+// attr bool zjit_profile = true;
 // attr rb_snum_t sp_inc = sp_inc_of_sendish(cd->ci);
 // attr rb_snum_t comptime_sp_inc = sp_inc_of_sendish(ci);
 {
@@ -1470,6 +1471,7 @@ opt_ltlt
  * string.  Then what happens if that codepoint does not exist in the
  * string's encoding?  Of course an exception.  That's not a leaf. */
 // attr bool leaf = false; /* has "invalid codepoint" exception */
+// attr bool zjit_profile = true;
 {
     val = vm_opt_ltlt(recv, obj);
 
@@ -1537,6 +1539,7 @@ opt_aset
 /* This is another story than opt_aref.  When vm_opt_aset() resorts
  * to rb_hash_aset(), which should call #hash for `obj`. */
 // attr bool leaf = false; /* has rb_funcall() */ /* calls #hash */
+// attr bool zjit_profile = true;
 {
     val = vm_opt_aset(recv, obj, set);
 
@@ -1551,6 +1554,7 @@ opt_length
 (CALL_DATA cd)
 (VALUE recv)
 (VALUE val)
+// attr bool zjit_profile = true;
 {
     val = vm_opt_length(recv, BOP_LENGTH);
 
@@ -1565,6 +1569,7 @@ opt_size
 (CALL_DATA cd)
 (VALUE recv)
 (VALUE val)
+// attr bool zjit_profile = true;
 {
     val = vm_opt_length(recv, BOP_SIZE);
 
@@ -1594,6 +1599,7 @@ opt_succ
 (CALL_DATA cd)
 (VALUE recv)
 (VALUE val)
+// attr bool zjit_profile = true;
 {
     val = vm_opt_succ(recv);
 
@@ -1624,6 +1630,7 @@ opt_regexpmatch2
 (VALUE obj2, VALUE obj1)
 (VALUE val)
 // attr bool leaf = false; /* match_at() has rb_thread_check_ints() */
+// attr bool zjit_profile = true;
 {
     val = vm_opt_regexpmatch2(obj2, obj1);
 

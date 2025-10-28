@@ -57,6 +57,17 @@ macro_rules! make_counters {
                     $( Counter::$counter_name => stringify!($counter_name), )+
                 }
             }
+
+            pub fn get(name: &str) -> Option<Counter> {
+                match name {
+                    $( stringify!($default_counter_name) => Some(Counter::$default_counter_name), )+
+                    $( stringify!($exit_counter_name) => Some(Counter::$exit_counter_name), )+
+                    $( stringify!($dynamic_send_counter_name) => Some(Counter::$dynamic_send_counter_name), )+
+                    $( stringify!($optimized_send_counter_name) => Some(Counter::$optimized_send_counter_name), )+
+                    $( stringify!($counter_name) => Some(Counter::$counter_name), )+
+                    _ => None,
+                }
+            }
         }
 
         /// Map a counter to a pointer
@@ -126,11 +137,19 @@ make_counters! {
         exit_fixnum_add_overflow,
         exit_fixnum_sub_overflow,
         exit_fixnum_mult_overflow,
+        exit_fixnum_mod_by_zero,
         exit_guard_type_failure,
         exit_guard_type_not_failure,
         exit_guard_bit_equals_failure,
+        exit_guard_int_equals_failure,
         exit_guard_shape_failure,
-        exit_patchpoint,
+        exit_patchpoint_bop_redefined,
+        exit_patchpoint_method_redefined,
+        exit_patchpoint_stable_constant_names,
+        exit_patchpoint_no_tracepoint,
+        exit_patchpoint_no_ep_escape,
+        exit_patchpoint_single_ractor_mode,
+        exit_patchpoint_no_singleton_class,
         exit_callee_side_exit,
         exit_obj_to_string_fallback,
         exit_interrupt,
@@ -148,6 +167,9 @@ make_counters! {
         send_fallback_send_without_block_cfunc_array_variadic,
         send_fallback_send_without_block_not_optimized_method_type,
         send_fallback_send_without_block_direct_too_many_args,
+        send_fallback_send_polymorphic,
+        send_fallback_send_no_profiles,
+        send_fallback_send_not_optimized_method_type,
         send_fallback_ccall_with_frame_too_many_args,
         send_fallback_obj_to_string_not_string,
         send_fallback_not_optimized_instruction,
@@ -157,6 +179,7 @@ make_counters! {
     optimized_send {
         iseq_optimized_send_count,
         inline_cfunc_optimized_send_count,
+        inline_iseq_optimized_send_count,
         non_variadic_cfunc_optimized_send_count,
         variadic_cfunc_optimized_send_count,
     }
@@ -165,6 +188,7 @@ make_counters! {
     compile_error_iseq_stack_too_large,
     compile_error_exception_handler,
     compile_error_out_of_memory,
+    compile_error_jit_to_jit_optional,
     compile_error_register_spill_on_ccall,
     compile_error_register_spill_on_alloc,
     compile_error_parse_stack_underflow,
@@ -185,20 +209,35 @@ make_counters! {
     dynamic_getivar_count,
     dynamic_setivar_count,
 
-    // Method call def_type related to fallback to dynamic dispatch
-    unspecialized_def_type_iseq,
-    unspecialized_def_type_cfunc,
-    unspecialized_def_type_attrset,
-    unspecialized_def_type_ivar,
-    unspecialized_def_type_bmethod,
-    unspecialized_def_type_zsuper,
-    unspecialized_def_type_alias,
-    unspecialized_def_type_undef,
-    unspecialized_def_type_not_implemented,
-    unspecialized_def_type_optimized,
-    unspecialized_def_type_missing,
-    unspecialized_def_type_refined,
-    unspecialized_def_type_null,
+    // Method call def_type related to send without block fallback to dynamic dispatch
+    unspecialized_send_without_block_def_type_iseq,
+    unspecialized_send_without_block_def_type_cfunc,
+    unspecialized_send_without_block_def_type_attrset,
+    unspecialized_send_without_block_def_type_ivar,
+    unspecialized_send_without_block_def_type_bmethod,
+    unspecialized_send_without_block_def_type_zsuper,
+    unspecialized_send_without_block_def_type_alias,
+    unspecialized_send_without_block_def_type_undef,
+    unspecialized_send_without_block_def_type_not_implemented,
+    unspecialized_send_without_block_def_type_optimized,
+    unspecialized_send_without_block_def_type_missing,
+    unspecialized_send_without_block_def_type_refined,
+    unspecialized_send_without_block_def_type_null,
+
+    // Method call def_type related to send fallback to dynamic dispatch
+    unspecialized_send_def_type_iseq,
+    unspecialized_send_def_type_cfunc,
+    unspecialized_send_def_type_attrset,
+    unspecialized_send_def_type_ivar,
+    unspecialized_send_def_type_bmethod,
+    unspecialized_send_def_type_zsuper,
+    unspecialized_send_def_type_alias,
+    unspecialized_send_def_type_undef,
+    unspecialized_send_def_type_not_implemented,
+    unspecialized_send_def_type_optimized,
+    unspecialized_send_def_type_missing,
+    unspecialized_send_def_type_refined,
+    unspecialized_send_def_type_null,
 
     // Writes to the VM frame
     vm_write_pc_count,
@@ -249,6 +288,7 @@ pub enum CompileError {
     RegisterSpillOnAlloc,
     RegisterSpillOnCCall,
     ParseError(ParseError),
+    JitToJitOptional,
 }
 
 /// Return a raw pointer to the exit counter for a given CompileError
@@ -263,6 +303,7 @@ pub fn exit_counter_for_compile_error(compile_error: &CompileError) -> Counter {
         OutOfMemory           => compile_error_out_of_memory,
         RegisterSpillOnAlloc  => compile_error_register_spill_on_alloc,
         RegisterSpillOnCCall  => compile_error_register_spill_on_ccall,
+        JitToJitOptional      => compile_error_jit_to_jit_optional,
         ParseError(parse_error) => match parse_error {
             StackUnderflow(_)       => compile_error_parse_stack_underflow,
             MalformedIseq(_)        => compile_error_parse_malformed_iseq,
@@ -280,11 +321,12 @@ pub fn exit_counter_for_compile_error(compile_error: &CompileError) -> Counter {
     }
 }
 
-pub fn exit_counter_ptr(reason: crate::hir::SideExitReason) -> *mut u64 {
+pub fn side_exit_counter(reason: crate::hir::SideExitReason) -> Counter {
     use crate::hir::SideExitReason::*;
     use crate::hir::CallType::*;
+    use crate::hir::Invariant;
     use crate::stats::Counter::*;
-    let counter = match reason {
+    match reason {
         UnknownNewarraySend(_)        => exit_unknown_newarray_send,
         UnhandledCallType(Tailcall)   => exit_unhandled_tailcall,
         UnhandledCallType(Splat)      => exit_unhandled_splat,
@@ -295,18 +337,36 @@ pub fn exit_counter_ptr(reason: crate::hir::SideExitReason) -> *mut u64 {
         FixnumAddOverflow             => exit_fixnum_add_overflow,
         FixnumSubOverflow             => exit_fixnum_sub_overflow,
         FixnumMultOverflow            => exit_fixnum_mult_overflow,
+        FixnumModByZero               => exit_fixnum_mod_by_zero,
         GuardType(_)                  => exit_guard_type_failure,
         GuardTypeNot(_)               => exit_guard_type_not_failure,
         GuardBitEquals(_)             => exit_guard_bit_equals_failure,
         GuardShape(_)                 => exit_guard_shape_failure,
-        PatchPoint(_)                 => exit_patchpoint,
         CalleeSideExit                => exit_callee_side_exit,
         ObjToStringFallback           => exit_obj_to_string_fallback,
         Interrupt                     => exit_interrupt,
         StackOverflow                 => exit_stackoverflow,
         BlockParamProxyModified       => exit_block_param_proxy_modified,
         BlockParamProxyNotIseqOrIfunc => exit_block_param_proxy_not_iseq_or_ifunc,
-    };
+        PatchPoint(Invariant::BOPRedefined { .. })
+                                      => exit_patchpoint_bop_redefined,
+        PatchPoint(Invariant::MethodRedefined { .. })
+                                      => exit_patchpoint_method_redefined,
+        PatchPoint(Invariant::StableConstantNames { .. })
+                                      => exit_patchpoint_stable_constant_names,
+        PatchPoint(Invariant::NoTracePoint)
+                                      => exit_patchpoint_no_tracepoint,
+        PatchPoint(Invariant::NoEPEscape(_))
+                                      => exit_patchpoint_no_ep_escape,
+        PatchPoint(Invariant::SingleRactorMode)
+                                      => exit_patchpoint_single_ractor_mode,
+        PatchPoint(Invariant::NoSingletonClass { .. })
+                                      => exit_patchpoint_no_singleton_class,
+    }
+}
+
+pub fn exit_counter_ptr(reason: crate::hir::SideExitReason) -> *mut u64 {
+    let counter = side_exit_counter(reason);
     counter_ptr(counter)
 }
 
@@ -320,9 +380,33 @@ pub fn send_fallback_counter(reason: crate::hir::SendFallbackReason) -> Counter 
         SendWithoutBlockCfuncArrayVariadic        => send_fallback_send_without_block_cfunc_array_variadic,
         SendWithoutBlockNotOptimizedMethodType(_) => send_fallback_send_without_block_not_optimized_method_type,
         SendWithoutBlockDirectTooManyArgs         => send_fallback_send_without_block_direct_too_many_args,
+        SendPolymorphic                           => send_fallback_send_polymorphic,
+        SendNoProfiles                            => send_fallback_send_no_profiles,
+        SendNotOptimizedMethodType(_)             => send_fallback_send_not_optimized_method_type,
         CCallWithFrameTooManyArgs                 => send_fallback_ccall_with_frame_too_many_args,
         ObjToStringNotString                      => send_fallback_obj_to_string_not_string,
         NotOptimizedInstruction(_)                => send_fallback_not_optimized_instruction,
+    }
+}
+
+pub fn send_without_block_fallback_counter_for_method_type(method_type: crate::hir::MethodType) -> Counter {
+    use crate::hir::MethodType::*;
+    use crate::stats::Counter::*;
+
+    match method_type {
+        Iseq => unspecialized_send_without_block_def_type_iseq,
+        Cfunc => unspecialized_send_without_block_def_type_cfunc,
+        Attrset => unspecialized_send_without_block_def_type_attrset,
+        Ivar => unspecialized_send_without_block_def_type_ivar,
+        Bmethod => unspecialized_send_without_block_def_type_bmethod,
+        Zsuper => unspecialized_send_without_block_def_type_zsuper,
+        Alias => unspecialized_send_without_block_def_type_alias,
+        Undefined => unspecialized_send_without_block_def_type_undef,
+        NotImplemented => unspecialized_send_without_block_def_type_not_implemented,
+        Optimized => unspecialized_send_without_block_def_type_optimized,
+        Missing => unspecialized_send_without_block_def_type_missing,
+        Refined => unspecialized_send_without_block_def_type_refined,
+        Null => unspecialized_send_without_block_def_type_null,
     }
 }
 
@@ -331,19 +415,19 @@ pub fn send_fallback_counter_for_method_type(method_type: crate::hir::MethodType
     use crate::stats::Counter::*;
 
     match method_type {
-        Iseq => unspecialized_def_type_iseq,
-        Cfunc => unspecialized_def_type_cfunc,
-        Attrset => unspecialized_def_type_attrset,
-        Ivar => unspecialized_def_type_ivar,
-        Bmethod => unspecialized_def_type_bmethod,
-        Zsuper => unspecialized_def_type_zsuper,
-        Alias => unspecialized_def_type_alias,
-        Undefined => unspecialized_def_type_undef,
-        NotImplemented => unspecialized_def_type_not_implemented,
-        Optimized => unspecialized_def_type_optimized,
-        Missing => unspecialized_def_type_missing,
-        Refined => unspecialized_def_type_refined,
-        Null => unspecialized_def_type_null,
+        Iseq => unspecialized_send_def_type_iseq,
+        Cfunc => unspecialized_send_def_type_cfunc,
+        Attrset => unspecialized_send_def_type_attrset,
+        Ivar => unspecialized_send_def_type_ivar,
+        Bmethod => unspecialized_send_def_type_bmethod,
+        Zsuper => unspecialized_send_def_type_zsuper,
+        Alias => unspecialized_send_def_type_alias,
+        Undefined => unspecialized_send_def_type_undef,
+        NotImplemented => unspecialized_send_def_type_not_implemented,
+        Optimized => unspecialized_send_def_type_optimized,
+        Missing => unspecialized_send_def_type_missing,
+        Refined => unspecialized_send_def_type_refined,
+        Null => unspecialized_send_def_type_null,
     }
 }
 
@@ -521,7 +605,7 @@ pub struct SideExitLocations {
 #[unsafe(no_mangle)]
 pub extern "C" fn rb_zjit_trace_exit_locations_enabled_p(_ec: EcPtr, _ruby_self: VALUE) -> VALUE {
     // Builtin zjit.rb calls this even if ZJIT is disabled, so OPTIONS may not be set.
-    if unsafe { OPTIONS.as_ref() }.is_some_and(|opts| opts.trace_side_exits) {
+    if unsafe { OPTIONS.as_ref() }.is_some_and(|opts| opts.trace_side_exits.is_some()) {
         Qtrue
     } else {
         Qfalse
@@ -532,7 +616,7 @@ pub extern "C" fn rb_zjit_trace_exit_locations_enabled_p(_ec: EcPtr, _ruby_self:
 /// into raw, lines, and frames hash for RubyVM::YJIT.exit_locations.
 #[unsafe(no_mangle)]
 pub extern "C" fn rb_zjit_get_exit_locations(_ec: EcPtr, _ruby_self: VALUE) -> VALUE {
-    if !zjit_enabled_p() || !get_option!(trace_side_exits) {
+    if !zjit_enabled_p() || get_option!(trace_side_exits).is_none() {
         return Qnil;
     }
 

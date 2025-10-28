@@ -32,11 +32,17 @@ Note that tests link against CRuby, so directly calling `cargo test`, or `cargo 
 
 First, ensure you have `cargo` installed. If you do not already have it, you can use [rustup.rs](https://rustup.rs/).
 
+Also install cargo-binstall with:
+
+```bash
+cargo install cargo-binstall
+```
+
 Make sure to add `--enable-zjit=dev` when you run `configure`, then install the following tools:
 
 ```bash
-cargo install cargo-nextest
-cargo install cargo-insta
+cargo binstall --secure cargo-nextest
+cargo binstall --secure cargo-insta
 ```
 
 `cargo-insta` is used for updating snapshots. `cargo-nextest` runs each test in its own process, which is valuable since CRuby only supports booting once per process, and most APIs are not thread safe.
@@ -155,6 +161,16 @@ A file called `zjit_exits_{pid}.dump` will be created in the same directory as `
 ```bash
 stackprof path/to/zjit_exits_{pid}.dump
 ```
+
+### Printing ZJIT Errors
+
+`--zjit-debug` prints ZJIT compilation errors and other diagnostics:
+
+```bash
+./miniruby --zjit-debug script.rb
+```
+
+As you might guess from the name, this option is intended mostly for ZJIT developers.
 
 ## Useful dev commands
 

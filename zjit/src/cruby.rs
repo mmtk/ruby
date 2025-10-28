@@ -90,7 +90,7 @@
 
 use std::convert::From;
 use std::ffi::{c_void, CString, CStr};
-use std::fmt::{Debug, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 use std::os::raw::{c_char, c_int, c_uint};
 use std::panic::{catch_unwind, UnwindSafe};
 
@@ -132,7 +132,9 @@ unsafe extern "C" {
     pub fn rb_hash_empty_p(hash: VALUE) -> VALUE;
     pub fn rb_yjit_str_concat_codepoint(str: VALUE, codepoint: VALUE);
     pub fn rb_str_setbyte(str: VALUE, index: VALUE, value: VALUE) -> VALUE;
+    pub fn rb_str_getbyte(str: VALUE, index: VALUE) -> VALUE;
     pub fn rb_vm_splat_array(flag: VALUE, ary: VALUE) -> VALUE;
+    pub fn rb_jit_fix_mod_fix(x: VALUE, y: VALUE) -> VALUE;
     pub fn rb_vm_concat_array(ary1: VALUE, ary2st: VALUE) -> VALUE;
     pub fn rb_vm_get_special_object(reg_ep: *const VALUE, value_type: vm_special_object_type) -> VALUE;
     pub fn rb_vm_concat_to_array(ary1: VALUE, ary2st: VALUE) -> VALUE;
@@ -218,6 +220,7 @@ pub use rb_vm_ci_kwarg as vm_ci_kwarg;
 pub use rb_METHOD_ENTRY_VISI as METHOD_ENTRY_VISI;
 pub use rb_RCLASS_ORIGIN as RCLASS_ORIGIN;
 pub use rb_vm_get_special_object as vm_get_special_object;
+pub use rb_jit_fix_mod_fix as rb_fix_mod_fix;
 
 /// Helper so we can get a Rust string for insn_name()
 pub fn insn_name(opcode: usize) -> String {
@@ -270,7 +273,7 @@ pub type IseqPtr = *const rb_iseq_t;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct ShapeId(pub u32);
 
-pub const INVALID_SHAPE_ID: ShapeId = ShapeId(RB_INVALID_SHAPE_ID);
+pub const INVALID_SHAPE_ID: ShapeId = ShapeId(rb_invalid_shape_id);
 
 impl ShapeId {
     pub fn is_valid(self) -> bool {
@@ -400,10 +403,27 @@ pub enum ClassRelationship {
     NoRelation,
 }
 
+/// A print adapator for debug info about a [VALUE]. Includes info
+/// the GC knows about the handle. Example: `println!("{}", value.obj_info());`.
+pub struct ObjInfoPrinter(VALUE);
+
+impl Display for ObjInfoPrinter {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        use std::mem::MaybeUninit;
+        const BUFFER_SIZE: usize = 0x100;
+        let mut buffer: MaybeUninit<[c_char; BUFFER_SIZE]> = MaybeUninit::uninit();
+        let info = unsafe {
+            rb_raw_obj_info(buffer.as_mut_ptr().cast(), BUFFER_SIZE, self.0);
+            CStr::from_ptr(buffer.as_ptr().cast()).to_string_lossy()
+        };
+        write!(f, "{info}")
+    }
+}
+
 impl VALUE {
-    /// Dump info about the value to the console similarly to rp(VALUE)
-    pub fn dump_info(self) {
-        unsafe { rb_obj_info_dump(self) }
+    /// Get a printer for raw debug info from `rb_obj_info()` about the value.
+    pub fn obj_info(self) -> ObjInfoPrinter {
+        ObjInfoPrinter(self)
     }
 
     /// Return whether the value is truthy or falsy in Ruby -- only nil and false are falsy.
@@ -428,6 +448,11 @@ impl VALUE {
     /// Return true if the value is a heap object
     pub fn heap_object_p(self) -> bool {
         !self.special_const_p()
+    }
+
+    /// Shareability between ractors. `RB_OBJ_SHAREABLE_P()`.
+    pub fn shareable_p(self) -> bool {
+        (self.builtin_flags() & RUBY_FL_SHAREABLE as usize) != 0
     }
 
     /// Return true if the value is a Ruby Fixnum (immediate-size integer)
@@ -507,8 +532,11 @@ impl VALUE {
     pub fn class_of(self) -> VALUE {
         if !self.special_const_p() {
             let builtin_type = self.builtin_type();
-            assert_ne!(builtin_type, RUBY_T_NONE, "ZJIT should only see live objects");
-            assert_ne!(builtin_type, RUBY_T_MOVED, "ZJIT should only see live objects");
+            assert!(
+                builtin_type != RUBY_T_NONE && builtin_type != RUBY_T_MOVED,
+                "ZJIT saw a dead object. T_type={builtin_type}, {}",
+                self.obj_info()
+            );
         }
 
         unsafe { rb_yarv_class_of(self) }
@@ -870,6 +898,14 @@ where
     let mut recursive_lock_level: c_uint = 0;
 
     unsafe { rb_jit_vm_lock_then_barrier(&mut recursive_lock_level, file, line) };
+    // Ensure GC is off while we have the VM lock because:
+    //   1. We create many transient Rust collections that hold VALUEs during compilation.
+    //      It's extremely tricky to properly marked and reference update these, not to
+    //      mention the overhead and ergonomics issues.
+    //   2. If we yield to the GC while compiling, it re-enters our mark and update functions.
+    //      This breaks `&mut` exclusivity since mark functions derive fresh `&mut` from statics
+    //      while there is a stack frame below it that has an overlapping `&mut`. That's UB.
+    let gc_disabled_pre_call = unsafe { rb_gc_disable() }.test();
 
     let ret = match catch_unwind(func) {
         Ok(result) => result,
@@ -889,7 +925,12 @@ where
         }
     };
 
-    unsafe { rb_jit_vm_unlock(&mut recursive_lock_level, file, line) };
+    unsafe {
+        if !gc_disabled_pre_call {
+            rb_gc_enable();
+        }
+        rb_jit_vm_unlock(&mut recursive_lock_level, file, line);
+    };
 
     ret
 }
@@ -1136,6 +1177,11 @@ pub mod test_utils {
         get_proc_iseq(&format!("{}.method(:{})", recv, name))
     }
 
+    /// Get IseqPtr for a specified instance method
+    pub fn get_instance_method_iseq(recv: &str, name: &str) -> *const rb_iseq_t {
+        get_proc_iseq(&format!("{}.instance_method(:{})", recv, name))
+    }
+
     /// Get IseqPtr for a specified Proc object
     pub fn get_proc_iseq(obj: &str) -> *const rb_iseq_t {
         let wrapped_iseq = eval(&format!("RubyVM::InstructionSequence.of({obj})"));
@@ -1303,6 +1349,7 @@ pub(crate) mod ids {
         name: NULL               content: b""
         name: respond_to_missing content: b"respond_to_missing?"
         name: eq                 content: b"=="
+        name: string_eq          content: b"String#=="
         name: include_p          content: b"include?"
         name: to_ary
         name: to_s
@@ -1320,6 +1367,7 @@ pub(crate) mod ids {
         name: ge                 content: b">="
         name: and                content: b"&"
         name: or                 content: b"|"
+        name: xor                content: b"^"
         name: freeze
         name: minusat            content: b"-@"
         name: aref               content: b"[]"

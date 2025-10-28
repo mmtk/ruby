@@ -328,6 +328,7 @@ rb_mod_set_temporary_name(VALUE mod, VALUE name)
         }
 
         name = rb_str_new_frozen(name);
+        RB_OBJ_SET_SHAREABLE(name);
 
         // Set the temporary classpath to the given name:
         RB_VM_LOCKING() {
@@ -439,6 +440,7 @@ rb_set_class_path_string(VALUE klass, VALUE under, VALUE name)
         str = build_const_pathname(str, name);
     }
 
+    RB_OBJ_SET_SHAREABLE(str);
     RCLASS_SET_CLASSPATH(klass, str, permanent);
 }
 
@@ -1006,7 +1008,7 @@ rb_gvar_set_entry(struct rb_global_entry *entry, VALUE val)
 }
 
 #define USE_NAMESPACE_GVAR_TBL(ns,entry) \
-    (NAMESPACE_OPTIONAL_P(ns) && \
+    (NAMESPACE_USER_P(ns) && \
      (!entry || !entry->var->namespace_ready || entry->var->setter != rb_gvar_readonly_setter))
 
 VALUE
@@ -1019,7 +1021,6 @@ rb_gvar_set(ID id, VALUE val)
     RB_VM_LOCKING() {
         entry = rb_global_entry(id);
 
-        // TODO: consider root/main namespaces
         if (USE_NAMESPACE_GVAR_TBL(ns, entry)) {
             rb_hash_aset(ns->gvar_tbl, rb_id2sym(entry->id), val);
             retval = val;
@@ -1566,7 +1567,7 @@ obj_transition_too_complex(VALUE obj, st_table *table)
         break;
       default:
         {
-            VALUE fields_obj = rb_imemo_fields_new_complex_tbl(obj, table);
+            VALUE fields_obj = rb_imemo_fields_new_complex_tbl(obj, table, RB_OBJ_SHAREABLE_P(obj));
             RBASIC_SET_SHAPE_ID(fields_obj, shape_id);
             rb_obj_replace_fields(obj, fields_obj);
         }
@@ -1745,7 +1746,7 @@ static VALUE
 imemo_fields_complex_from_obj(VALUE owner, VALUE source_fields_obj, shape_id_t shape_id)
 {
     attr_index_t len = source_fields_obj ? RSHAPE_LEN(RBASIC_SHAPE_ID(source_fields_obj)) : 0;
-    VALUE fields_obj = rb_imemo_fields_new_complex(owner, len + 1);
+    VALUE fields_obj = rb_imemo_fields_new_complex(owner, len + 1, RB_OBJ_SHAREABLE_P(owner));
 
     rb_field_foreach(source_fields_obj, imemo_fields_complex_from_obj_i, (st_data_t)fields_obj, false);
     RBASIC_SET_SHAPE_ID(fields_obj, shape_id);
@@ -1756,7 +1757,7 @@ imemo_fields_complex_from_obj(VALUE owner, VALUE source_fields_obj, shape_id_t s
 static VALUE
 imemo_fields_copy_capa(VALUE owner, VALUE source_fields_obj, attr_index_t new_size)
 {
-    VALUE fields_obj = rb_imemo_fields_new(owner, new_size);
+    VALUE fields_obj = rb_imemo_fields_new(owner, new_size, RB_OBJ_SHAREABLE_P(owner));
     if (source_fields_obj) {
         attr_index_t fields_count = RSHAPE_LEN(RBASIC_SHAPE_ID(source_fields_obj));
         VALUE *fields = rb_imemo_fields_ptr(fields_obj);
@@ -2241,7 +2242,7 @@ rb_copy_generic_ivar(VALUE dest, VALUE obj)
             return;
         }
 
-        new_fields_obj = rb_imemo_fields_new(dest, RSHAPE_CAPACITY(dest_shape_id));
+        new_fields_obj = rb_imemo_fields_new(dest, RSHAPE_CAPACITY(dest_shape_id), RB_OBJ_SHAREABLE_P(dest));
         VALUE *src_buf = rb_imemo_fields_ptr(fields_obj);
         VALUE *dest_buf = rb_imemo_fields_ptr(new_fields_obj);
         rb_shape_copy_fields(new_fields_obj, dest_buf, dest_shape_id, src_buf, src_shape_id);
@@ -3547,12 +3548,21 @@ rb_const_remove(VALUE mod, ID id)
     rb_check_frozen(mod);
 
     ce = rb_const_lookup(mod, id);
-    if (!ce || !rb_id_table_delete(RCLASS_WRITABLE_CONST_TBL(mod), id)) {
+
+    if (!ce) {
         if (rb_const_defined_at(mod, id)) {
             rb_name_err_raise("cannot remove %2$s::%1$s", mod, ID2SYM(id));
         }
 
         undefined_constant(mod, ID2SYM(id));
+    }
+
+    VALUE writable_ce = 0;
+    if (rb_id_table_lookup(RCLASS_WRITABLE_CONST_TBL(mod), id, &writable_ce)) {
+        rb_id_table_delete(RCLASS_WRITABLE_CONST_TBL(mod), id);
+        if ((rb_const_entry_t *)writable_ce != ce) {
+            xfree((rb_const_entry_t *)writable_ce);
+        }
     }
 
     rb_const_warn_if_deprecated(ce, mod, id);
@@ -3802,6 +3812,7 @@ static void
 set_namespace_path(VALUE named_namespace, VALUE namespace_path)
 {
     struct rb_id_table *const_table = RCLASS_CONST_TBL(named_namespace);
+    RB_OBJ_SET_SHAREABLE(namespace_path);
 
     RB_VM_LOCKING() {
         RCLASS_WRITE_CLASSPATH(named_namespace, namespace_path, true);
@@ -3880,7 +3891,8 @@ const_set(VALUE klass, ID id, VALUE val)
                     set_namespace_path(val, build_const_path(parental_path, id));
                 }
                 else if (!parental_path_permanent && NIL_P(val_path)) {
-                    RCLASS_SET_CLASSPATH(val, build_const_path(parental_path, id), false);
+                    VALUE path = build_const_path(parental_path, id);
+                    RCLASS_SET_CLASSPATH(val, path, false);
                 }
             }
         }
@@ -4493,7 +4505,7 @@ static attr_index_t
 class_fields_ivar_set(VALUE klass, VALUE fields_obj, ID id, VALUE val, bool concurrent, VALUE *new_fields_obj, bool *new_ivar_out)
 {
     const VALUE original_fields_obj = fields_obj;
-    fields_obj = original_fields_obj ? original_fields_obj : rb_imemo_fields_new(klass, 1);
+    fields_obj = original_fields_obj ? original_fields_obj : rb_imemo_fields_new(klass, 1, true);
 
     shape_id_t current_shape_id = RBASIC_SHAPE_ID(fields_obj);
     shape_id_t next_shape_id = current_shape_id; // for too_complex

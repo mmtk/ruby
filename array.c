@@ -29,6 +29,7 @@
 #include "ruby/st.h"
 #include "ruby/thread.h"
 #include "ruby/util.h"
+#include "ruby/ractor.h"
 #include "vm_core.h"
 #include "builtin.h"
 
@@ -110,10 +111,12 @@ should_be_T_ARRAY(VALUE ary)
 } while (0)
 #define FL_UNSET_SHARED(ary) FL_UNSET((ary), RARRAY_SHARED_FLAG)
 
+#define ARY_SET_PTR_FORCE(ary, p) \
+    RARRAY(ary)->as.heap.ptr = (p);
 #define ARY_SET_PTR(ary, p) do { \
     RUBY_ASSERT(!ARY_EMBED_P(ary)); \
     RUBY_ASSERT(!OBJ_FROZEN(ary)); \
-    RARRAY(ary)->as.heap.ptr = (p); \
+     ARY_SET_PTR_FORCE(ary, p); \
 } while (0)
 #define ARY_SET_EMBED_LEN(ary, n) do { \
     long tmp_n = (n); \
@@ -151,11 +154,13 @@ should_be_T_ARRAY(VALUE ary)
 
 #define ARY_CAPA(ary) (ARY_EMBED_P(ary) ? ary_embed_capa(ary) : \
                        ARY_SHARED_ROOT_P(ary) ? RARRAY_LEN(ary) : ARY_HEAP_CAPA(ary))
+#define ARY_SET_CAPA_FORCE(ary, n) \
+    RARRAY(ary)->as.heap.aux.capa = (n);
 #define ARY_SET_CAPA(ary, n) do { \
     RUBY_ASSERT(!ARY_EMBED_P(ary)); \
     RUBY_ASSERT(!ARY_SHARED_P(ary)); \
     RUBY_ASSERT(!OBJ_FROZEN(ary)); \
-    RARRAY(ary)->as.heap.aux.capa = (n); \
+    ARY_SET_CAPA_FORCE(ary, n); \
 } while (0)
 
 #define ARY_SHARED_ROOT_OCCUPIED(ary) (!OBJ_FROZEN(ary) && ARY_SHARED_ROOT_REFCNT(ary) == 1)
@@ -709,14 +714,14 @@ rb_ary_cancel_sharing(VALUE ary)
 #endif
             VALUE *ptr = ary_heap_alloc_buffer(len);
             MEMCPY(ptr, ARY_HEAP_PTR(ary), VALUE, len);
-            ARY_SET_PTR(ary, ptr);
+            ARY_SET_PTR_FORCE(ary, ptr);
 #if USE_MMTK
             } else {
                 rb_mmtk_ary_new_objbuf_copy(ary, len, RARRAY_EXT(ary)->objbuf, ARY_HEAP_PTR(ary), len);
             }
 #endif
             rb_ary_unshare(ary);
-            ARY_SET_CAPA(ary, len);
+            ARY_SET_CAPA_FORCE(ary, len);
         }
 
         WHEN_USING_MMTK2({
@@ -5065,6 +5070,8 @@ rb_ary_replace(VALUE copy, VALUE orig)
         }
 #endif
         rb_ary_set_shared(copy, shared_root);
+
+        RUBY_ASSERT(RB_OBJ_SHAREABLE_P(copy) ? RB_OBJ_SHAREABLE_P(shared_root) : 1);
     }
     ary_verify(copy);
     return copy;
@@ -9219,7 +9226,7 @@ Init_Array(void)
 
     rb_define_method(rb_cArray, "deconstruct", rb_ary_deconstruct, 0);
 
-    rb_cArray_empty_frozen = rb_ary_freeze(rb_ary_new());
+    rb_cArray_empty_frozen = RB_OBJ_SET_SHAREABLE(rb_ary_freeze(rb_ary_new()));
     rb_vm_register_global_object(rb_cArray_empty_frozen);
 }
 

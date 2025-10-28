@@ -263,6 +263,7 @@ array.$(OBJEXT): {$(VPATH)}onigmo.h
 array.$(OBJEXT): {$(VPATH)}oniguruma.h
 array.$(OBJEXT): {$(VPATH)}probes.dmyh
 array.$(OBJEXT): {$(VPATH)}probes.h
+array.$(OBJEXT): {$(VPATH)}ractor.h
 array.$(OBJEXT): {$(VPATH)}ruby_assert.h
 array.$(OBJEXT): {$(VPATH)}ruby_atomic.h
 array.$(OBJEXT): {$(VPATH)}rubyparser.h
@@ -4385,6 +4386,7 @@ encoding.$(OBJEXT): {$(VPATH)}missing.h
 encoding.$(OBJEXT): {$(VPATH)}node.h
 encoding.$(OBJEXT): {$(VPATH)}onigmo.h
 encoding.$(OBJEXT): {$(VPATH)}oniguruma.h
+encoding.$(OBJEXT): {$(VPATH)}ractor.h
 encoding.$(OBJEXT): {$(VPATH)}regenc.h
 encoding.$(OBJEXT): {$(VPATH)}ruby_assert.h
 encoding.$(OBJEXT): {$(VPATH)}ruby_atomic.h
@@ -7382,8 +7384,10 @@ jit.$(OBJEXT): $(CCAN_DIR)/str/str.h
 jit.$(OBJEXT): $(hdrdir)/ruby/ruby.h
 jit.$(OBJEXT): $(top_srcdir)/internal/array.h
 jit.$(OBJEXT): $(top_srcdir)/internal/basic_operators.h
+jit.$(OBJEXT): $(top_srcdir)/internal/bits.h
 jit.$(OBJEXT): $(top_srcdir)/internal/class.h
 jit.$(OBJEXT): $(top_srcdir)/internal/compilers.h
+jit.$(OBJEXT): $(top_srcdir)/internal/fixnum.h
 jit.$(OBJEXT): $(top_srcdir)/internal/gc.h
 jit.$(OBJEXT): $(top_srcdir)/internal/imemo.h
 jit.$(OBJEXT): $(top_srcdir)/internal/namespace.h
@@ -7391,6 +7395,7 @@ jit.$(OBJEXT): $(top_srcdir)/internal/sanitizers.h
 jit.$(OBJEXT): $(top_srcdir)/internal/serial.h
 jit.$(OBJEXT): $(top_srcdir)/internal/set_table.h
 jit.$(OBJEXT): $(top_srcdir)/internal/static_assert.h
+jit.$(OBJEXT): $(top_srcdir)/internal/string.h
 jit.$(OBJEXT): $(top_srcdir)/internal/variable.h
 jit.$(OBJEXT): $(top_srcdir)/internal/vm.h
 jit.$(OBJEXT): $(top_srcdir)/internal/warnings.h
@@ -9300,6 +9305,7 @@ namespace.$(OBJEXT): {$(VPATH)}backward/2/stdalign.h
 namespace.$(OBJEXT): {$(VPATH)}backward/2/stdarg.h
 namespace.$(OBJEXT): {$(VPATH)}config.h
 namespace.$(OBJEXT): {$(VPATH)}constant.h
+namespace.$(OBJEXT): {$(VPATH)}darray.h
 namespace.$(OBJEXT): {$(VPATH)}debug_counter.h
 namespace.$(OBJEXT): {$(VPATH)}defines.h
 namespace.$(OBJEXT): {$(VPATH)}encoding.h
@@ -16790,6 +16796,7 @@ string.$(OBJEXT): {$(VPATH)}onigmo.h
 string.$(OBJEXT): {$(VPATH)}oniguruma.h
 string.$(OBJEXT): {$(VPATH)}probes.dmyh
 string.$(OBJEXT): {$(VPATH)}probes.h
+string.$(OBJEXT): {$(VPATH)}ractor.h
 string.$(OBJEXT): {$(VPATH)}re.h
 string.$(OBJEXT): {$(VPATH)}regex.h
 string.$(OBJEXT): {$(VPATH)}ruby_assert.h
@@ -17261,6 +17268,7 @@ symbol.$(OBJEXT): {$(VPATH)}onigmo.h
 symbol.$(OBJEXT): {$(VPATH)}oniguruma.h
 symbol.$(OBJEXT): {$(VPATH)}probes.dmyh
 symbol.$(OBJEXT): {$(VPATH)}probes.h
+symbol.$(OBJEXT): {$(VPATH)}ractor.h
 symbol.$(OBJEXT): {$(VPATH)}ruby_assert.h
 symbol.$(OBJEXT): {$(VPATH)}ruby_atomic.h
 symbol.$(OBJEXT): {$(VPATH)}rubyparser.h

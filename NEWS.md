@@ -159,7 +159,7 @@ The following bundled gems are promoted from default gems.
 
 * ostruct 0.6.3
 * pstore 0.2.0
-* benchmark 0.4.1
+* benchmark 0.5.0
 * logger 1.7.0
 * rdoc 6.15.0
 * win32ole 1.9.2
@@ -182,17 +182,17 @@ The following default gems are updated.
 
 * RubyGems 4.0.0.dev
 * bundler 4.0.0.dev
-* erb 5.0.3
+* erb 5.1.3
 * etc 1.4.6
 * fcntl 1.3.0
 * io-console 0.8.1
 * io-nonblock 0.3.2
 * io-wait 0.3.2
-* json 2.15.1
+* json 2.15.2
 * openssl 4.0.0.pre
 * optparse 0.7.0.dev.2
 * pp 0.6.3
-* prism 1.5.2
+* prism 1.6.0
 * psych 5.2.6
 * resolv 0.6.2
 * stringio 3.1.8.dev
@@ -216,7 +216,7 @@ The following bundled gems are updated.
 * rbs 3.9.5
 * debug 1.11.0
 * base64 0.3.0
-* bigdecimal 3.2.2
+* bigdecimal 3.3.1
 * drb 2.2.3
 * syslog 0.3.0
 * csv 3.3.5

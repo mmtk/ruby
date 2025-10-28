@@ -23,10 +23,10 @@ module Bundler
       full_update = gems.empty? && sources.empty? && groups.empty? && !options[:ruby] && !update_bundler
 
       if full_update && !options[:all]
-        if Bundler.feature_flag.update_requires_all_flag?
+        if Bundler.settings[:update_requires_all_flag]
           raise InvalidOption, "To update everything, pass the `--all` flag."
         end
-        SharedHelpers.major_deprecation 4, "Pass --all to `bundle update` to update everything"
+        SharedHelpers.feature_deprecated! "Pass --all to `bundle update` to update everything"
       elsif !full_update && options[:all]
         raise InvalidOption, "Cannot specify --all along with specific options."
       end

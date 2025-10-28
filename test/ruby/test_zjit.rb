@@ -794,39 +794,69 @@ class TestZJIT < Test::Unit::TestCase
   end
 
   def test_fixnum_and
-    assert_compiles '1', %q{
+    assert_compiles '[1, 2, 4]', %q{
       def test(a, b) = a & b
-      test(2, 2)
-      test(2, 2)
-      test(5, 3)
+      [
+        test(5, 3),
+        test(0b011, 0b110),
+        test(-0b011, 0b110)
+      ]
     }, call_threshold: 2, insns: [:opt_and]
   end
 
   def test_fixnum_and_side_exit
-    assert_compiles 'false', %q{
+    assert_compiles '[2, 2, false]', %q{
       def test(a, b) = a & b
-      test(2, 2)
-      test(2, 2)
-      test(true, false)
+      [
+        test(2, 2),
+        test(0b011, 0b110),
+        test(true, false)
+      ]
     }, call_threshold: 2, insns: [:opt_and]
   end
 
   def test_fixnum_or
-    assert_compiles '3', %q{
+    assert_compiles '[7, 3, -3]', %q{
       def test(a, b) = a | b
-      test(5, 3)
-      test(5, 3)
-      test(1, 2)
+      [
+        test(5, 3),
+        test(1, 2),
+        test(1, -4)
+      ]
     }, call_threshold: 2, insns: [:opt_or]
   end
 
   def test_fixnum_or_side_exit
-    assert_compiles 'true', %q{
+    assert_compiles '[3, 2, true]', %q{
       def test(a, b) = a | b
-      test(2, 2)
-      test(2, 2)
-      test(true, false)
+      [
+        test(1, 2),
+        test(2, 2),
+        test(true, false)
+      ]
     }, call_threshold: 2, insns: [:opt_or]
+  end
+
+  def test_fixnum_xor
+    assert_compiles '[6, -8, 3]', %q{
+      def test(a, b) = a ^ b
+      [
+        test(5, 3),
+        test(-5, 3),
+        test(1, 2)
+      ]
+    }, call_threshold: 2
+  end
+
+  def test_fixnum_xor_side_exit
+    assert_compiles '[6, 6, true]', %q{
+      def test(a, b) = a ^ b
+      [
+        test(5, 3),
+        test(5, 3),
+        test(true, false)
+      ]
+    }, call_threshold: 2
   end
 
   def test_fixnum_mul
@@ -1151,6 +1181,14 @@ class TestZJIT < Test::Unit::TestCase
       def test = [1,2,3]
       test
     }
+  end
+
+  def test_array_fixnum_aref
+    assert_compiles '3', %q{
+      def test(x) = [1,2,3][x]
+      test(2)
+      test(2)
+    }, call_threshold: 2, insns: [:opt_aref]
   end
 
   def test_new_range_inclusive
@@ -1626,6 +1664,57 @@ class TestZJIT < Test::Unit::TestCase
     }
   end
 
+  def test_getclassvariable
+    assert_compiles '42', %q{
+      class Foo
+        def self.test = @@x
+      end
+
+      Foo.class_variable_set(:@@x, 42)
+      Foo.test()
+    }
+  end
+
+  def test_getclassvariable_raises
+    assert_compiles '"uninitialized class variable @@x in Foo"', %q{
+      class Foo
+        def self.test = @@x
+      end
+
+      begin
+        Foo.test
+      rescue NameError => e
+        e.message
+      end
+    }
+  end
+
+  def test_setclassvariable
+    assert_compiles '42', %q{
+      class Foo
+        def self.test = @@x = 42
+      end
+
+      Foo.test()
+      Foo.class_variable_get(:@@x)
+    }
+  end
+
+  def test_setclassvariable_raises
+    assert_compiles '"can\'t modify frozen #<Class:Foo>: Foo"', %q{
+      class Foo
+        def self.test = @@x = 42
+        freeze
+      end
+
+      begin
+        Foo.test
+      rescue FrozenError => e
+        e.message
+      end
+    }
+  end
+
   def test_attr_reader
     assert_compiles '[4, 4]', %q{
       class C
@@ -1704,6 +1793,36 @@ class TestZJIT < Test::Unit::TestCase
       def test = RUBY_COPYRIGHT
       test
     }, call_threshold: 1, insns: [:opt_getconstant_path]
+  end
+
+  def test_expandarray_no_splat
+    assert_compiles '[3, 4]', %q{
+      def test(o)
+        a, b = o
+        [a, b]
+      end
+      test [3, 4]
+    }, call_threshold: 1, insns: [:expandarray]
+  end
+
+  def test_expandarray_splat
+    assert_compiles '[3, [4]]', %q{
+      def test(o)
+        a, *b = o
+        [a, b]
+      end
+      test [3, 4]
+    }, call_threshold: 1, insns: [:expandarray]
+  end
+
+  def test_expandarray_splat_post
+    assert_compiles '[3, [4], 5]', %q{
+      def test(o)
+        a, *b, c = o
+        [a, b, c]
+      end
+      test [3, 4, 5]
+    }, call_threshold: 1, insns: [:expandarray]
   end
 
   def test_getconstant_path_autoload
@@ -1888,6 +2007,27 @@ class TestZJIT < Test::Unit::TestCase
     assert_compiles '[nil, nil, "yield"]', %q{
       def test
         yield_self { yield_self { defined?(yield) } }
+      end
+
+      [test, test, test{}]
+    }, call_threshold: 2
+  end
+
+  def test_block_given_p
+    assert_compiles "false", "block_given?"
+    assert_compiles '[false, false, true]', %q{
+      def test = block_given?
+      [test, test, test{}]
+    }, call_threshold: 2, insns: [:opt_send_without_block]
+  end
+
+  def test_block_given_p_from_block
+    # This will do some EP hopping to find the local EP,
+    # so it's slightly different than doing it outside of a block.
+
+    assert_compiles '[false, false, true]', %q{
+      def test
+        yield_self { yield_self { block_given? } }
       end
 
       [test, test, test{}]

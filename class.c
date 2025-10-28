@@ -79,6 +79,112 @@
 #define METACLASS_OF(k) RBASIC(k)->klass
 #define SET_METACLASS_OF(k, cls) RBASIC_SET_CLASS(k, cls)
 
+static enum rb_id_table_iterator_result
+cvar_table_free_i(VALUE value, void *ctx)
+{
+    xfree((void *)value);
+    return ID_TABLE_CONTINUE;
+}
+
+void
+rb_class_classext_free(VALUE klass, rb_classext_t *ext, bool is_prime)
+{
+    struct rb_id_table *tbl;
+
+    rb_id_table_free(RCLASSEXT_M_TBL(ext));
+
+    if (!RCLASSEXT_SHARED_CONST_TBL(ext) && (tbl = RCLASSEXT_CONST_TBL(ext)) != NULL) {
+        rb_free_const_table(tbl);
+    }
+
+    if ((tbl = RCLASSEXT_CVC_TBL(ext)) != NULL) {
+        rb_id_table_foreach_values(tbl, cvar_table_free_i, NULL);
+        rb_id_table_free(tbl);
+    }
+
+    rb_class_classext_free_subclasses(ext, klass, false);
+
+    if (RCLASSEXT_SUPERCLASSES_WITH_SELF(ext)) {
+        RUBY_ASSERT(is_prime); // superclasses should only be used on prime
+        xfree(RCLASSEXT_SUPERCLASSES(ext));
+    }
+
+    if (!is_prime) { // the prime classext will be freed with RClass
+        xfree(ext);
+    }
+}
+
+void
+rb_iclass_classext_free(VALUE klass, rb_classext_t *ext, bool is_prime)
+{
+    if (RCLASSEXT_ICLASS_IS_ORIGIN(ext) && !RCLASSEXT_ICLASS_ORIGIN_SHARED_MTBL(ext)) {
+        /* Method table is not shared for origin iclasses of classes */
+        rb_id_table_free(RCLASSEXT_M_TBL(ext));
+    }
+
+    if (RCLASSEXT_CALLABLE_M_TBL(ext) != NULL) {
+        rb_id_table_free(RCLASSEXT_CALLABLE_M_TBL(ext));
+    }
+
+    rb_class_classext_free_subclasses(ext, klass, false);
+
+    if (!is_prime) { // the prime classext will be freed with RClass
+        xfree(ext);
+    }
+}
+
+static void
+iclass_free_orphan_classext(VALUE klass, rb_classext_t *ext)
+{
+    if (RCLASSEXT_ICLASS_IS_ORIGIN(ext) && !RCLASSEXT_ICLASS_ORIGIN_SHARED_MTBL(ext)) {
+        /* Method table is not shared for origin iclasses of classes */
+        rb_id_table_free(RCLASSEXT_M_TBL(ext));
+    }
+
+    if (RCLASSEXT_CALLABLE_M_TBL(ext) != NULL) {
+        rb_id_table_free(RCLASSEXT_CALLABLE_M_TBL(ext));
+    }
+
+    rb_class_classext_free_subclasses(ext, klass, true); // replacing this classext with a newer one
+
+    xfree(ext);
+}
+
+struct rb_class_set_namespace_classext_args {
+    VALUE obj;
+    rb_classext_t *ext;
+};
+
+static int
+rb_class_set_namespace_classext_update(st_data_t *key_ptr, st_data_t *val_ptr, st_data_t a, int existing)
+{
+    struct rb_class_set_namespace_classext_args *args = (struct rb_class_set_namespace_classext_args *)a;
+
+    if (existing) {
+        if (LIKELY(BUILTIN_TYPE(args->obj) == T_ICLASS)) {
+            iclass_free_orphan_classext(args->obj, (rb_classext_t *)*val_ptr);
+        }
+        else {
+            rb_bug("Updating existing classext for non-iclass never happen");
+        }
+    }
+
+    *val_ptr = (st_data_t)args->ext;
+
+    return ST_CONTINUE;
+}
+
+void
+rb_class_set_namespace_classext(VALUE obj, const rb_namespace_t *ns, rb_classext_t *ext)
+{
+    struct rb_class_set_namespace_classext_args args = {
+        .obj = obj,
+        .ext = ext,
+    };
+
+    st_update(RCLASS_CLASSEXT_TBL(obj), (st_data_t)ns->ns_object, rb_class_set_namespace_classext_update, (st_data_t)&args);
+}
+
 RUBY_EXTERN rb_serial_t ruby_vm_global_cvar_state;
 
 struct duplicate_id_tbl_data {
@@ -286,6 +392,8 @@ class_duplicate_iclass_classext(VALUE iclass, rb_classext_t *mod_ext, const rb_n
 
     RCLASSEXT_SET_INCLUDER(ext, iclass, RCLASSEXT_INCLUDER(src));
 
+    VM_ASSERT(FL_TEST_RAW(iclass, RCLASS_NAMESPACEABLE));
+
     first_set = RCLASS_SET_NAMESPACE_CLASSEXT(iclass, ns, ext);
     if (first_set) {
         RCLASS_SET_PRIME_CLASSEXT_WRITABLE(iclass, false);
@@ -305,6 +413,8 @@ rb_class_duplicate_classext(rb_classext_t *orig, VALUE klass, const rb_namespace
     RCLASSEXT_SUPER(ext) = RCLASSEXT_SUPER(orig);
 
     RCLASSEXT_M_TBL(ext) = duplicate_classext_m_tbl(RCLASSEXT_M_TBL(orig), klass, dup_iclass);
+    RCLASSEXT_ICLASS_IS_ORIGIN(ext) = true;
+    RCLASSEXT_ICLASS_ORIGIN_SHARED_MTBL(ext) = false;
 
     if (orig->fields_obj) {
         RB_OBJ_WRITE(klass, &ext->fields_obj, rb_imemo_fields_clone(orig->fields_obj));
@@ -363,6 +473,7 @@ rb_class_duplicate_classext(rb_classext_t *orig, VALUE klass, const rb_namespace
                 if (RBASIC_CLASS(iclass) == klass) {
                     // Is the subclass an ICLASS including this module into another class
                     // If so we need to re-associate it under our namespace with the new ext
+                    VM_ASSERT(FL_TEST_RAW(iclass, RCLASS_NAMESPACEABLE));
                     class_duplicate_iclass_classext(iclass, ext, ns);
                 }
             }
@@ -480,10 +591,10 @@ rb_module_add_to_subclasses_list(VALUE module, VALUE iclass)
 }
 
 void
-rb_class_remove_subclass_head(VALUE klass) // TODO: check this is still used and required
+rb_class_remove_subclass_head(VALUE klass)
 {
     rb_classext_t *ext = RCLASS_EXT_WRITABLE(klass);
-    rb_class_classext_free_subclasses(ext, klass);
+    rb_class_classext_free_subclasses(ext, klass, false);
 }
 
 static struct rb_subclass_entry *
@@ -494,6 +605,13 @@ class_get_subclasses_for_ns(struct st_table *tbl, VALUE ns_id)
         return (struct rb_subclass_entry *)value;
     }
     return NULL;
+}
+
+static int
+remove_class_from_subclasses_replace_first_entry(st_data_t *key, st_data_t *value, st_data_t arg, int existing)
+{
+    *value = arg;
+    return ST_CONTINUE;
 }
 
 static void
@@ -512,17 +630,18 @@ remove_class_from_subclasses(struct st_table *tbl, VALUE ns_id, VALUE klass)
                 next->prev = prev;
             }
 
-            xfree(entry);
-
             if (first_entry) {
                 if (next) {
-                    st_insert(tbl, ns_id, (st_data_t)next);
+                    st_update(tbl, ns_id, remove_class_from_subclasses_replace_first_entry, (st_data_t)next);
                 }
                 else {
-                    // no subclass entries in this ns
+                    // no subclass entries in this ns after the deletion
                     st_delete(tbl, &ns_id, NULL);
                 }
             }
+
+            xfree(entry);
+
             break;
         }
         else if (first_entry) {
@@ -557,7 +676,7 @@ rb_class_remove_from_module_subclasses(VALUE klass)
 }
 
 void
-rb_class_classext_free_subclasses(rb_classext_t *ext, VALUE klass)
+rb_class_classext_free_subclasses(rb_classext_t *ext, VALUE klass, bool replacing)
 {
     rb_subclass_anchor_t *anchor = RCLASSEXT_SUBCLASSES(ext);
     struct st_table *tbl = anchor->ns_subclasses->tbl;
@@ -576,12 +695,12 @@ rb_class_classext_free_subclasses(rb_classext_t *ext, VALUE klass)
     rb_ns_subclasses_ref_dec(anchor->ns_subclasses);
     xfree(anchor);
 
-    if (RCLASSEXT_NS_SUPER_SUBCLASSES(ext)) {
+    if (!replacing && RCLASSEXT_NS_SUPER_SUBCLASSES(ext)) {
         rb_ns_subclasses_t *ns_sub = RCLASSEXT_NS_SUPER_SUBCLASSES(ext);
         remove_class_from_subclasses(ns_sub->tbl, ns_id, klass);
         rb_ns_subclasses_ref_dec(ns_sub);
     }
-    if (RCLASSEXT_NS_MODULE_SUBCLASSES(ext)) {
+    if (!replacing && RCLASSEXT_NS_MODULE_SUBCLASSES(ext)) {
         rb_ns_subclasses_t *ns_sub = RCLASSEXT_NS_MODULE_SUBCLASSES(ext);
         remove_class_from_subclasses(ns_sub->tbl, ns_id, klass);
         rb_ns_subclasses_ref_dec(ns_sub);
@@ -677,7 +796,7 @@ class_alloc0(enum ruby_value_type type, VALUE klass, bool namespaceable)
 
     RUBY_ASSERT(type == T_CLASS || type == T_ICLASS || type == T_MODULE);
 
-    VALUE flags = type;
+    VALUE flags = type | FL_SHAREABLE;
     if (RGENGC_WB_PROTECTED_CLASS) flags |= FL_WB_PROTECTED;
     if (namespaceable) flags |= RCLASS_NAMESPACEABLE;
 
@@ -1184,7 +1303,7 @@ rb_singleton_class_clone_and_attach(VALUE obj, VALUE attach)
         if (RCLASS_CONST_TBL(klass)) {
             struct clone_const_arg arg;
             struct rb_id_table *table;
-            arg.tbl = table = rb_id_table_create(0);
+            arg.tbl = table = rb_id_table_create(rb_id_table_size(RCLASS_CONST_TBL(klass)));
             arg.klass = clone;
             rb_id_table_foreach(RCLASS_CONST_TBL(klass), clone_const_i, &arg);
             RCLASS_SET_CONST_TBL(clone, table, false);

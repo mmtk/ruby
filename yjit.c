@@ -38,11 +38,6 @@
 
 #include <errno.h>
 
-// Field offsets for the RString struct
-enum rstring_offsets {
-    RUBY_OFFSET_RSTRING_LEN = offsetof(struct RString, len)
-};
-
 // We need size_t to have a known size to simplify code generation and FFI.
 // TODO(alan): check this in configure.ac to fail fast on 32 bit platforms.
 STATIC_ASSERT(64b_size_t, SIZE_MAX == UINT64_MAX);
@@ -68,12 +63,6 @@ STATIC_ASSERT(pointer_tagging_scheme, USE_FLONUM);
 // we are sometimes a static library where the option doesn't prevent name collision.
 // The "_yjit_" part is for trying to be informative. We might want different
 // suffixes for symbols meant for Rust and symbols meant for broader CRuby.
-
-long
-rb_yjit_array_len(VALUE a)
-{
-    return rb_array_len(a);
-}
 
 # define PTR2NUM(x)   (rb_int2inum((intptr_t)(void *)(x)))
 
@@ -240,14 +229,6 @@ rb_iseq_set_yjit_payload(const rb_iseq_t *iseq, void *payload)
     iseq->body->yjit_payload = payload;
 }
 
-rb_proc_t *
-rb_yjit_get_proc_ptr(VALUE procv)
-{
-    rb_proc_t *proc;
-    GetProcPtr(procv, proc);
-    return proc;
-}
-
 // This is defined only as a named struct inside rb_iseq_constant_body.
 // By giving it a separate typedef, we make it nameable by rust-bindgen.
 // Bindgen's temp/anon name isn't guaranteed stable.
@@ -256,24 +237,11 @@ typedef struct rb_iseq_param_keyword rb_seq_param_keyword_struct;
 ID rb_get_symbol_id(VALUE namep);
 
 VALUE
-rb_get_def_bmethod_proc(rb_method_definition_t *def)
-{
-    RUBY_ASSERT(def->type == VM_METHOD_TYPE_BMETHOD);
-    return def->body.bmethod.proc;
-}
-
-VALUE
 rb_optimized_call(VALUE *recv, rb_execution_context_t *ec, int argc, VALUE *argv, int kw_splat, VALUE block_handler)
 {
     rb_proc_t *proc;
     GetProcPtr(recv, proc);
     return rb_vm_invoke_proc(ec, proc, argc, argv, kw_splat, block_handler);
-}
-
-unsigned int
-rb_yjit_iseq_builtin_attrs(const rb_iseq_t *iseq)
-{
-    return iseq->body->builtin_attrs;
 }
 
 // If true, the iseq has only opt_invokebuiltin_delegate(_leave) and leave insns.
@@ -309,14 +277,6 @@ rb_yjit_str_simple_append(VALUE str1, VALUE str2)
 
 extern VALUE *rb_vm_base_ptr(struct rb_control_frame_struct *cfp);
 
-// YJIT needs this function to never allocate and never raise
-VALUE
-rb_yarv_str_eql_internal(VALUE str1, VALUE str2)
-{
-    // We wrap this since it's static inline
-    return rb_str_eql_internal(str1, str2);
-}
-
 VALUE
 rb_str_neq_internal(VALUE str1, VALUE str2)
 {
@@ -336,12 +296,6 @@ VALUE
 rb_yjit_fix_div_fix(VALUE recv, VALUE obj)
 {
     return rb_fix_div_fix(recv, obj);
-}
-
-VALUE
-rb_yjit_fix_mod_fix(VALUE recv, VALUE obj)
-{
-    return rb_fix_mod_fix(recv, obj);
 }
 
 // Return non-zero when `obj` is an array and its last item is a

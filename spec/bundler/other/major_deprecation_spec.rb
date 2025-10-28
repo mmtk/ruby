@@ -573,6 +573,53 @@ RSpec.describe "major deprecations" do
     end
   end
 
+  context "bundle install with a lockfile including X64_MINGW_LEGACY platform" do
+    before do
+      gemfile <<~G
+        source "https://gem.repo1"
+        gem "rake"
+      G
+
+      lockfile <<~L
+        GEM
+          remote: https://rubygems.org/
+          specs:
+            rake (10.3.2)
+
+        PLATFORMS
+          ruby
+          x64-mingw32
+
+        DEPENDENCIES
+          rake
+
+        BUNDLED WITH
+           #{Bundler::VERSION}
+      L
+    end
+
+    it "warns a helpful error" do
+      bundle "install", raise_on_error: false
+
+      expect(err).to include("Found x64-mingw32 in lockfile, which is deprecated and will be removed in the future.")
+    end
+  end
+
+  context "with a global path source" do
+    before do
+      build_lib "foo"
+
+      install_gemfile <<-G, raise_on_error: false
+        path "#{lib_path("foo-1.0")}"
+        gem 'foo'
+      G
+    end
+
+    it "shows an error" do
+      expect(err).to include("You can no longer specify a path source by itself")
+    end
+  end
+
   context "when Bundler.setup is run in a ruby script" do
     before do
       create_file "gems.rb", "source 'https://gem.repo1'"

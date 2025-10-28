@@ -66,6 +66,8 @@ int ruby_assert_critical_section_entered = 0;
 
 static void *native_main_thread_stack_top;
 
+bool ruby_vm_during_cleanup = false;
+
 VALUE rb_str_concat_literals(size_t, const VALUE*);
 
 VALUE vm_exec(rb_execution_context_t *);
@@ -115,6 +117,7 @@ rb_vm_search_cf_from_ep(const rb_execution_context_t *ec, const rb_control_frame
 static const VALUE *
 VM_EP_RUBY_LEP(const rb_execution_context_t *ec, const rb_control_frame_t *current_cfp)
 {
+    // rb_vmdebug_namespace_env_dump_raw() simulates this function
     const VALUE *ep = current_cfp->ep;
     const rb_control_frame_t * const eocfp = RUBY_VM_END_CONTROL_FRAME(ec); /* end of control frame pointer */
     const rb_control_frame_t *cfp = NULL, *checkpoint_cfp = current_cfp;
@@ -315,7 +318,7 @@ vm_cref_new0(VALUE klass, rb_method_visibility_t visi, int module_func, rb_cref_
 
     VM_ASSERT(singleton || klass);
 
-    rb_cref_t *cref = IMEMO_NEW(rb_cref_t, imemo_cref, refinements);
+    rb_cref_t *cref = SHAREABLE_IMEMO_NEW(rb_cref_t, imemo_cref, refinements);
     cref->klass_or_self = klass;
     cref->next = use_prev_prev ? CREF_NEXT(prev_cref) : prev_cref;
     *((rb_scope_visibility_t *)&cref->scope_visi) = scope_visi;
@@ -1315,7 +1318,7 @@ rb_proc_dup(VALUE self)
         break;
     }
 
-    if (RB_OBJ_SHAREABLE_P(self)) FL_SET_RAW(procval, RUBY_FL_SHAREABLE);
+    if (RB_OBJ_SHAREABLE_P(self)) RB_OBJ_SET_SHAREABLE(procval);
     RB_GC_GUARD(self); /* for: body = rb_proc_dup(body) */
     return procval;
 }
@@ -1379,7 +1382,19 @@ env_copy(const VALUE *src_ep, VALUE read_only_variables)
     const rb_env_t *copied_env = vm_env_new(ep, env_body, src_env->env_size, src_env->iseq);
 
     // Copy after allocations above, since they can move objects in src_ep.
-    RB_OBJ_WRITE(copied_env, &ep[VM_ENV_DATA_INDEX_ME_CREF], src_ep[VM_ENV_DATA_INDEX_ME_CREF]);
+    VALUE svar_val = src_ep[VM_ENV_DATA_INDEX_ME_CREF];
+    if (imemo_type_p(svar_val, imemo_svar)) {
+        const struct vm_svar *svar = (struct vm_svar *)svar_val;
+
+        if (svar->cref_or_me) {
+            svar_val = svar->cref_or_me;
+        }
+        else {
+            svar_val = Qfalse;
+        }
+    }
+    RB_OBJ_WRITE(copied_env, &ep[VM_ENV_DATA_INDEX_ME_CREF], svar_val);
+
     ep[VM_ENV_DATA_INDEX_FLAGS] = src_ep[VM_ENV_DATA_INDEX_FLAGS] | VM_ENV_FLAG_ISOLATED;
     if (!VM_ENV_LOCAL_P(src_ep)) {
         VM_ENV_FLAGS_SET(ep, VM_ENV_FLAG_LOCAL);
@@ -1431,6 +1446,7 @@ env_copy(const VALUE *src_ep, VALUE read_only_variables)
         ep[VM_ENV_DATA_INDEX_SPECVAL] = VM_BLOCK_HANDLER_NONE;
     }
 
+    RB_OBJ_SET_SHAREABLE((VALUE)copied_env);
     return copied_env;
 }
 
@@ -1497,9 +1513,10 @@ rb_proc_isolate_bang(VALUE self, VALUE replace_self)
 
         proc_isolate_env(self, proc, Qfalse);
         proc->is_isolated = TRUE;
+        RB_OBJ_WRITE(self, &proc->block.as.captured.self, Qnil);
     }
 
-    FL_SET_RAW(self, RUBY_FL_SHAREABLE);
+    RB_OBJ_SET_SHAREABLE(self);
     return self;
 }
 
@@ -1541,10 +1558,16 @@ rb_proc_ractor_make_shareable(VALUE self, VALUE replace_self)
         proc_isolate_env(self, proc, read_only_variables);
         proc->is_isolated = TRUE;
     }
+    else {
+        VALUE proc_self = vm_block_self(vm_proc_block(self));
+        if (!rb_ractor_shareable_p(proc_self)) {
+            rb_raise(rb_eRactorIsolationError,
+                     "Proc's self is not shareable: %" PRIsVALUE,
+                     self);
+        }
+    }
 
-    rb_obj_freeze(self);
-    FL_SET_RAW(self, RUBY_FL_SHAREABLE);
-
+    RB_OBJ_SET_FROZEN_SHAREABLE(self);
     return self;
 }
 
@@ -3301,6 +3324,7 @@ int
 ruby_vm_destruct(rb_vm_t *vm)
 {
     RUBY_FREE_ENTER("vm");
+    ruby_vm_during_cleanup = true;
 
     if (vm) {
         rb_thread_t *th = vm->ractor.main_thread;
