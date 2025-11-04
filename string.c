@@ -2038,17 +2038,21 @@ str_new_frozen_buffer(VALUE klass, VALUE orig, int copy_encoding)
             TERM_FILL(RSTRING_END(str), TERM_LEN(orig));
         }
         else {
-            // MMTk: In this branch `orig` is neither embedded nor shared.  `heap_str_make_shared`
-            // will create a new string `str` to take over the underlying buffer of `orig` and
-            // become `STR_SHARED_ROOT`, while `orig` will become a `STR_SHARED` that points to
-            // the buffer of `str`.  Since `str` becomes the new shared root, it is safe to freeze
-            // it.  `heap_str_make_shared` already takes care of the `strbuf` field.  Nothing
-            // special needs to be done here when running MMTk.
-            str = heap_str_make_shared(klass, orig);
+            // MMTk: In this branch `orig` is neither embedded nor shared.
             if (RB_OBJ_SHAREABLE_P(orig)) {
+                // MMTk: It looks like CRuby wants to ensure that sharable objects only point to
+                // sharable objects.  I guess this is why it doesn't want to transform a sharable
+                // object into a shared root like `heap_str_make_shared` does.  Nothing special
+                // needs to be done for MMTk here.
                 str = str_new(klass, RSTRING_PTR(orig), RSTRING_LEN(orig));
             }
             else {
+                // MMTk: `heap_str_make_shared` will create a new string `str` to take over the
+                // underlying buffer of `orig` and become `STR_SHARED_ROOT`, while `orig` will
+                // become a `STR_SHARED` that points to the buffer of `str`.  Since `str` becomes
+                // the new shared root, it is safe to freeze it.  `heap_str_make_shared` already
+                // takes care of the `strbuf` field. Nothing special needs to be done here when
+                // running MMTk.
                 str = heap_str_make_shared(klass, orig);
             }
         }
