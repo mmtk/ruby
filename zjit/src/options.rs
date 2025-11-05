@@ -67,7 +67,7 @@ pub struct Options {
     pub dump_hir_graphviz: Option<std::path::PathBuf>,
 
     /// Dump low-level IR
-    pub dump_lir: bool,
+    pub dump_lir: Option<HashSet<DumpLIR>>,
 
     /// Dump all compiled machine code.
     pub dump_disasm: bool,
@@ -101,7 +101,7 @@ impl Default for Options {
             dump_hir_init: None,
             dump_hir_opt: None,
             dump_hir_graphviz: None,
-            dump_lir: false,
+            dump_lir: None,
             dump_disasm: false,
             trace_side_exits: None,
             trace_side_exits_sample_interval: 0,
@@ -117,7 +117,7 @@ impl Default for Options {
 /// description in a separate line if the option name is too long.  80-char limit --> | (any character beyond this `|` column fails the test)
 pub const ZJIT_OPTIONS: &[(&str, &str)] = &[
     ("--zjit-mem-size=num",
-                     "Max amount of memory that ZJIT can use (in MiB)."),
+                     "Max amount of memory that ZJIT can use in MiB (default: 128)."),
     ("--zjit-call-threshold=num",
                      "Number of calls to trigger JIT (default: 30)."),
     ("--zjit-num-profiles=num",
@@ -149,6 +149,47 @@ pub enum DumpHIR {
     // Pretty-print bare High-level IR structs
     Debug,
 }
+
+/// --zjit-dump-lir values. Using snake_case to stringify the exact filter value.
+#[allow(non_camel_case_types)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub enum DumpLIR {
+    /// Dump the initial LIR
+    init,
+    /// Dump LIR after {arch}_split
+    split,
+    /// Dump LIR after alloc_regs
+    alloc_regs,
+    /// Dump LIR after compile_exits
+    compile_exits,
+    /// Dump LIR after {arch}_scratch_split
+    scratch_split,
+}
+
+/// All compiler stages for --zjit-dump-lir=all.
+const DUMP_LIR_ALL: &[DumpLIR] = &[
+    DumpLIR::init,
+    DumpLIR::split,
+    DumpLIR::alloc_regs,
+    DumpLIR::compile_exits,
+    DumpLIR::scratch_split,
+];
+
+/// Mamximum value for --zjit-mem-size/--zjit-exec-mem-size in MiB.
+/// We set 1TiB just to avoid overflow. We could make it smaller.
+const MAX_MEM_MIB: usize = 1024 * 1024;
+
+/// Macro to dump LIR if --zjit-dump-lir is specified
+macro_rules! asm_dump {
+    ($asm:expr, $target:ident) => {
+        if let Some(crate::options::Options { dump_lir: Some(dump_lirs), .. }) = unsafe { crate::options::OPTIONS.as_ref() } {
+            if dump_lirs.contains(&crate::options::DumpLIR::$target) {
+                println!("LIR {}:\n{}", stringify!($target), $asm);
+            }
+        }
+    };
+}
+pub(crate) use asm_dump;
 
 /// Macro to get an option value by name
 macro_rules! get_option {
@@ -220,17 +261,19 @@ fn parse_option(str_ptr: *const std::os::raw::c_char) -> Option<()> {
         ("", "") => {}, // Simply --zjit
 
         ("mem-size", _) => match opt_val.parse::<usize>() {
-            Ok(n) => {
-                // Reject 0 or too large values that could overflow.
-                // The upper bound is 1 TiB but we could make it smaller.
-                if n == 0 || n > 1024 * 1024 {
-                    return None
-                }
+            Ok(n) if (1..=MAX_MEM_MIB).contains(&n) => {
+                // Convert from MiB to bytes internally for convenience
+                options.mem_bytes = n * 1024 * 1024;
+            }
+            _ => return None,
+        },
 
+        ("exec-mem-size", _) => match opt_val.parse::<usize>() {
+            Ok(n) if (1..=MAX_MEM_MIB).contains(&n) => {
                 // Convert from MiB to bytes internally for convenience
                 options.exec_mem_bytes = n * 1024 * 1024;
             }
-            Err(_) => return None,
+            _ => return None,
         },
 
         ("call-threshold", _) => match opt_val.parse() {
@@ -301,7 +344,33 @@ fn parse_option(str_ptr: *const std::os::raw::c_char) -> Option<()> {
             options.dump_hir_graphviz = Some(opt_val);
         }
 
-        ("dump-lir", "") => options.dump_lir = true,
+        ("dump-lir", "") => options.dump_lir = Some(HashSet::from([DumpLIR::init])),
+        ("dump-lir", filters) => {
+            let mut dump_lirs = HashSet::new();
+            for filter in filters.split(',') {
+                let dump_lir = match filter {
+                    "all" => {
+                        for &dump_lir in DUMP_LIR_ALL {
+                            dump_lirs.insert(dump_lir);
+                        }
+                        continue;
+                    }
+                    "init" => DumpLIR::init,
+                    "split" => DumpLIR::split,
+                    "alloc_regs" => DumpLIR::alloc_regs,
+                    "compile_exits" => DumpLIR::compile_exits,
+                    "scratch_split" => DumpLIR::scratch_split,
+                    _ => {
+                        let valid_options = DUMP_LIR_ALL.iter().map(|opt| format!("{opt:?}")).collect::<Vec<_>>().join(", ");
+                        eprintln!("invalid --zjit-dump-lir option: '{filter}'");
+                        eprintln!("valid --zjit-dump-lir options: all, {}", valid_options);
+                        return None;
+                    }
+                };
+                dump_lirs.insert(dump_lir);
+            }
+            options.dump_lir = Some(dump_lirs);
+        }
 
         ("dump-disasm", "") => options.dump_disasm = true,
 

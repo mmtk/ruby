@@ -957,6 +957,24 @@ class TestZJIT < Test::Unit::TestCase
     }, insns: [:opt_new], call_threshold: 2
   end
 
+  def test_opt_newarray_send_include_p
+    assert_compiles '[true, false]', %q{
+      def test(x)
+        [:y, 1, Object.new].include?(x)
+      end
+      [test(1), test("n")]
+    }, insns: [:opt_newarray_send], call_threshold: 1
+  end
+
+  def test_opt_duparray_send_include_p
+    assert_compiles '[true, false]', %q{
+      def test(x)
+        [:y, 1].include?(x)
+      end
+      [test(1), test("n")]
+    }, insns: [:opt_duparray_send], call_threshold: 1
+  end
+
   def test_new_hash_empty
     assert_compiles '{}', %q{
       def test = {}
@@ -1189,6 +1207,30 @@ class TestZJIT < Test::Unit::TestCase
       test(2)
       test(2)
     }, call_threshold: 2, insns: [:opt_aref]
+  end
+
+  def test_empty_array_pop
+    assert_compiles 'nil', %q{
+      def test(arr) = arr.pop
+      test([])
+      test([])
+    }, call_threshold: 2
+  end
+
+  def test_array_pop_no_arg
+    assert_compiles '42', %q{
+      def test(arr) = arr.pop
+      test([32, 33, 42])
+      test([32, 33, 42])
+    }, call_threshold: 2
+  end
+
+  def test_array_pop_arg
+    assert_compiles '[33, 42]', %q{
+      def test(arr) = arr.pop(2)
+      test([32, 33, 42])
+      test([32, 33, 42])
+    }, call_threshold: 2
   end
 
   def test_new_range_inclusive
@@ -2526,6 +2568,16 @@ class TestZJIT < Test::Unit::TestCase
     }, call_threshold: 2
   end
 
+  def test_string_bytesize_multibyte
+    assert_compiles '4', %q{
+      def test(s)
+        s.bytesize
+      end
+
+      test("💎")
+    }, call_threshold: 2
+  end
+
   def test_nil_value_nil_opt_with_guard
     assert_compiles 'true', %q{
       def test(val) = val.nil?
@@ -3110,6 +3162,37 @@ class TestZJIT < Test::Unit::TestCase
       result << test(true)   # Singleton defined, CCall should be invalidated
       result
     }, call_threshold: 2
+  end
+
+  def test_regression_cfp_sp_set_correctly_before_leaf_gc_call
+    omit 'reproduction for known, unresolved ZJIT bug'
+
+    assert_compiles ':ok', %q{
+      def check(l, r)
+        return 1 unless l
+        1 + check(*l) + check(*r)
+      end
+
+      def tree(depth)
+        # This duparray is our leaf-gc target.
+        return [nil, nil] unless depth > 0
+
+        # Modify the local and pass it to the following calls.
+        depth -= 1
+        [tree(depth), tree(depth)]
+      end
+
+      def test
+        GC.stress = true
+        2.times do
+          t = tree(11)
+          check(*t)
+        end
+        :ok
+      end
+
+      test
+    }, call_threshold: 14, num_profiles: 5
   end
 
   private

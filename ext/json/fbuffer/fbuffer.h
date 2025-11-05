@@ -1,54 +1,8 @@
 #ifndef _FBUFFER_H_
 #define _FBUFFER_H_
 
-#include "ruby.h"
-#include "ruby/encoding.h"
+#include "../json.h"
 #include "../vendor/jeaiii-ltoa.h"
-
-/* shims */
-/* This is the fallback definition from Ruby 3.4 */
-
-#ifndef RBIMPL_STDBOOL_H
-#if defined(__cplusplus)
-# if defined(HAVE_STDBOOL_H) && (__cplusplus >= 201103L)
-#  include <cstdbool>
-# endif
-#elif defined(HAVE_STDBOOL_H)
-# include <stdbool.h>
-#elif !defined(HAVE__BOOL)
-typedef unsigned char _Bool;
-# define bool  _Bool
-# define true  ((_Bool)+1)
-# define false ((_Bool)+0)
-# define __bool_true_false_are_defined
-#endif
-#endif
-
-#ifndef NOINLINE
-#if defined(__has_attribute) && __has_attribute(noinline)
-#define NOINLINE() __attribute__((noinline))
-#else
-#define NOINLINE()
-#endif
-#endif
-
-#ifndef RB_UNLIKELY
-#define RB_UNLIKELY(expr) expr
-#endif
-
-#ifndef RB_LIKELY
-#define RB_LIKELY(expr) expr
-#endif
-
-#ifndef MAYBE_UNUSED
-# define MAYBE_UNUSED(x) x
-#endif
-
-#ifdef RUBY_DEBUG
-#ifndef JSON_DEBUG
-#define JSON_DEBUG RUBY_DEBUG
-#endif
-#endif
 
 enum fbuffer_type {
     FBUFFER_HEAP_ALLOCATED = 0,
@@ -283,14 +237,11 @@ static VALUE fbuffer_finalize(FBuffer *fb)
 {
     if (fb->io) {
         fbuffer_flush(fb);
-        fbuffer_free(fb);
         rb_io_flush(fb->io);
         return fb->io;
     } else {
-        VALUE result = rb_utf8_str_new(FBUFFER_PTR(fb), FBUFFER_LEN(fb));
-        fbuffer_free(fb);
-        return result;
+        return rb_utf8_str_new(FBUFFER_PTR(fb), FBUFFER_LEN(fb));
     }
 }
 
-#endif
+#endif // _FBUFFER_H_

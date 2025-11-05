@@ -3750,26 +3750,88 @@ CODE
   def test_encode_fallback_raise_memory_leak
     {
       "hash" => <<~RUBY,
-        fallback = Hash.new { raise }
+        fallback = Hash.new { raise MyError }
       RUBY
       "proc" => <<~RUBY,
-        fallback = proc { raise }
+        fallback = proc { raise MyError }
       RUBY
       "method" => <<~RUBY,
-        def my_method = raise
+        def my_method(_str) = raise MyError
         fallback = method(:my_method)
       RUBY
       "aref" => <<~RUBY,
         fallback = Object.new
-        def fallback.[] = raise
+        def fallback.[](_str) = raise MyError
       RUBY
     }.each do |type, code|
       assert_no_memory_leak([], '', <<~RUBY, "fallback type is #{type}", rss: true)
+        class MyError < StandardError; end
+
         #{code}
 
         100_000.times do |i|
           "\\ufffd".encode(Encoding::US_ASCII, fallback:)
-        rescue
+        rescue MyError
+        end
+      RUBY
+    end
+  end
+
+  def test_encode_fallback_too_big_memory_leak
+    {
+      "hash" => <<~RUBY,
+        fallback = Hash.new { "\\uffee" }
+      RUBY
+      "proc" => <<~RUBY,
+        fallback = proc { "\\uffee" }
+      RUBY
+      "method" => <<~RUBY,
+        def my_method(_str) = "\\uffee"
+        fallback = method(:my_method)
+      RUBY
+      "aref" => <<~RUBY,
+        fallback = Object.new
+        def fallback.[](_str) = "\\uffee"
+      RUBY
+    }.each do |type, code|
+      assert_no_memory_leak([], '', <<~RUBY, "fallback type is #{type}", rss: true)
+        class MyError < StandardError; end
+
+        #{code}
+
+        100_000.times do |i|
+          "\\ufffd".encode(Encoding::US_ASCII, fallback:)
+        rescue ArgumentError
+        end
+      RUBY
+    end
+  end
+
+  def test_encode_fallback_not_string_memory_leak
+    {
+      "hash" => <<~RUBY,
+        fallback = Hash.new { Object.new }
+      RUBY
+      "proc" => <<~RUBY,
+        fallback = proc { Object.new }
+      RUBY
+      "method" => <<~RUBY,
+        def my_method(_str) = Object.new
+        fallback = method(:my_method)
+      RUBY
+      "aref" => <<~RUBY,
+        fallback = Object.new
+        def fallback.[](_str) = Object.new
+      RUBY
+    }.each do |type, code|
+      assert_no_memory_leak([], '', <<~RUBY, "fallback type is #{type}", rss: true)
+        class MyError < StandardError; end
+
+        #{code}
+
+        100_000.times do |i|
+          "\\ufffd".encode(Encoding::US_ASCII, fallback:)
+        rescue TypeError
         end
       RUBY
     end

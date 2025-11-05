@@ -626,8 +626,9 @@ module SyncDefaultGems
     # If the cherry-pick attempt failed, try to resolve conflicts.
     # Skip the commit, if it contains unresolved conflicts or no files to pick up.
     unless picked or resolve_conflicts(gem, sha, edit)
-      `git reset` && `git checkout .` && `git clean -fd`
-      return picked || nil      # Fail unless cherry-picked
+      system(*%w"git --no-pager diff") if !picked && !edit # If failed, show `git diff` unless editing
+      `git reset` && `git checkout .` && `git clean -fd` # Clean up un-committed diffs
+      return picked || nil # Fail unless cherry-picked
     end
 
     # Commit cherry-picked commit
@@ -822,7 +823,13 @@ module SyncDefaultGems
     puts <<-HELP
 \e[1mSync with upstream code of default libraries\e[0m
 
-\e[1mImport a default library through `git clone` and `cp -rf` (git commits are lost)\e[0m
+\e[1mImport all default gems through `git clone` and `cp -rf` (git commits are lost)\e[0m
+  ruby #$0 all
+
+\e[1mImport all released version of default gems\e[0m
+  ruby #$0 all release
+
+\e[1mImport a default gem with specific gem same as all command\e[0m
   ruby #$0 rubygems
 
 \e[1mPick a single commit from the upstream repository\e[0m
@@ -833,6 +840,9 @@ module SyncDefaultGems
 
 \e[1mPick all commits since the last picked commit\e[0m
   ruby #$0 -a rubygems
+
+\e[1mUpdate repositories of default gems\e[0m
+  ruby #$0 up
 
 \e[1mList known libraries\e[0m
   ruby #$0 list

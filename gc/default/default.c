@@ -1023,6 +1023,9 @@ total_final_slots_count(rb_objspace_t *objspace)
 #define GC_INCREMENTAL_SWEEP_SLOT_COUNT 2048
 #define GC_INCREMENTAL_SWEEP_POOL_SLOT_COUNT 1024
 #define is_lazy_sweeping(objspace)           (GC_ENABLE_LAZY_SWEEP && has_sweeping_pages(objspace))
+/* In lazy sweeping or the previous incremental marking finished and did not yield a free page. */
+#define needs_continue_sweeping(objspace, heap) \
+    ((heap)->free_pages == NULL && is_lazy_sweeping(objspace))
 
 #if SIZEOF_LONG == SIZEOF_VOIDP
 # define obj_id_to_ref(objid) ((objid) ^ FIXNUM_FLAG) /* unset FIXNUM_FLAG */
@@ -2112,7 +2115,10 @@ static void
 gc_continue(rb_objspace_t *objspace, rb_heap_t *heap)
 {
     unsigned int lock_lev;
-    gc_enter(objspace, gc_enter_event_continue, &lock_lev);
+    bool needs_gc = is_incremental_marking(objspace) || needs_continue_sweeping(objspace, heap);
+    if (!needs_gc) return;
+
+    gc_enter(objspace, gc_enter_event_continue, &lock_lev); // takes vm barrier, try to avoid
 
     /* Continue marking if in incremental marking. */
     if (is_incremental_marking(objspace)) {
@@ -2121,9 +2127,7 @@ gc_continue(rb_objspace_t *objspace, rb_heap_t *heap)
         }
     }
 
-    /* Continue sweeping if in lazy sweeping or the previous incremental
-     * marking finished and did not yield a free page. */
-    if (heap->free_pages == NULL && is_lazy_sweeping(objspace)) {
+    if (needs_continue_sweeping(objspace, heap)) {
         gc_sweep_continue(objspace, heap);
     }
 
@@ -3105,24 +3109,27 @@ rb_gc_impl_define_finalizer(void *objspace_ptr, VALUE obj, VALUE block)
 
     RBASIC(obj)->flags |= FL_FINALIZE;
 
-    int lev = RB_GC_VM_LOCK();
+    unsigned int lev = RB_GC_VM_LOCK();
 
     if (st_lookup(finalizer_table, obj, &data)) {
         table = (VALUE)data;
+        VALUE dup_table = rb_ary_dup(table);
 
+        RB_GC_VM_UNLOCK(lev);
         /* avoid duplicate block, table is usually small */
         {
             long len = RARRAY_LEN(table);
             long i;
 
             for (i = 0; i < len; i++) {
-                VALUE recv = RARRAY_AREF(table, i);
-                if (rb_equal(recv, block)) {
-                    RB_GC_VM_UNLOCK(lev);
+                VALUE recv = RARRAY_AREF(dup_table, i);
+                if (rb_equal(recv, block)) { // can't be called with VM lock held
                     return recv;
                 }
             }
         }
+        lev = RB_GC_VM_LOCK();
+        RB_GC_GUARD(dup_table);
 
         rb_ary_push(table, block);
     }
@@ -3183,8 +3190,8 @@ get_final(long i, void *data)
     return RARRAY_AREF(table, i + 1);
 }
 
-static void
-run_final(rb_objspace_t *objspace, VALUE zombie)
+static unsigned int
+run_final(rb_objspace_t *objspace, VALUE zombie, unsigned int lev)
 {
     if (RZOMBIE(zombie)->dfree) {
         RZOMBIE(zombie)->dfree(RZOMBIE(zombie)->data);
@@ -3195,7 +3202,9 @@ run_final(rb_objspace_t *objspace, VALUE zombie)
         FL_UNSET(zombie, FL_FINALIZE);
         st_data_t table;
         if (st_delete(finalizer_table, &key, &table)) {
+            RB_GC_VM_UNLOCK(lev);
             rb_gc_run_obj_finalizer(RARRAY_AREF(table, 0), RARRAY_LEN(table) - 1, get_final, (void *)table);
+            lev = RB_GC_VM_LOCK();
         }
         else {
             rb_bug("FL_FINALIZE flag is set, but finalizers are not found");
@@ -3204,6 +3213,7 @@ run_final(rb_objspace_t *objspace, VALUE zombie)
     else {
         GC_ASSERT(!st_lookup(finalizer_table, key, NULL));
     }
+    return lev;
 }
 
 static void
@@ -3216,9 +3226,9 @@ finalize_list(rb_objspace_t *objspace, VALUE zombie)
         next_zombie = RZOMBIE(zombie)->next;
         page = GET_HEAP_PAGE(zombie);
 
-        int lev = RB_GC_VM_LOCK();
+        unsigned int lev = RB_GC_VM_LOCK();
 
-        run_final(objspace, zombie);
+        lev = run_final(objspace, zombie, lev);
         {
             GC_ASSERT(BUILTIN_TYPE(zombie) == T_ZOMBIE);
             GC_ASSERT(page->heap->final_slots_count > 0);

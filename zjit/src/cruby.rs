@@ -584,6 +584,13 @@ impl VALUE {
         }
     }
 
+    pub fn struct_embedded_p(self) -> bool {
+        unsafe {
+            RB_TYPE_P(self, RUBY_T_STRUCT) &&
+            FL_TEST_RAW(self, VALUE(RSTRUCT_EMBED_LEN_MASK)) != VALUE(0)
+        }
+    }
+
     pub fn as_fixnum(self) -> i64 {
         assert!(self.fixnum_p());
         (self.0 as i64) >> 1
@@ -1066,7 +1073,7 @@ pub use manual_defs::*;
 pub mod test_utils {
     use std::{ptr::null, sync::Once};
 
-    use crate::{options::{rb_zjit_call_threshold, rb_zjit_prepare_options, set_call_threshold, DEFAULT_CALL_THRESHOLD}, state::{rb_zjit_enabled_p, ZJITState}};
+    use crate::{options::{rb_zjit_call_threshold, rb_zjit_prepare_options, set_call_threshold, DEFAULT_CALL_THRESHOLD}, state::{rb_zjit_entry, ZJITState}};
 
     use super::*;
 
@@ -1109,10 +1116,10 @@ pub mod test_utils {
         }
 
         // Set up globals for convenience
-        ZJITState::init();
+        let zjit_entry = ZJITState::init();
 
         // Enable zjit_* instructions
-        unsafe { rb_zjit_enabled_p = true; }
+        unsafe { rb_zjit_entry = zjit_entry; }
     }
 
     /// Make sure the Ruby VM is set up and run a given callback with rb_protect()
@@ -1371,6 +1378,8 @@ pub(crate) mod ids {
         name: freeze
         name: minusat            content: b"-@"
         name: aref               content: b"[]"
+        name: len
+        name: _as_heap
     }
 
     /// Get an CRuby `ID` to an interned string, e.g. a particular method name.

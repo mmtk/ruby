@@ -128,6 +128,7 @@ make_counters! {
         // exit_: Side exits reasons
         exit_compile_error,
         exit_unknown_newarray_send,
+        exit_unknown_duparray_send,
         exit_unhandled_tailcall,
         exit_unhandled_splat,
         exit_unhandled_kwarg,
@@ -138,11 +139,13 @@ make_counters! {
         exit_fixnum_sub_overflow,
         exit_fixnum_mult_overflow,
         exit_fixnum_mod_by_zero,
+        exit_box_fixnum_overflow,
         exit_guard_type_failure,
         exit_guard_type_not_failure,
         exit_guard_bit_equals_failure,
         exit_guard_int_equals_failure,
         exit_guard_shape_failure,
+        exit_guard_not_frozen_failure,
         exit_patchpoint_bop_redefined,
         exit_patchpoint_method_redefined,
         exit_patchpoint_stable_constant_names,
@@ -166,11 +169,16 @@ make_counters! {
         send_fallback_send_without_block_cfunc_not_variadic,
         send_fallback_send_without_block_cfunc_array_variadic,
         send_fallback_send_without_block_not_optimized_method_type,
+        send_fallback_send_without_block_not_optimized_optimized_method_type,
         send_fallback_send_without_block_direct_too_many_args,
         send_fallback_send_polymorphic,
         send_fallback_send_no_profiles,
         send_fallback_send_not_optimized_method_type,
         send_fallback_ccall_with_frame_too_many_args,
+        // The call has at least one feature on the caller or callee side
+        // that the optimizer does not support.
+        send_fallback_fancy_call_feature,
+        send_fallback_bmethod_non_iseq_proc,
         send_fallback_obj_to_string_not_string,
         send_fallback_not_optimized_instruction,
     }
@@ -201,6 +209,8 @@ make_counters! {
     compile_error_validation_jump_target_not_in_rpo,
     compile_error_validation_operand_not_defined,
     compile_error_validation_duplicate_instruction,
+    compile_error_validation_type_check_failure,
+    compile_error_validation_misc_validation_error,
 
     // The number of times YARV instructions are executed on JIT code
     zjit_insn_count,
@@ -224,6 +234,13 @@ make_counters! {
     unspecialized_send_without_block_def_type_refined,
     unspecialized_send_without_block_def_type_null,
 
+    // Method call optimized_type related to send without block fallback to dynamic dispatch
+    unspecialized_send_without_block_def_type_optimized_send,
+    unspecialized_send_without_block_def_type_optimized_call,
+    unspecialized_send_without_block_def_type_optimized_block_call,
+    unspecialized_send_without_block_def_type_optimized_struct_aref,
+    unspecialized_send_without_block_def_type_optimized_struct_aset,
+
     // Method call def_type related to send fallback to dynamic dispatch
     unspecialized_send_def_type_iseq,
     unspecialized_send_def_type_cfunc,
@@ -239,6 +256,24 @@ make_counters! {
     unspecialized_send_def_type_refined,
     unspecialized_send_def_type_null,
 
+    // Unsupported parameter features
+    fancy_arg_pass_param_rest,
+    fancy_arg_pass_param_opt,
+    fancy_arg_pass_param_kw,
+    fancy_arg_pass_param_kwrest,
+    fancy_arg_pass_param_block,
+    fancy_arg_pass_param_forwardable,
+
+    // Unsupported caller side features
+    fancy_arg_pass_caller_splat,
+    fancy_arg_pass_caller_blockarg,
+    fancy_arg_pass_caller_kwarg,
+    fancy_arg_pass_caller_kw_splat,
+    fancy_arg_pass_caller_tailcall,
+    fancy_arg_pass_caller_super,
+    fancy_arg_pass_caller_zsuper,
+    fancy_arg_pass_caller_forwarding,
+
     // Writes to the VM frame
     vm_write_pc_count,
     vm_write_sp_count,
@@ -248,6 +283,9 @@ make_counters! {
     vm_read_from_parent_iseq_local_count,
     // TODO(max): Implement
     // vm_reify_stack_count,
+
+    // The number of times we ran a dynamic check
+    guard_type_count,
 }
 
 /// Increase a counter by a specified amount
@@ -316,6 +354,8 @@ pub fn exit_counter_for_compile_error(compile_error: &CompileError) -> Counter {
                 JumpTargetNotInRPO(_)         => compile_error_validation_jump_target_not_in_rpo,
                 OperandNotDefined(_, _, _)    => compile_error_validation_operand_not_defined,
                 DuplicateInstruction(_, _)    => compile_error_validation_duplicate_instruction,
+                MismatchedOperandType(..)     => compile_error_validation_type_check_failure,
+                MiscValidationError(..)       => compile_error_validation_misc_validation_error,
             },
         }
     }
@@ -328,6 +368,7 @@ pub fn side_exit_counter(reason: crate::hir::SideExitReason) -> Counter {
     use crate::stats::Counter::*;
     match reason {
         UnknownNewarraySend(_)        => exit_unknown_newarray_send,
+        UnknownDuparraySend(_)        => exit_unknown_duparray_send,
         UnhandledCallType(Tailcall)   => exit_unhandled_tailcall,
         UnhandledCallType(Splat)      => exit_unhandled_splat,
         UnhandledCallType(Kwarg)      => exit_unhandled_kwarg,
@@ -338,10 +379,12 @@ pub fn side_exit_counter(reason: crate::hir::SideExitReason) -> Counter {
         FixnumSubOverflow             => exit_fixnum_sub_overflow,
         FixnumMultOverflow            => exit_fixnum_mult_overflow,
         FixnumModByZero               => exit_fixnum_mod_by_zero,
+        BoxFixnumOverflow             => exit_box_fixnum_overflow,
         GuardType(_)                  => exit_guard_type_failure,
         GuardTypeNot(_)               => exit_guard_type_not_failure,
         GuardBitEquals(_)             => exit_guard_bit_equals_failure,
         GuardShape(_)                 => exit_guard_shape_failure,
+        GuardNotFrozen                => exit_guard_not_frozen_failure,
         CalleeSideExit                => exit_callee_side_exit,
         ObjToStringFallback           => exit_obj_to_string_fallback,
         Interrupt                     => exit_interrupt,
@@ -379,9 +422,13 @@ pub fn send_fallback_counter(reason: crate::hir::SendFallbackReason) -> Counter 
         SendWithoutBlockCfuncNotVariadic          => send_fallback_send_without_block_cfunc_not_variadic,
         SendWithoutBlockCfuncArrayVariadic        => send_fallback_send_without_block_cfunc_array_variadic,
         SendWithoutBlockNotOptimizedMethodType(_) => send_fallback_send_without_block_not_optimized_method_type,
+        SendWithoutBlockNotOptimizedOptimizedMethodType(_)
+                                                  => send_fallback_send_without_block_not_optimized_optimized_method_type,
         SendWithoutBlockDirectTooManyArgs         => send_fallback_send_without_block_direct_too_many_args,
         SendPolymorphic                           => send_fallback_send_polymorphic,
         SendNoProfiles                            => send_fallback_send_no_profiles,
+        FancyFeatureUse                           => send_fallback_fancy_call_feature,
+        BmethodNonIseqProc                        => send_fallback_bmethod_non_iseq_proc,
         SendNotOptimizedMethodType(_)             => send_fallback_send_not_optimized_method_type,
         CCallWithFrameTooManyArgs                 => send_fallback_ccall_with_frame_too_many_args,
         ObjToStringNotString                      => send_fallback_obj_to_string_not_string,
@@ -407,6 +454,19 @@ pub fn send_without_block_fallback_counter_for_method_type(method_type: crate::h
         Missing => unspecialized_send_without_block_def_type_missing,
         Refined => unspecialized_send_without_block_def_type_refined,
         Null => unspecialized_send_without_block_def_type_null,
+    }
+}
+
+pub fn send_without_block_fallback_counter_for_optimized_method_type(method_type: crate::hir::OptimizedMethodType) -> Counter {
+    use crate::hir::OptimizedMethodType::*;
+    use crate::stats::Counter::*;
+
+    match method_type {
+        Send => unspecialized_send_without_block_def_type_optimized_send,
+        Call => unspecialized_send_without_block_def_type_optimized_call,
+        BlockCall => unspecialized_send_without_block_def_type_optimized_block_call,
+        StructAref => unspecialized_send_without_block_def_type_optimized_struct_aref,
+        StructAset => unspecialized_send_without_block_def_type_optimized_struct_aset,
     }
 }
 

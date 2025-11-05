@@ -151,6 +151,8 @@ class << RubyVM::ZJIT
     buf = +"***ZJIT: Printing ZJIT statistics on exit***\n"
     stats = self.stats
 
+    stats[:guard_type_exit_ratio] = stats[:exit_guard_type_failure].to_f / stats[:guard_type_count] * 100
+
     # Show counters independent from exit_* or dynamic_send_*
     print_counters_with_prefix(prefix: 'not_inlined_cfuncs_', prompt: 'not inlined C methods', buf:, stats:, limit: 20)
     # Don't show not_annotated_cfuncs right now because it mostly duplicates not_inlined_cfuncs
@@ -161,6 +163,11 @@ class << RubyVM::ZJIT
     print_counters_with_prefix(prefix: 'unspecialized_send_without_block_def_type_', prompt: 'not optimized method types for send_without_block', buf:, stats:, limit: 20)
     print_counters_with_prefix(prefix: 'not_optimized_yarv_insn_', prompt: 'not optimized instructions', buf:, stats:, limit: 20)
     print_counters_with_prefix(prefix: 'send_fallback_', prompt: 'send fallback reasons', buf:, stats:, limit: 20)
+
+    # Show most popular unsupported call features. Because each call can
+    # use multiple fancy features, a decrease in this number does not
+    # necessarily mean an increase in number of optimized calls.
+    print_counters_with_prefix(prefix: 'fancy_arg_pass_', prompt: 'popular unsupported argument-parameter features', buf:, stats:, limit: 10)
 
     # Show exit counters, ordered by the typical amount of exits for the prefix at the time
     print_counters_with_prefix(prefix: 'unhandled_yarv_insn_', prompt: 'unhandled YARV insns', buf:, stats:, limit: 20)
@@ -197,6 +204,9 @@ class << RubyVM::ZJIT
       :vm_write_to_parent_iseq_local_count,
       :vm_read_from_parent_iseq_local_count,
 
+      :guard_type_count,
+      :guard_type_exit_ratio,
+
       :code_region_bytes,
       :side_exit_count,
       :total_insn_count,
@@ -231,6 +241,8 @@ class << RubyVM::ZJIT
 
       case key
       when :ratio_in_zjit
+        value = '%0.1f%%' % value
+      when :guard_type_exit_ratio
         value = '%0.1f%%' % value
       when /_time_ns\z/
         key = key.to_s.sub(/_time_ns\z/, '_time')

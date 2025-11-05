@@ -1,4 +1,4 @@
-use std::mem::take;
+use std::mem::{self, take};
 
 use crate::asm::*;
 use crate::asm::x86_64::*;
@@ -7,9 +7,15 @@ use crate::virtualmem::CodePtr;
 use crate::cruby::*;
 use crate::backend::lir::*;
 use crate::cast::*;
+use crate::options::asm_dump;
 
 // Use the x86 register type for this platform
 pub type Reg = X86Reg;
+
+/// Convert reg_no for MemBase::Reg into Reg, assuming it's a 64-bit GP register
+pub fn mem_base_reg(reg_no: u8) -> Reg {
+    Reg { num_bits: 64, reg_type: RegType::GP, reg_no }
+}
 
 // Callee-saved registers
 pub const CFP: Opnd = Opnd::Reg(R13_REG);
@@ -69,7 +75,7 @@ impl From<Opnd> for X86Opnd {
                 "Attempted to lower an Opnd::None. This often happens when an out operand was not allocated for an instruction because the output of the instruction was not used. Please ensure you are using the output."
             ),
 
-            _ => panic!("unsupported x86 operand type")
+            _ => panic!("unsupported x86 operand type: {opnd:?}")
         }
     }
 }
@@ -83,7 +89,7 @@ impl From<&Opnd> for X86Opnd {
 
 /// List of registers that can be used for register allocation.
 /// This has the same number of registers for x86_64 and arm64.
-/// SCRATCH_OPND is excluded.
+/// SCRATCH0_OPND is excluded.
 pub const ALLOC_REGS: &[Reg] = &[
     RDI_REG,
     RSI_REG,
@@ -91,29 +97,23 @@ pub const ALLOC_REGS: &[Reg] = &[
     RCX_REG,
     R8_REG,
     R9_REG,
-    R10_REG,
     RAX_REG,
 ];
 
 /// Special scratch register for intermediate processing. It should be used only by
-/// [`Assembler::x86_split_with_scratch_reg`] or [`Assembler::new_with_scratch_reg`].
-const SCRATCH_OPND: Opnd = Opnd::Reg(R11_REG);
+/// [`Assembler::x86_scratch_split`] or [`Assembler::new_with_scratch_reg`].
+const SCRATCH0_OPND: Opnd = Opnd::Reg(R11_REG);
+const SCRATCH1_OPND: Opnd = Opnd::Reg(R10_REG);
 
 impl Assembler {
     /// Return an Assembler with scratch registers disabled in the backend, and a scratch register.
     pub fn new_with_scratch_reg() -> (Self, Opnd) {
-        (Self::new_with_label_names(Vec::default(), 0, true), SCRATCH_OPND)
+        (Self::new_with_accept_scratch_reg(true), SCRATCH0_OPND)
     }
 
     /// Return true if opnd contains a scratch reg
     pub fn has_scratch_reg(opnd: Opnd) -> bool {
-        match opnd {
-            Opnd::Reg(_) => opnd == SCRATCH_OPND,
-            Opnd::Mem(Mem { base: MemBase::Reg(reg_no), .. }) => {
-                reg_no == SCRATCH_OPND.unwrap_reg().reg_no
-            }
-            _ => false,
-        }
+        Self::has_reg(opnd, SCRATCH0_OPND.unwrap_reg())
     }
 
     /// Get the list of registers from which we can allocate on this platform
@@ -137,9 +137,9 @@ impl Assembler {
     /// Split IR instructions for the x86 platform
     fn x86_split(mut self) -> Assembler
     {
+        let mut asm = Assembler::new_with_asm(&self);
         let live_ranges: Vec<LiveRange> = take(&mut self.live_ranges);
         let mut iterator = self.insns.into_iter().enumerate().peekable();
-        let mut asm = Assembler::new_with_label_names(take(&mut self.label_names), live_ranges.len(), self.accept_scratch_reg);
 
         while let Some((index, mut insn)) = iterator.next() {
             let is_load = matches!(insn, Insn::Load { .. } | Insn::LoadInto { .. });
@@ -354,9 +354,9 @@ impl Assembler {
 
                     // Load each operand into the corresponding argument register.
                     if !opnds.is_empty() {
-                        let mut args: Vec<(Reg, Opnd)> = vec![];
+                        let mut args: Vec<(Opnd, Opnd)> = vec![];
                         for (idx, opnd) in opnds.iter_mut().enumerate() {
-                            args.push((C_ARG_OPNDS[idx].unwrap_reg(), *opnd));
+                            args.push((C_ARG_OPNDS[idx], *opnd));
                         }
                         asm.parallel_mov(args);
                     }
@@ -388,20 +388,20 @@ impl Assembler {
 
     /// Split instructions using scratch registers. To maximize the use of the register pool
     /// for VRegs, most splits should happen in [`Self::x86_split`]. However, some instructions
-    /// need to be split with registers after `alloc_regs`, e.g. for `compile_side_exits`, so
+    /// need to be split with registers after `alloc_regs`, e.g. for `compile_exits`, so
     /// this splits them and uses scratch registers for it.
-    pub fn x86_split_with_scratch_reg(mut self) -> Assembler {
+    pub fn x86_scratch_split(self) -> Assembler {
         /// For some instructions, we want to be able to lower a 64-bit operand
         /// without requiring more registers to be available in the register
-        /// allocator. So we just use the SCRATCH_OPND register temporarily to hold
+        /// allocator. So we just use the SCRATCH0_OPND register temporarily to hold
         /// the value before we immediately use it.
-        fn split_64bit_immediate(asm: &mut Assembler, opnd: Opnd) -> Opnd {
+        fn split_64bit_immediate(asm: &mut Assembler, opnd: Opnd, scratch_opnd: Opnd) -> Opnd {
             match opnd {
                 Opnd::Imm(value) => {
                     // 32-bit values will be sign-extended
                     if imm_num_bits(value) > 32 {
-                        asm.mov(SCRATCH_OPND, opnd);
-                        SCRATCH_OPND
+                        asm.mov(scratch_opnd, opnd);
+                        scratch_opnd
                     } else {
                         opnd
                     }
@@ -409,8 +409,8 @@ impl Assembler {
                 Opnd::UImm(value) => {
                     // 32-bit values will be sign-extended
                     if imm_num_bits(value as i64) > 32 {
-                        asm.mov(SCRATCH_OPND, opnd);
-                        SCRATCH_OPND
+                        asm.mov(scratch_opnd, opnd);
+                        scratch_opnd
                     } else {
                         Opnd::Imm(value as i64)
                     }
@@ -419,22 +419,102 @@ impl Assembler {
             }
         }
 
+        /// If a given operand is Opnd::Mem and it uses MemBase::Stack, lower it to MemBase::Reg using a scratch regsiter.
+        fn split_stack_membase(asm: &mut Assembler, opnd: Opnd, scratch_opnd: Opnd, stack_state: &StackState) -> Opnd {
+            if let Opnd::Mem(Mem { base: stack_membase @ MemBase::Stack { .. }, disp, num_bits }) = opnd {
+                let base = Opnd::Mem(stack_state.stack_membase_to_mem(stack_membase));
+                asm.load_into(scratch_opnd, base);
+                Opnd::Mem(Mem { base: MemBase::Reg(scratch_opnd.unwrap_reg().reg_no), disp, num_bits })
+            } else {
+                opnd
+            }
+        }
+
+        /// If opnd is Opnd::Mem, set scratch_reg to *opnd. Return Some(Opnd::Mem) if it needs to be written back from scratch_reg.
+        fn split_memory_write(opnd: &mut Opnd, scratch_opnd: Opnd) -> Option<Opnd> {
+            if let Opnd::Mem(_) = opnd {
+                let mem_opnd = opnd.clone();
+                *opnd = opnd.num_bits().map(|num_bits| scratch_opnd.with_num_bits(num_bits)).unwrap_or(scratch_opnd);
+                Some(mem_opnd)
+            } else {
+                None
+            }
+        }
+
+        /// If both opnd and other are Opnd::Mem, split opnd with scratch_opnd.
+        fn split_if_both_memory(asm: &mut Assembler, opnd: Opnd, other: Opnd, scratch_opnd: Opnd) -> Opnd {
+            if let (Opnd::Mem(_), Opnd::Mem(_)) = (opnd, other) {
+                asm.load_into(scratch_opnd.with_num_bits(opnd.rm_num_bits()), opnd);
+                scratch_opnd.with_num_bits(opnd.rm_num_bits())
+            } else {
+                opnd
+            }
+        }
+
+        /// Move src to dst, splitting it with scratch_opnd if it's a Mem-to-Mem move. Skip it if dst == src.
+        fn asm_mov(asm: &mut Assembler, dst: Opnd, src: Opnd, scratch_opnd: Opnd) {
+            if dst != src {
+                if let (Opnd::Mem(_), Opnd::Mem(_)) = (dst, src) {
+                    asm.mov(scratch_opnd, src);
+                    asm.mov(dst, scratch_opnd);
+                } else {
+                    asm.mov(dst, src);
+                }
+            }
+        }
+
+        // Prepare StackState to lower MemBase::Stack
+        let stack_state = StackState::new(self.stack_base_idx);
+
+        let mut asm_local = Assembler::new_with_asm(&self);
+        let asm = &mut asm_local;
+        asm.accept_scratch_reg = true;
         let mut iterator = self.insns.into_iter().enumerate().peekable();
-        let mut asm = Assembler::new_with_label_names(take(&mut self.label_names), self.live_ranges.len(), true);
 
         while let Some((_, mut insn)) = iterator.next() {
             match &mut insn {
-                Insn::Add { right, .. } |
-                Insn::Sub { right, .. } |
-                Insn::Mul { right, .. } |
-                Insn::And { right, .. } |
-                Insn::Or { right, .. } |
-                Insn::Xor { right, .. } |
-                Insn::Test { right, .. } => {
-                    *right = split_64bit_immediate(&mut asm, *right);
+                Insn::Add { left, right, out } |
+                Insn::Sub { left, right, out } |
+                Insn::And { left, right, out } |
+                Insn::Or  { left, right, out } |
+                Insn::Xor { left, right, out } => {
+                    *left = split_stack_membase(asm, *left, SCRATCH0_OPND, &stack_state);
+                    *left = split_if_both_memory(asm, *left, *right, SCRATCH0_OPND);
+                    *right = split_stack_membase(asm, *right, SCRATCH1_OPND, &stack_state);
+                    *right = split_64bit_immediate(asm, *right, SCRATCH1_OPND);
+
+                    let (out, left) = (*out, *left);
                     asm.push_insn(insn);
+                    asm_mov(asm, out, left, SCRATCH0_OPND);
                 }
+                Insn::Mul { left, right, out } => {
+                    *left = split_stack_membase(asm, *left, SCRATCH0_OPND, &stack_state);
+                    *left = split_if_both_memory(asm, *left, *right, SCRATCH0_OPND);
+                    *right = split_stack_membase(asm, *right, SCRATCH1_OPND, &stack_state);
+                    *right = split_64bit_immediate(asm, *right, SCRATCH1_OPND);
+
+                    // imul doesn't have (Mem, Reg) encoding. Swap left and right in that case.
+                    if let (Opnd::Mem(_), Opnd::Reg(_)) = (&left, &right) {
+                        mem::swap(left, right);
+                    }
+
+                    let (out, left) = (*out, *left);
+                    asm.push_insn(insn);
+                    asm_mov(asm, out, left, SCRATCH0_OPND);
+                }
+                &mut Insn::Not { opnd, out } |
+                &mut Insn::LShift { opnd, out, .. } |
+                &mut Insn::RShift { opnd, out, .. } |
+                &mut Insn::URShift { opnd, out, .. } => {
+                    asm.push_insn(insn);
+                    asm_mov(asm, out, opnd, SCRATCH0_OPND);
+                }
+                Insn::Test { left, right } |
                 Insn::Cmp { left, right } => {
+                    *left = split_stack_membase(asm, *left, SCRATCH1_OPND, &stack_state);
+                    *right = split_stack_membase(asm, *right, SCRATCH0_OPND, &stack_state);
+                    *right = split_if_both_memory(asm, *right, *left, SCRATCH0_OPND);
+
                     let num_bits = match right {
                         Opnd::Imm(value) => Some(imm_num_bits(*value)),
                         Opnd::UImm(value) => Some(uimm_num_bits(*value)),
@@ -449,11 +529,11 @@ impl Assembler {
                     // directly in the instruction.
                     let use_imm = num_bits.is_some() && left.num_bits() == num_bits && num_bits.unwrap() < 64;
                     if !use_imm {
-                        *right = split_64bit_immediate(&mut asm, *right);
+                        *right = split_64bit_immediate(asm, *right, SCRATCH0_OPND);
                     }
                     asm.push_insn(insn);
                 }
-                // For compile_side_exits, support splitting simple C arguments here
+                // For compile_exits, support splitting simple C arguments here
                 Insn::CCall { opnds, .. } if !opnds.is_empty() => {
                     for (i, opnd) in opnds.iter().enumerate() {
                         asm.load_into(C_ARG_OPNDS[i], *opnd);
@@ -461,54 +541,68 @@ impl Assembler {
                     *opnds = vec![];
                     asm.push_insn(insn);
                 }
-                &mut Insn::Lea { opnd, out } => {
-                    match (opnd, out) {
-                        // Split here for compile_side_exits
-                        (Opnd::Mem(_), Opnd::Mem(_)) => {
-                            asm.lea_into(SCRATCH_OPND, opnd);
-                            asm.store(out, SCRATCH_OPND);
-                        }
-                        _ => {
-                            asm.push_insn(insn);
-                        }
+                Insn::CSelZ { out, .. } |
+                Insn::CSelNZ { out, .. } |
+                Insn::CSelE { out, .. } |
+                Insn::CSelNE { out, .. } |
+                Insn::CSelL { out, .. } |
+                Insn::CSelLE { out, .. } |
+                Insn::CSelG { out, .. } |
+                Insn::CSelGE { out, .. } |
+                Insn::Lea { out, .. } => {
+                    let mem_out = split_memory_write(out, SCRATCH0_OPND);
+                    asm.push_insn(insn);
+                    if let Some(mem_out) = mem_out {
+                        asm.store(mem_out, SCRATCH0_OPND);
                     }
                 }
                 Insn::LeaJumpTarget { target, out } => {
                     if let Target::Label(_) = target {
-                        asm.push_insn(Insn::LeaJumpTarget { out: SCRATCH_OPND, target: target.clone() });
-                        asm.mov(*out, SCRATCH_OPND);
+                        asm.push_insn(Insn::LeaJumpTarget { out: SCRATCH0_OPND, target: target.clone() });
+                        asm.mov(*out, SCRATCH0_OPND);
+                    }
+                }
+                Insn::Load { out, opnd } |
+                Insn::LoadInto { dest: out, opnd } => {
+                    *opnd = split_stack_membase(asm, *opnd, SCRATCH0_OPND, &stack_state);
+                    let mem_out = split_memory_write(out, SCRATCH0_OPND);
+                    asm.push_insn(insn);
+                    if let Some(mem_out) = mem_out {
+                        asm.store(mem_out, SCRATCH0_OPND.with_num_bits(mem_out.rm_num_bits()));
                     }
                 }
                 // Convert Opnd::const_ptr into Opnd::Mem. This split is done here to give
-                // a register for compile_side_exits.
+                // a register for compile_exits.
                 &mut Insn::IncrCounter { mem, value } => {
                     assert!(matches!(mem, Opnd::UImm(_)));
-                    asm.load_into(SCRATCH_OPND, mem);
-                    asm.incr_counter(Opnd::mem(64, SCRATCH_OPND, 0), value);
+                    asm.load_into(SCRATCH0_OPND, mem);
+                    asm.incr_counter(Opnd::mem(64, SCRATCH0_OPND, 0), value);
+                }
+                &mut Insn::Mov { dest, src } => {
+                    asm_mov(asm, dest, src, SCRATCH0_OPND);
                 }
                 // Resolve ParallelMov that couldn't be handled without a scratch register.
                 Insn::ParallelMov { moves } => {
-                    for (reg, opnd) in Self::resolve_parallel_moves(&moves, Some(SCRATCH_OPND)).unwrap() {
-                        asm.load_into(Opnd::Reg(reg), opnd);
+                    for (dst, src) in Self::resolve_parallel_moves(&moves, Some(SCRATCH0_OPND)).unwrap() {
+                        asm_mov(asm, dst, src, SCRATCH0_OPND);
                     }
                 }
-                // Handle various operand combinations for spills on compile_side_exits.
+                // Handle various operand combinations for spills on compile_exits.
                 &mut Insn::Store { dest, src } => {
-                    let Opnd::Mem(Mem { num_bits, .. }) = dest else {
-                        panic!("Unexpected Insn::Store destination in x86_split_with_scratch_reg: {dest:?}");
-                    };
+                    let num_bits = dest.rm_num_bits();
+                    let dest = split_stack_membase(asm, dest, SCRATCH1_OPND, &stack_state);
 
                     let src = match src {
                         Opnd::Reg(_) => src,
                         Opnd::Mem(_) => {
-                            asm.mov(SCRATCH_OPND, src);
-                            SCRATCH_OPND
+                            asm.mov(SCRATCH0_OPND, src);
+                            SCRATCH0_OPND
                         }
                         Opnd::Imm(imm) => {
                             // For 64 bit destinations, 32-bit values will be sign-extended
                             if num_bits == 64 && imm_num_bits(imm) > 32 {
-                                asm.mov(SCRATCH_OPND, src);
-                                SCRATCH_OPND
+                                asm.mov(SCRATCH0_OPND, src);
+                                SCRATCH0_OPND
                             } else if uimm_num_bits(imm as u64) <= num_bits {
                                 // If the bit string is short enough for the destination, use the unsigned representation.
                                 // Note that 64-bit and negative values are ruled out.
@@ -520,17 +614,17 @@ impl Assembler {
                         Opnd::UImm(imm) => {
                             // For 64 bit destinations, 32-bit values will be sign-extended
                             if num_bits == 64 && imm_num_bits(imm as i64) > 32 {
-                                asm.mov(SCRATCH_OPND, src);
-                                SCRATCH_OPND
+                                asm.mov(SCRATCH0_OPND, src);
+                                SCRATCH0_OPND
                             } else {
                                 src.into()
                             }
                         }
                         Opnd::Value(_) => {
-                            asm.load_into(SCRATCH_OPND, src);
-                            SCRATCH_OPND
+                            asm.load_into(SCRATCH0_OPND, src);
+                            SCRATCH0_OPND
                         }
-                        src @ (Opnd::None | Opnd::VReg { .. }) => panic!("Unexpected source operand during x86_split_with_scratch_reg: {src:?}"),
+                        src @ (Opnd::None | Opnd::VReg { .. }) => panic!("Unexpected source operand during x86_scratch_split: {src:?}"),
                     };
                     asm.store(dest, src);
                 }
@@ -540,7 +634,7 @@ impl Assembler {
             }
         }
 
-        asm
+        asm_local
     }
 
     /// Emit platform-specific machine code
@@ -589,9 +683,15 @@ impl Assembler {
         // The write_pos for the last Insn::PatchPoint, if any
         let mut last_patch_pos: Option<usize> = None;
 
+        // Install a panic hook to dump Assembler with insn_idx on dev builds
+        let (_hook, mut hook_insn_idx) = AssemblerPanicHook::new(self, 0);
+
         // For each instruction
         let mut insn_idx: usize = 0;
         while let Some(insn) = self.insns.get(insn_idx) {
+            // Update insn_idx that is shown on panic
+            hook_insn_idx.as_mut().map(|idx| idx.lock().map(|mut idx| *idx = insn_idx).unwrap());
+
             match insn {
                 Insn::Comment(text) => {
                     cb.add_comment(text);
@@ -763,7 +863,15 @@ impl Assembler {
 
                 // C function call
                 Insn::CCall { fptr, .. } => {
-                    call_ptr(cb, RAX, *fptr);
+                    match fptr {
+                        Opnd::UImm(fptr) => {
+                            call_ptr(cb, RAX, *fptr as *const u8);
+                        }
+                        Opnd::Reg(_) => {
+                            call(cb, fptr.into());
+                        }
+                        _ => unreachable!("unsupported ccall fptr: {fptr:?}")
+                    }
                 },
 
                 Insn::CRet(opnd) => {
@@ -794,7 +902,7 @@ impl Assembler {
                     match *target {
                         Target::CodePtr(code_ptr) => jmp_ptr(cb, code_ptr),
                         Target::Label(label) => jmp_label(cb, label),
-                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_side_exits"),
+                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_exits"),
                     }
                 }
 
@@ -802,7 +910,7 @@ impl Assembler {
                     match *target {
                         Target::CodePtr(code_ptr) => je_ptr(cb, code_ptr),
                         Target::Label(label) => je_label(cb, label),
-                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_side_exits"),
+                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_exits"),
                     }
                 }
 
@@ -810,7 +918,7 @@ impl Assembler {
                     match *target {
                         Target::CodePtr(code_ptr) => jne_ptr(cb, code_ptr),
                         Target::Label(label) => jne_label(cb, label),
-                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_side_exits"),
+                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_exits"),
                     }
                 }
 
@@ -818,7 +926,7 @@ impl Assembler {
                     match *target {
                         Target::CodePtr(code_ptr) => jl_ptr(cb, code_ptr),
                         Target::Label(label) => jl_label(cb, label),
-                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_side_exits"),
+                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_exits"),
                     }
                 },
 
@@ -826,7 +934,7 @@ impl Assembler {
                     match *target {
                         Target::CodePtr(code_ptr) => jg_ptr(cb, code_ptr),
                         Target::Label(label) => jg_label(cb, label),
-                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_side_exits"),
+                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_exits"),
                     }
                 },
 
@@ -834,7 +942,7 @@ impl Assembler {
                     match *target {
                         Target::CodePtr(code_ptr) => jge_ptr(cb, code_ptr),
                         Target::Label(label) => jge_label(cb, label),
-                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_side_exits"),
+                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_exits"),
                     }
                 },
 
@@ -842,7 +950,7 @@ impl Assembler {
                     match *target {
                         Target::CodePtr(code_ptr) => jbe_ptr(cb, code_ptr),
                         Target::Label(label) => jbe_label(cb, label),
-                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_side_exits"),
+                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_exits"),
                     }
                 },
 
@@ -850,7 +958,7 @@ impl Assembler {
                     match *target {
                         Target::CodePtr(code_ptr) => jb_ptr(cb, code_ptr),
                         Target::Label(label) => jb_label(cb, label),
-                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_side_exits"),
+                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_exits"),
                     }
                 },
 
@@ -858,7 +966,7 @@ impl Assembler {
                     match *target {
                         Target::CodePtr(code_ptr) => jz_ptr(cb, code_ptr),
                         Target::Label(label) => jz_label(cb, label),
-                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_side_exits"),
+                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_exits"),
                     }
                 }
 
@@ -866,7 +974,7 @@ impl Assembler {
                     match *target {
                         Target::CodePtr(code_ptr) => jnz_ptr(cb, code_ptr),
                         Target::Label(label) => jnz_label(cb, label),
-                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_side_exits"),
+                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_exits"),
                     }
                 }
 
@@ -875,7 +983,7 @@ impl Assembler {
                     match *target {
                         Target::CodePtr(code_ptr) => jo_ptr(cb, code_ptr),
                         Target::Label(label) => jo_label(cb, label),
-                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_side_exits"),
+                        Target::SideExit { .. } => unreachable!("Target::SideExit should have been compiled by compile_exits"),
                     }
                 }
 
@@ -954,13 +1062,21 @@ impl Assembler {
     pub fn compile_with_regs(self, cb: &mut CodeBlock, regs: Vec<Reg>) -> Result<(CodePtr, Vec<CodePtr>), CompileError> {
         // The backend is allowed to use scratch registers only if it has not accepted them so far.
         let use_scratch_regs = !self.accept_scratch_reg;
+        asm_dump!(self, init);
 
         let asm = self.x86_split();
+        asm_dump!(asm, split);
+
         let mut asm = asm.alloc_regs(regs)?;
-        // We put compile_side_exits after alloc_regs to avoid extending live ranges for VRegs spilled on side exits.
-        asm.compile_side_exits();
+        asm_dump!(asm, alloc_regs);
+
+        // We put compile_exits after alloc_regs to avoid extending live ranges for VRegs spilled on side exits.
+        asm.compile_exits();
+        asm_dump!(asm, compile_exits);
+
         if use_scratch_regs {
-            asm = asm.x86_split_with_scratch_reg();
+            asm = asm.x86_scratch_split();
+            asm_dump!(asm, scratch_split);
         }
 
         // Create label instances in the code block
@@ -986,10 +1102,55 @@ impl Assembler {
 mod tests {
     use insta::assert_snapshot;
     use crate::assert_disasm_snapshot;
+    use crate::options::rb_zjit_prepare_options;
     use super::*;
 
+    const BOLD_BEGIN: &str = "\x1b[1m";
+    const BOLD_END: &str = "\x1b[22m";
+
     fn setup_asm() -> (Assembler, CodeBlock) {
+        rb_zjit_prepare_options(); // for get_option! on asm.compile
         (Assembler::new(), CodeBlock::new_dummy())
+    }
+
+    #[test]
+    fn test_lir_string() {
+        use crate::hir::SideExitReason;
+
+        let mut asm = Assembler::new();
+        asm.stack_base_idx = 1;
+
+        let label = asm.new_label("bb0");
+        asm.write_label(label.clone());
+        asm.push_insn(Insn::Comment("bb0(): foo@/tmp/a.rb:1".into()));
+        asm.frame_setup(JIT_PRESERVED_REGS);
+
+        let val64 = asm.add(CFP, Opnd::UImm(64));
+        asm.store(Opnd::mem(64, SP, 0x10), val64);
+        let side_exit = Target::SideExit { reason: SideExitReason::Interrupt, pc: 0 as _, stack: vec![], locals: vec![], label: None };
+        asm.push_insn(Insn::Joz(val64, side_exit));
+        asm.parallel_mov(vec![(C_ARG_OPNDS[0], C_RET_OPND.with_num_bits(32)), (C_ARG_OPNDS[1], Opnd::mem(64, SP, -8))]);
+
+        let val32 = asm.sub(Opnd::Value(Qtrue), Opnd::Imm(1));
+        asm.store(Opnd::mem(64, EC, 0x10).with_num_bits(32), val32.with_num_bits(32));
+        asm.je(label);
+        asm.cret(val64);
+
+        asm.frame_teardown(JIT_PRESERVED_REGS);
+        assert_disasm_snapshot!(lir_string(&mut asm), @r"
+        bb0:
+          # bb0(): foo@/tmp/a.rb:1
+          FrameSetup 1, r13, rbx, r12
+          v0 = Add r13, 0x40
+          Store [rbx + 0x10], v0
+          Joz Exit(Interrupt), v0
+          ParallelMov rdi <- eax, rsi <- [rbx - 8]
+          v1 = Sub Value(0x14), Imm(1)
+          Store Mem32[r12 + 0x10], VReg32(v1)
+          Je bb0
+          CRet v0
+          FrameTeardown r13, rbx, r12
+        ");
     }
 
     #[test]
@@ -1367,7 +1528,7 @@ mod tests {
     }
 
     #[test]
-    fn test_reorder_c_args_no_cycle() {
+    fn test_ccall_resolve_parallel_moves_no_cycle() {
         crate::options::rb_zjit_prepare_options();
         let (mut asm, mut cb) = setup_asm();
 
@@ -1385,7 +1546,7 @@ mod tests {
     }
 
     #[test]
-    fn test_reorder_c_args_single_cycle() {
+    fn test_ccall_resolve_parallel_moves_single_cycle() {
         crate::options::rb_zjit_prepare_options();
         let (mut asm, mut cb) = setup_asm();
 
@@ -1408,7 +1569,7 @@ mod tests {
     }
 
     #[test]
-    fn test_reorder_c_args_two_cycles() {
+    fn test_ccall_resolve_parallel_moves_two_cycles() {
         crate::options::rb_zjit_prepare_options();
         let (mut asm, mut cb) = setup_asm();
 
@@ -1435,7 +1596,7 @@ mod tests {
     }
 
     #[test]
-    fn test_reorder_c_args_large_cycle() {
+    fn test_ccall_resolve_parallel_moves_large_cycle() {
         crate::options::rb_zjit_prepare_options();
         let (mut asm, mut cb) = setup_asm();
 
@@ -1460,7 +1621,7 @@ mod tests {
 
     #[test]
     #[ignore]
-    fn test_reorder_c_args_with_insn_out() {
+    fn test_ccall_resolve_parallel_moves_with_insn_out() {
         let (mut asm, mut cb) = setup_asm();
 
         let rax = asm.load(Opnd::UImm(1));
@@ -1551,38 +1712,46 @@ mod tests {
     }
 
     #[test]
-    fn frame_setup_teardown() {
+    fn frame_setup_teardown_preserved_regs() {
         let (mut asm, mut cb) = setup_asm();
-        asm.frame_setup(JIT_PRESERVED_REGS, 0);
+        asm.frame_setup(JIT_PRESERVED_REGS);
         asm.frame_teardown(JIT_PRESERVED_REGS);
-
         asm.cret(C_RET_OPND);
-
-        asm.frame_setup(&[], 5);
-        asm.frame_teardown(&[]);
-
         asm.compile_with_num_regs(&mut cb, 0);
 
-        assert_disasm_snapshot!(cb.disasm(), @"
-            0x0: push rbp
-            0x1: mov rbp, rsp
-            0x4: push r13
-            0x6: push rbx
-            0x7: push r12
-            0x9: sub rsp, 8
-            0xd: mov r13, qword ptr [rbp - 8]
-            0x11: mov rbx, qword ptr [rbp - 0x10]
-            0x15: mov r12, qword ptr [rbp - 0x18]
-            0x19: mov rsp, rbp
-            0x1c: pop rbp
-            0x1d: ret
-            0x1e: push rbp
-            0x1f: mov rbp, rsp
-            0x22: sub rsp, 0x30
-            0x26: mov rsp, rbp
-            0x29: pop rbp
+        assert_disasm_snapshot!(cb.disasm(), @r"
+        0x0: push rbp
+        0x1: mov rbp, rsp
+        0x4: push r13
+        0x6: push rbx
+        0x7: push r12
+        0x9: sub rsp, 8
+        0xd: mov r13, qword ptr [rbp - 8]
+        0x11: mov rbx, qword ptr [rbp - 0x10]
+        0x15: mov r12, qword ptr [rbp - 0x18]
+        0x19: mov rsp, rbp
+        0x1c: pop rbp
+        0x1d: ret
         ");
-        assert_snapshot!(cb.hexdump(), @"554889e541555341544883ec084c8b6df8488b5df04c8b65e84889ec5dc3554889e54883ec304889ec5d");
+        assert_snapshot!(cb.hexdump(), @"554889e541555341544883ec084c8b6df8488b5df04c8b65e84889ec5dc3");
+    }
+
+    #[test]
+    fn frame_setup_teardown_stack_base_idx() {
+        let (mut asm, mut cb) = setup_asm();
+        asm.stack_base_idx = 5;
+        asm.frame_setup(&[]);
+        asm.frame_teardown(&[]);
+        asm.compile_with_num_regs(&mut cb, 0);
+
+        assert_disasm_snapshot!(cb.disasm(), @r"
+        0x0: push rbp
+        0x1: mov rbp, rsp
+        0x4: sub rsp, 0x30
+        0x8: mov rsp, rbp
+        0xb: pop rbp
+        ");
+        assert_snapshot!(cb.hexdump(), @"554889e54883ec304889ec5d");
     }
 
     #[test]
@@ -1593,7 +1762,7 @@ mod tests {
         assert!(imitation_heap_value.heap_object_p());
         asm.store(Opnd::mem(VALUE_BITS, SP, 0), imitation_heap_value.into());
 
-        asm = asm.x86_split_with_scratch_reg();
+        asm = asm.x86_scratch_split();
         let gc_offsets = asm.x86_emit(&mut cb).unwrap();
         assert_eq!(1, gc_offsets.len(), "VALUE source operand should be reported as gc offset");
 

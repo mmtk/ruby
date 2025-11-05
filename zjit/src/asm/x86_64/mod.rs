@@ -47,7 +47,7 @@ pub struct X86Reg
     pub reg_no: u8,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct X86Mem
 {
     // Size in bits
@@ -66,7 +66,7 @@ pub struct X86Mem
     pub disp: i32,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum X86Opnd
 {
     // Dummy operand
@@ -509,7 +509,7 @@ fn write_rm_unary(cb: &mut CodeBlock, op_mem_reg_8: u8, op_mem_reg_pref: u8, op_
 
 // Encode an add-like RM instruction with multiple possible encodings
 fn write_rm_multi(cb: &mut CodeBlock, op_mem_reg8: u8, op_mem_reg_pref: u8, op_reg_mem8: u8, op_reg_mem_pref: u8, op_mem_imm8: u8, op_mem_imm_sml: u8, op_mem_imm_lrg: u8, op_ext_imm: Option<u8>, opnd0: X86Opnd, opnd1: X86Opnd) {
-    assert!(matches!(opnd0, X86Opnd::Reg(_) | X86Opnd::Mem(_)));
+    assert!(matches!(opnd0, X86Opnd::Reg(_) | X86Opnd::Mem(_)), "unexpected opnd0: {opnd0:?}, {opnd1:?}");
 
     // Check the size of opnd0
     let opnd_size = opnd0.num_bits();
@@ -777,13 +777,6 @@ pub fn imul(cb: &mut CodeBlock, opnd0: X86Opnd, opnd1: X86Opnd) {
             //REX.W + 0F AF /rIMUL r64, r/m64
             // Quadword register := Quadword register * r/m64.
             write_rm(cb, false, true, opnd0, opnd1, None, &[0x0F, 0xAF]);
-        }
-
-        // Flip the operands to handle this case. This instruction has weird encoding restrictions.
-        (X86Opnd::Mem(_), X86Opnd::Reg(_)) => {
-            //REX.W + 0F AF /rIMUL r64, r/m64
-            // Quadword register := Quadword register * r/m64.
-            write_rm(cb, false, true, opnd1, opnd0, None, &[0x0F, 0xAF]);
         }
 
         _ => unreachable!()
@@ -1334,7 +1327,7 @@ pub fn test(cb: &mut CodeBlock, rm_opnd: X86Opnd, test_opnd: X86Opnd) {
                 write_rm(cb, rm_num_bits == 16, rm_num_bits == 64, test_opnd, rm_opnd, None, &[0x85]);
             }
         },
-        _ => unreachable!()
+        _ => unreachable!("unexpected operands for test: {rm_opnd:?}, {test_opnd:?}")
     };
 }
 
@@ -1379,4 +1372,75 @@ pub fn xor(cb: &mut CodeBlock, opnd0: X86Opnd, opnd1: X86Opnd) {
         opnd0,
         opnd1
     );
+}
+
+impl fmt::Display for X86Reg {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match X86Opnd::Reg(*self) {
+            RAX  => write!(f, "rax"),
+            RCX  => write!(f, "rcx"),
+            RDX  => write!(f, "rdx"),
+            RBX  => write!(f, "rbx"),
+            RSP  => write!(f, "rsp"),
+            RBP  => write!(f, "rbp"),
+            RSI  => write!(f, "rsi"),
+            RDI  => write!(f, "rdi"),
+            R8   => write!(f, "r8"),
+            R9   => write!(f, "r9"),
+            R10  => write!(f, "r10"),
+            R11  => write!(f, "r11"),
+            R12  => write!(f, "r12"),
+            R13  => write!(f, "r13"),
+            R14  => write!(f, "r14"),
+            R15  => write!(f, "r15"),
+            EAX  => write!(f, "eax"),
+            ECX  => write!(f, "ecx"),
+            EDX  => write!(f, "edx"),
+            EBX  => write!(f, "ebx"),
+            ESP  => write!(f, "esp"),
+            EBP  => write!(f, "ebp"),
+            ESI  => write!(f, "esi"),
+            EDI  => write!(f, "edi"),
+            R8D  => write!(f, "r8d"),
+            R9D  => write!(f, "r9d"),
+            R10D => write!(f, "r10d"),
+            R11D => write!(f, "r11d"),
+            R12D => write!(f, "r12d"),
+            R13D => write!(f, "r13d"),
+            R14D => write!(f, "r14d"),
+            R15D => write!(f, "r15d"),
+            AX   => write!(f, "ax"),
+            CX   => write!(f, "cx"),
+            DX   => write!(f, "dx"),
+            BX   => write!(f, "bx"),
+            BP   => write!(f, "bp"),
+            SI   => write!(f, "si"),
+            DI   => write!(f, "di"),
+            R8W  => write!(f, "r8w"),
+            R9W  => write!(f, "r9w"),
+            R10W => write!(f, "r10w"),
+            R11W => write!(f, "r11w"),
+            R12W => write!(f, "r12w"),
+            R13W => write!(f, "r13w"),
+            R14W => write!(f, "r14w"),
+            R15W => write!(f, "r15w"),
+            AL   => write!(f, "al"),
+            CL   => write!(f, "cl"),
+            DL   => write!(f, "dl"),
+            BL   => write!(f, "bl"),
+            SPL  => write!(f, "spl"),
+            BPL  => write!(f, "bpl"),
+            SIL  => write!(f, "sil"),
+            DIL  => write!(f, "dil"),
+            R8B  => write!(f, "r8b"),
+            R9B  => write!(f, "r9b"),
+            R10B => write!(f, "r10b"),
+            R11B => write!(f, "r11b"),
+            R12B => write!(f, "r12b"),
+            R13B => write!(f, "r13b"),
+            R14B => write!(f, "r14b"),
+            R15B => write!(f, "r15b"),
+            _ => write!(f, "{self:?}"),
+        }
+    }
 }

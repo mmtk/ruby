@@ -756,6 +756,37 @@ assert_equal 'ArgumentError', %q{
   end
 }
 
+# eval with outer locals in a Ractor raises SyntaxError
+# [Bug #21522]
+assert_equal 'SyntaxError', %q{
+  outer = 42
+  r = Ractor.new do
+    eval("outer")
+  end
+  begin
+    r.value
+  rescue Ractor::RemoteError => e
+    e.cause.class
+  end
+}
+
+# eval of an undefined name in a Ractor raises NameError
+assert_equal 'NameError', %q{
+  r = Ractor.new do
+    eval("totally_undefined_name")
+  end
+  begin
+    r.value
+  rescue Ractor::RemoteError => e
+    e.cause.class
+  end
+}
+
+# eval of a local defined inside the Ractor works
+assert_equal '99', %q{
+  Ractor.new { inner = 99; eval("inner").to_s }.value
+}
+
 # ivar in shareable-objects are not allowed to access from non-main Ractor
 assert_equal "can not get unshareable values from instance variables of classes/modules from non-main Ractors", <<~'RUBY', frozen_string_literal: false
   class C
@@ -1158,16 +1189,19 @@ assert_equal 'true', %q{
   [a.frozen?, a[0].frozen?] == [true, false]
 }
 
-# Ractor.make_shareable(a_proc) is not supported now.
-assert_equal 'true', %q{
-  pr = Proc.new{}
+# Ractor.make_shareable(a_proc) requires a shareable receiver
+assert_equal '[:ok, "Proc\'s self is not shareable:"]', %q{
+  pr1 = nil.instance_exec { Proc.new{} }
+  pr2 = Proc.new{}
 
-  begin
-    Ractor.make_shareable(pr)
-  rescue Ractor::Error
-    true
-  else
-    false
+  [pr1, pr2].map do |pr|
+    begin
+      Ractor.make_shareable(pr)
+    rescue Ractor::Error => e
+      e.message[/^.+?:/]
+    else
+      :ok
+    end
   end
 }
 
@@ -1265,7 +1299,7 @@ assert_equal '[:ok, :ok]', %q{
       s = 'str'
       trap(:INT){p s}
     }.join
-  rescue => Ractor::RemoteError
+  rescue Ractor::RemoteError
     a << :ok
   end
 }

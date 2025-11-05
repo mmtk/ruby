@@ -1,7 +1,9 @@
 # frozen_string_literal: true
 require 'mkmf'
 
+$defs << "-DJSON_DEBUG" if ENV["JSON_DEBUG"]
 have_func("rb_enc_interned_str", "ruby/encoding.h") # RUBY_VERSION >= 3.0
+have_func("rb_str_to_interned_str", "ruby.h") # RUBY_VERSION >= 3.0
 have_func("rb_hash_new_capa", "ruby.h") # RUBY_VERSION >= 3.2
 have_func("rb_hash_bulk_insert", "ruby.h") # Missing on TruffleRuby
 have_func("strnlen", "string.h") # Missing on Solaris 10
