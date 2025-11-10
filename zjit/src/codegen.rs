@@ -13,7 +13,8 @@ use crate::invariants::{
     track_bop_assumption, track_cme_assumption, track_no_ep_escape_assumption, track_no_trace_point_assumption,
     track_single_ractor_assumption, track_stable_constant_names_assumption, track_no_singleton_class_assumption
 };
-use crate::gc::{append_gc_offsets, get_or_create_iseq_payload, get_or_create_iseq_payload_ptr, IseqCodePtrs, IseqPayload, IseqStatus};
+use crate::gc::append_gc_offsets;
+use crate::payload::{get_or_create_iseq_payload, get_or_create_iseq_payload_ptr, IseqCodePtrs, IseqPayload, IseqStatus};
 use crate::state::ZJITState;
 use crate::stats::{send_fallback_counter, exit_counter_for_compile_error, incr_counter, incr_counter_by, send_fallback_counter_for_method_type, send_without_block_fallback_counter_for_method_type, send_without_block_fallback_counter_for_optimized_method_type, send_fallback_counter_ptr_for_opcode, CompileError};
 use crate::stats::{counter_ptr, with_time_stat, Counter, Counter::{compile_time_ns, exit_compile_error}};
@@ -220,6 +221,11 @@ fn gen_iseq(cb: &mut CodeBlock, iseq: IseqPtr, function: Option<&Function>) -> R
 
 /// Compile an ISEQ into machine code
 fn gen_iseq_body(cb: &mut CodeBlock, iseq: IseqPtr, function: Option<&Function>, payload: &mut IseqPayload) -> Result<IseqCodePtrs, CompileError> {
+    // If we ran out of code region, we shouldn't attempt to generate new code.
+    if cb.has_dropped_bytes() {
+        return Err(CompileError::OutOfMemory);
+    }
+
     // Convert ISEQ into optimized High-level IR if not given
     let function = match function {
         Some(function) => function,
@@ -342,6 +348,7 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
     let out_opnd = match insn {
         &Insn::Const { val: Const::Value(val) } => gen_const_value(val),
         &Insn::Const { val: Const::CPtr(val) } => gen_const_cptr(val),
+        &Insn::Const { val: Const::CInt64(val) } => gen_const_long(val),
         Insn::Const { .. } => panic!("Unexpected Const in gen_insn: {insn}"),
         Insn::NewArray { elements, state } => gen_new_array(asm, opnds!(elements), &function.frame_state(*state)),
         Insn::NewHash { elements, state } => gen_new_hash(jit, asm, opnds!(elements), &function.frame_state(*state)),
@@ -359,6 +366,7 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         Insn::StringConcat { strings, state, .. } if strings.is_empty() => return Err(*state),
         Insn::StringConcat { strings, state } => gen_string_concat(jit, asm, opnds!(strings), &function.frame_state(*state)),
         &Insn::StringGetbyteFixnum { string, index } => gen_string_getbyte_fixnum(asm, opnd!(string), opnd!(index)),
+        Insn::StringSetbyteFixnum { string, index, value } => gen_string_setbyte_fixnum(asm, opnd!(string), opnd!(index), opnd!(value)),
         Insn::StringAppend { recv, other, state } => gen_string_append(jit, asm, opnd!(recv), opnd!(other), &function.frame_state(*state)),
         Insn::StringIntern { val, state } => gen_intern(asm, opnd!(val), &function.frame_state(*state)),
         Insn::ToRegexp { opt, values, state } => gen_toregexp(jit, asm, *opt, opnds!(values), &function.frame_state(*state)),
@@ -401,12 +409,15 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         &Insn::IsBitNotEqual { left, right } => gen_is_bit_not_equal(asm, opnd!(left), opnd!(right)),
         &Insn::BoxBool { val } => gen_box_bool(asm, opnd!(val)),
         &Insn::BoxFixnum { val, state } => gen_box_fixnum(jit, asm, opnd!(val), &function.frame_state(state)),
+        &Insn::UnboxFixnum { val } => gen_unbox_fixnum(asm, opnd!(val)),
         Insn::Test { val } => gen_test(asm, opnd!(val)),
         Insn::GuardType { val, guard_type, state } => gen_guard_type(jit, asm, opnd!(val), *guard_type, &function.frame_state(*state)),
         Insn::GuardTypeNot { val, guard_type, state } => gen_guard_type_not(jit, asm, opnd!(val), *guard_type, &function.frame_state(*state)),
         Insn::GuardBitEquals { val, expected, state } => gen_guard_bit_equals(jit, asm, opnd!(val), *expected, &function.frame_state(*state)),
         &Insn::GuardBlockParamProxy { level, state } => no_output!(gen_guard_block_param_proxy(jit, asm, level, &function.frame_state(state))),
         Insn::GuardNotFrozen { val, state } => gen_guard_not_frozen(jit, asm, opnd!(val), &function.frame_state(*state)),
+        &Insn::GuardLess { left, right, state } => gen_guard_less(jit, asm, opnd!(left), opnd!(right), &function.frame_state(state)),
+        &Insn::GuardGreaterEq { left, right, state } => gen_guard_greater_eq(jit, asm, opnd!(left), opnd!(right), &function.frame_state(state)),
         Insn::PatchPoint { invariant, state } => no_output!(gen_patch_point(jit, asm, invariant, &function.frame_state(*state))),
         Insn::CCall { cfunc, args, name: _, return_type: _, elidable: _ } => gen_ccall(asm, *cfunc, opnds!(args)),
         // Give up CCallWithFrame for 7+ args since asm.ccall() doesn't support it.
@@ -426,6 +437,8 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         Insn::GetClassVar { id, ic, state } => gen_getclassvar(jit, asm, *id, *ic, &function.frame_state(*state)),
         Insn::SetClassVar { id, val, ic, state } => no_output!(gen_setclassvar(jit, asm, *id, opnd!(val), *ic, &function.frame_state(*state))),
         Insn::SetIvar { self_val, id, val, state } => no_output!(gen_setivar(jit, asm, opnd!(self_val), *id, opnd!(val), &function.frame_state(*state))),
+        Insn::SetInstanceVariable { self_val, id, ic, val, state } => no_output!(gen_set_instance_variable(jit, asm, opnd!(self_val), *id, *ic, opnd!(val), &function.frame_state(*state))),
+        Insn::FixnumBitCheck { val, index } => gen_fixnum_bit_check(asm, opnd!(val), *index),
         Insn::SideExit { state, reason } => no_output!(gen_side_exit(jit, asm, reason, &function.frame_state(*state))),
         Insn::PutSpecialObject { value_type } => gen_putspecialobject(asm, *value_type),
         Insn::AnyToString { val, str, state } => gen_anytostring(asm, opnd!(val), opnd!(str), &function.frame_state(*state)),
@@ -563,6 +576,10 @@ fn gen_is_block_given(jit: &JITState, asm: &mut Assembler) -> Opnd {
     }
 }
 
+fn gen_unbox_fixnum(asm: &mut Assembler, val: Opnd) -> Opnd {
+    asm.rshift(val, Opnd::UImm(1))
+}
+
 /// Get a local variable from a higher scope or the heap. `local_ep_offset` is in number of VALUEs.
 /// We generate this instruction with level=0 only when the local variable is on the heap, so we
 /// can't optimize the level=0 case using the SP register.
@@ -634,6 +651,18 @@ fn gen_guard_not_frozen(jit: &JITState, asm: &mut Assembler, val: Opnd, state: &
     val
 }
 
+fn gen_guard_less(jit: &JITState, asm: &mut Assembler, left: Opnd, right: Opnd, state: &FrameState) -> Opnd {
+    asm.cmp(left, right);
+    asm.jge(side_exit(jit, state, SideExitReason::GuardLess));
+    left
+}
+
+fn gen_guard_greater_eq(jit: &JITState, asm: &mut Assembler, left: Opnd, right: Opnd, state: &FrameState) -> Opnd {
+    asm.cmp(left, right);
+    asm.jl(side_exit(jit, state, SideExitReason::GuardGreaterEq));
+    left
+}
+
 fn gen_get_constant_path(jit: &JITState, asm: &mut Assembler, ic: *const iseq_inline_constant_cache, state: &FrameState) -> Opnd {
     unsafe extern "C" {
         fn rb_vm_opt_getconstant_path(ec: EcPtr, cfp: CfpPtr, ic: *const iseq_inline_constant_cache) -> VALUE;
@@ -643,6 +672,12 @@ fn gen_get_constant_path(jit: &JITState, asm: &mut Assembler, ic: *const iseq_in
     gen_prepare_non_leaf_call(jit, asm, state);
 
     asm_ccall!(asm, rb_vm_opt_getconstant_path, EC, CFP, Opnd::const_ptr(ic))
+}
+
+fn gen_fixnum_bit_check(asm: &mut Assembler, val: Opnd, index: u8) -> Opnd {
+    let bit_test: u64 = 0x01 << (index + 1);
+    asm.test(val, bit_test.into());
+    asm.csel_z(Qtrue.into(), Qfalse.into())
 }
 
 fn gen_invokebuiltin(jit: &JITState, asm: &mut Assembler, state: &FrameState, bf: &rb_builtin_function, leaf: bool, args: Vec<Opnd>) -> lir::Opnd {
@@ -840,6 +875,15 @@ fn gen_setivar(jit: &mut JITState, asm: &mut Assembler, recv: Opnd, id: ID, val:
     asm_ccall!(asm, rb_ivar_set, recv, id.0.into(), val);
 }
 
+/// Emit an uncached instance variable store using the interpreter inline cache
+fn gen_set_instance_variable(jit: &mut JITState, asm: &mut Assembler, recv: Opnd, id: ID, ic: *const iseq_inline_constant_cache, val: Opnd, state: &FrameState) {
+    gen_incr_counter(asm, Counter::dynamic_setivar_count);
+    // Setting an ivar can raise FrozenError, so we need proper frame state for exception handling.
+    gen_prepare_non_leaf_call(jit, asm, state);
+    let iseq = Opnd::Value(jit.iseq.into());
+    asm_ccall!(asm, rb_vm_setinstancevariable, iseq, recv, id.0.into(), val, Opnd::const_ptr(ic));
+}
+
 fn gen_getclassvar(jit: &mut JITState, asm: &mut Assembler, id: ID, ic: *const iseq_inline_cvar_cache_entry, state: &FrameState) -> Opnd {
     gen_prepare_non_leaf_call(jit, asm, state);
     asm_ccall!(asm, rb_vm_getclassvariable, VALUE::from(jit.iseq).into(), CFP, id.0.into(), Opnd::const_ptr(ic))
@@ -964,6 +1008,7 @@ fn gen_array_extend(jit: &mut JITState, asm: &mut Assembler, left: Opnd, right: 
 }
 
 fn gen_guard_shape(jit: &mut JITState, asm: &mut Assembler, val: Opnd, shape: ShapeId, state: &FrameState) -> Opnd {
+    gen_incr_counter(asm, Counter::guard_shape_count);
     let shape_id_offset = unsafe { rb_shape_id_offset() };
     let val = asm.load(val);
     let shape_opnd = Opnd::mem(SHAPE_ID_NUM_BITS as u8, val, shape_id_offset);
@@ -1021,6 +1066,10 @@ fn gen_const_value(val: VALUE) -> lir::Opnd {
 /// Compile Const::CPtr
 fn gen_const_cptr(val: *const u8) -> lir::Opnd {
     Opnd::const_ptr(val)
+}
+
+fn gen_const_long(val: i64) -> lir::Opnd {
+    Opnd::Imm(val)
 }
 
 /// Compile a basic block argument
@@ -2147,7 +2196,8 @@ fn gen_function_stub(cb: &mut CodeBlock, iseq_call: IseqCallRef) -> Result<CodeP
     })
 }
 
-/// Generate a trampoline that is used when a
+/// Generate a trampoline that is used when a function stub is called.
+/// See [gen_function_stub] for how it's used.
 pub fn gen_function_stub_hit_trampoline(cb: &mut CodeBlock) -> Result<CodePtr, CompileError> {
     let (mut asm, scratch_reg) = Assembler::new_with_scratch_reg();
     asm_comment!(asm, "function_stub_hit trampoline");
@@ -2275,6 +2325,11 @@ fn gen_string_concat(jit: &mut JITState, asm: &mut Assembler, strings: Vec<Opnd>
 fn gen_string_getbyte_fixnum(asm: &mut Assembler, string: Opnd, index: Opnd) -> Opnd {
     // TODO(max): Open-code rb_str_getbyte to avoid a call
     asm_ccall!(asm, rb_str_getbyte, string, index)
+}
+
+fn gen_string_setbyte_fixnum(asm: &mut Assembler, string: Opnd, index: Opnd, value: Opnd) -> Opnd {
+    // rb_str_setbyte is not leaf, but we guard types and index ranges in HIR
+    asm_ccall!(asm, rb_str_setbyte, string, index, value)
 }
 
 fn gen_string_append(jit: &mut JITState, asm: &mut Assembler, string: Opnd, val: Opnd, state: &FrameState) -> Opnd {

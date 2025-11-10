@@ -1,4 +1,4 @@
-# NEWS for Ruby 3.5.0
+# NEWS for Ruby 4.0.0
 
 This document is a list of user-visible feature changes
 since the **3.4.0** release, except for bug fixes.
@@ -55,6 +55,9 @@ Note: We're only listing outstanding class updates.
 
         [[Feature #21219]]
 
+    * A deprecated behavior, process creation by `Kernel#open` with a
+      leading `|`, was removed.  [[Feature #19630]]
+
 * Binding
 
     * `Binding#local_variables` does no longer include numbered parameters.
@@ -65,6 +68,9 @@ Note: We're only listing outstanding class updates.
 
     * `IO.select` accepts `Float::INFINITY` as a timeout argument.
       [[Feature #20610]]
+
+    * A deprecated behavior, process creation by `IO` class methods
+      with a leading `|`, was removed.  [[Feature #19630]]
 
 * Math
 
@@ -192,7 +198,7 @@ The following default gems are updated.
 * io-console 0.8.1
 * io-nonblock 0.3.2
 * io-wait 0.3.3
-* json 2.15.2
+* json 2.16.0
 * net-http 0.7.0
 * openssl 4.0.0.pre
 * optparse 0.8.0
@@ -212,10 +218,10 @@ The following bundled gems are added.
 
 The following bundled gems are updated.
 
-* minitest 5.26.0
-* power_assert 3.0.0
+* minitest 5.26.1
+* power_assert 3.0.1
 * rake 13.3.1
-* test-unit 3.7.0
+* test-unit 3.7.1
 * rexml 3.4.4
 * net-ftp 0.3.9
 * net-imap 0.5.12
@@ -223,6 +229,7 @@ The following bundled gems are updated.
 * matrix 0.4.3
 * prime 0.1.4
 * rbs 3.9.5
+* typeprof 0.31.0
 * debug 1.11.0
 * base64 0.3.0
 * bigdecimal 3.3.1
@@ -307,8 +314,8 @@ A lot of work has gone into making Ractors more stable, performant, and usable. 
 * ZJIT
     * Add an experimental method-based JIT compiler.
       Use `--enable-zjit` on `configure` to enable the `--zjit` support.
-    * As of Ruby 3.5.0-preview2, ZJIT is not yet ready for speeding up most benchmarks.
-      Please refrain from evaluating ZJIT just yet. Stay tuned for the Ruby 3.5 release.
+    * As of Ruby 4.0.0-preview1, ZJIT is not yet ready for speeding up most benchmarks.
+      Please refrain from evaluating ZJIT just yet. Stay tuned for the Ruby 4.0 release.
 * RJIT
     * `--rjit` is removed. We will move the implementation of the third-party JIT API
       to the [ruby/rjit](https://github.com/ruby/rjit) repository.
@@ -316,6 +323,7 @@ A lot of work has gone into making Ractors more stable, performant, and usable. 
 [Feature #15408]: https://bugs.ruby-lang.org/issues/15408
 [Feature #17473]: https://bugs.ruby-lang.org/issues/17473
 [Feature #18455]: https://bugs.ruby-lang.org/issues/18455
+[Feature #19630]: https://bugs.ruby-lang.org/issues/19630
 [Feature #19908]: https://bugs.ruby-lang.org/issues/19908
 [Feature #20610]: https://bugs.ruby-lang.org/issues/20610
 [Feature #20724]: https://bugs.ruby-lang.org/issues/20724

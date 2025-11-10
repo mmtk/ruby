@@ -6,7 +6,7 @@
 #![allow(clippy::if_same_then_else)]
 #![allow(clippy::match_like_matches_macro)]
 use crate::{
-    cast::IntoUsize, codegen::local_idx_to_ep_offset, cruby::*, gc::{get_or_create_iseq_payload, IseqPayload}, options::{debug, get_option, DumpHIR}, state::ZJITState
+    cast::IntoUsize, codegen::local_idx_to_ep_offset, cruby::*, payload::{get_or_create_iseq_payload, IseqPayload}, options::{debug, get_option, DumpHIR}, state::ZJITState
 };
 use std::{
     cell::RefCell, collections::{HashMap, HashSet, VecDeque}, ffi::{c_void, c_uint, CStr}, fmt::Display, mem::{align_of, size_of}, ptr, slice::Iter
@@ -462,6 +462,7 @@ pub enum SideExitReason {
     UnhandledHIRInsn(InsnId),
     UnhandledYARVInsn(u32),
     UnhandledCallType(CallType),
+    TooManyKeywordParameters,
     FixnumAddOverflow,
     FixnumSubOverflow,
     FixnumMultOverflow,
@@ -470,6 +471,8 @@ pub enum SideExitReason {
     GuardShape(ShapeId),
     GuardBitEquals(Const),
     GuardNotFrozen,
+    GuardLess,
+    GuardGreaterEq,
     PatchPoint(Invariant),
     CalleeSideExit,
     ObjToStringFallback,
@@ -560,10 +563,31 @@ impl std::fmt::Display for SideExitReason {
     }
 }
 
+/// Result of resolving the receiver type for method dispatch optimization.
+/// Represents whether we know the receiver's class statically at compile-time,
+/// have profiled type information, or know nothing about it.
+pub enum ReceiverTypeResolution {
+    /// No profile information available for the receiver
+    NoProfile,
+    /// The receiver has a monomorphic profile (single type observed, guard needed)
+    Monomorphic { class: VALUE, profiled_type: ProfiledType },
+    /// The receiver is polymorphic (multiple types, none dominant)
+    Polymorphic,
+    /// The receiver has a skewed polymorphic profile (dominant type with some other types, guard needed)
+    SkewedPolymorphic { class: VALUE, profiled_type: ProfiledType },
+    /// More than N types seen with no clear winner
+    Megamorphic,
+    /// Megamorphic, but with a significant skew towards one type
+    SkewedMegamorphic { class: VALUE, profiled_type: ProfiledType },
+    /// The receiver's class is statically known at JIT compile-time (no guard needed)
+    StaticallyKnown { class: VALUE },
+}
+
 /// Reason why a send-ish instruction cannot be optimized from a fallback instruction
 #[derive(Debug, Clone, Copy)]
 pub enum SendFallbackReason {
     SendWithoutBlockPolymorphic,
+    SendWithoutBlockMegamorphic,
     SendWithoutBlockNoProfiles,
     SendWithoutBlockCfuncNotVariadic,
     SendWithoutBlockCfuncArrayVariadic,
@@ -571,6 +595,7 @@ pub enum SendFallbackReason {
     SendWithoutBlockNotOptimizedOptimizedMethodType(OptimizedMethodType),
     SendWithoutBlockDirectTooManyArgs,
     SendPolymorphic,
+    SendMegamorphic,
     SendNoProfiles,
     SendNotOptimizedMethodType(MethodType),
     CCallWithFrameTooManyArgs,
@@ -579,7 +604,7 @@ pub enum SendFallbackReason {
     BmethodNonIseqProc,
     /// The call has at least one feature on the caller or callee side that the optimizer does not
     /// support.
-    FancyFeatureUse,
+    ComplexArgPass,
     /// Initial fallback reason for every instruction, which should be mutated to
     /// a more actionable reason when an attempt to specialize the instruction fails.
     NotOptimizedInstruction(ruby_vminsn_type),
@@ -599,6 +624,7 @@ pub enum Insn {
     StringConcat { strings: Vec<InsnId>, state: InsnId },
     /// Call rb_str_getbyte with known-Fixnum index
     StringGetbyteFixnum { string: InsnId, index: InsnId },
+    StringSetbyteFixnum { string: InsnId, index: InsnId, value: InsnId },
     StringAppend { recv: InsnId, other: InsnId, state: InsnId },
 
     /// Combine count stack values into a regexp
@@ -658,12 +684,16 @@ pub enum Insn {
     BoxBool { val: InsnId },
     /// Convert a C `long` to a Ruby `Fixnum`. Side exit on overflow.
     BoxFixnum { val: InsnId, state: InsnId },
+    UnboxFixnum { val: InsnId },
     // TODO(max): In iseq body types that are not ISEQ_TYPE_METHOD, rewrite to Constant false.
     Defined { op_type: usize, obj: VALUE, pushval: VALUE, v: InsnId, state: InsnId },
     GetConstantPath { ic: *const iseq_inline_constant_cache, state: InsnId },
     /// Kernel#block_given? but without pushing a frame. Similar to [`Insn::Defined`] with
     /// `DEFINED_YIELD`
     IsBlockGiven,
+    /// Test the bit at index of val, a Fixnum.
+    /// Return Qtrue if the bit is set, else Qfalse.
+    FixnumBitCheck { val: InsnId, index: u8 },
 
     /// Get a global variable named `id`
     GetGlobal { id: ID, state: InsnId },
@@ -675,6 +705,8 @@ pub enum Insn {
     GetIvar { self_val: InsnId, id: ID, state: InsnId },
     /// Set `self_val`'s instance variable `id` to `val`
     SetIvar { self_val: InsnId, id: ID, val: InsnId, state: InsnId },
+    /// Set `self_val`'s instance variable `id` to `val` using the interpreter inline cache
+    SetInstanceVariable { self_val: InsnId, id: ID, ic: *const iseq_inline_constant_cache, val: InsnId, state: InsnId },
     /// Check whether an instance variable exists on `self_val`
     DefinedIvar { self_val: InsnId, id: ID, pushval: VALUE, state: InsnId },
 
@@ -838,6 +870,10 @@ pub enum Insn {
     GuardBlockParamProxy { level: u32, state: InsnId },
     /// Side-exit if val is frozen.
     GuardNotFrozen { val: InsnId, state: InsnId },
+    /// Side-exit if left is not greater than or equal to right (both operands are C long).
+    GuardGreaterEq { left: InsnId, right: InsnId, state: InsnId },
+    /// Side-exit if left is not less than right (both operands are C long).
+    GuardLess { left: InsnId, right: InsnId, state: InsnId },
 
     /// Generate no code (or padding if necessary) and insert a patch point
     /// that can be rewritten to a side exit when the Invariant is broken.
@@ -866,7 +902,7 @@ impl Insn {
             | Insn::PatchPoint { .. } | Insn::SetIvar { .. } | Insn::SetClassVar { .. } | Insn::ArrayExtend { .. }
             | Insn::ArrayPush { .. } | Insn::SideExit { .. } | Insn::SetGlobal { .. }
             | Insn::SetLocal { .. } | Insn::Throw { .. } | Insn::IncrCounter(_) | Insn::IncrCounterPtr { .. }
-            | Insn::CheckInterrupts { .. } | Insn::GuardBlockParamProxy { .. } => false,
+            | Insn::CheckInterrupts { .. } | Insn::GuardBlockParamProxy { .. } | Insn::SetInstanceVariable { .. } => false,
             _ => true,
         }
     }
@@ -1030,6 +1066,9 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
             Insn::StringGetbyteFixnum { string, index, .. } => {
                 write!(f, "StringGetbyteFixnum {string}, {index}")
             }
+            Insn::StringSetbyteFixnum { string, index, value, .. } => {
+                write!(f, "StringSetbyteFixnum {string}, {index}, {value}")
+            }
             Insn::StringAppend { recv, other, .. } => {
                 write!(f, "StringAppend {recv}, {other}")
             }
@@ -1062,6 +1101,7 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
             Insn::IsBitNotEqual { left, right } => write!(f, "IsBitNotEqual {left}, {right}"),
             Insn::BoxBool { val } => write!(f, "BoxBool {val}"),
             Insn::BoxFixnum { val, .. } => write!(f, "BoxFixnum {val}"),
+            Insn::UnboxFixnum { val } => write!(f, "UnboxFixnum {val}"),
             Insn::Jump(target) => { write!(f, "Jump {target}") }
             Insn::IfTrue { val, target } => { write!(f, "IfTrue {val}, {target}") }
             Insn::IfFalse { val, target } => { write!(f, "IfFalse {val}, {target}") }
@@ -1142,9 +1182,12 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
             &Insn::GuardShape { val, shape, .. } => { write!(f, "GuardShape {val}, {:p}", self.ptr_map.map_shape(shape)) },
             Insn::GuardBlockParamProxy { level, .. } => write!(f, "GuardBlockParamProxy l{level}"),
             Insn::GuardNotFrozen { val, .. } => write!(f, "GuardNotFrozen {val}"),
+            Insn::GuardLess { left, right, .. } => write!(f, "GuardLess {left}, {right}"),
+            Insn::GuardGreaterEq { left, right, .. } => write!(f, "GuardGreaterEq {left}, {right}"),
             Insn::PatchPoint { invariant, .. } => { write!(f, "PatchPoint {}", invariant.print(self.ptr_map)) },
             Insn::GetConstantPath { ic, .. } => { write!(f, "GetConstantPath {:p}", self.ptr_map.map_ptr(ic)) },
             Insn::IsBlockGiven => { write!(f, "IsBlockGiven") },
+            Insn::FixnumBitCheck {val, index} => { write!(f, "FixnumBitCheck {val}, {index}") },
             Insn::CCall { cfunc, args, name, return_type: _, elidable: _ } => {
                 write!(f, "CCall {}@{:p}", name.contents_lossy(), self.ptr_map.map_ptr(cfunc))?;
                 for arg in args {
@@ -1193,6 +1236,7 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
             Insn::LoadSelf => write!(f, "LoadSelf"),
             &Insn::LoadField { recv, id, offset, return_type: _ } => write!(f, "LoadField {recv}, :{}@{:p}", id.contents_lossy(), self.ptr_map.map_offset(offset)),
             Insn::SetIvar { self_val, id, val, .. } => write!(f, "SetIvar {self_val}, :{}, {val}", id.contents_lossy()),
+            Insn::SetInstanceVariable { self_val, id, val, .. } => write!(f, "SetInstanceVariable {self_val}, :{}, {val}", id.contents_lossy()),
             Insn::GetGlobal { id, .. } => write!(f, "GetGlobal :{}", id.contents_lossy()),
             Insn::SetGlobal { id, val, .. } => write!(f, "SetGlobal :{}, {val}", id.contents_lossy()),
             &Insn::GetLocal { level, ep_offset, use_sp: true, rest_param } => write!(f, "GetLocal l{level}, SP@{}{}", ep_offset + 1, if rest_param { ", *" } else { "" }),
@@ -1417,12 +1461,12 @@ fn can_direct_send(function: &mut Function, block: BlockId, iseq: *const rb_iseq
     };
 
     use Counter::*;
-    if unsafe { rb_get_iseq_flags_has_rest(iseq) }    { count_failure(fancy_arg_pass_param_rest) }
-    if unsafe { rb_get_iseq_flags_has_opt(iseq) }     { count_failure(fancy_arg_pass_param_opt) }
-    if unsafe { rb_get_iseq_flags_has_kw(iseq) }      { count_failure(fancy_arg_pass_param_kw) }
-    if unsafe { rb_get_iseq_flags_has_kwrest(iseq) }  { count_failure(fancy_arg_pass_param_kwrest) }
-    if unsafe { rb_get_iseq_flags_has_block(iseq) }   { count_failure(fancy_arg_pass_param_block) }
-    if unsafe { rb_get_iseq_flags_forwardable(iseq) } { count_failure(fancy_arg_pass_param_forwardable) }
+    if unsafe { rb_get_iseq_flags_has_rest(iseq) }    { count_failure(complex_arg_pass_param_rest) }
+    if unsafe { rb_get_iseq_flags_has_opt(iseq) }     { count_failure(complex_arg_pass_param_opt) }
+    if unsafe { rb_get_iseq_flags_has_kw(iseq) }      { count_failure(complex_arg_pass_param_kw) }
+    if unsafe { rb_get_iseq_flags_has_kwrest(iseq) }  { count_failure(complex_arg_pass_param_kwrest) }
+    if unsafe { rb_get_iseq_flags_has_block(iseq) }   { count_failure(complex_arg_pass_param_block) }
+    if unsafe { rb_get_iseq_flags_forwardable(iseq) } { count_failure(complex_arg_pass_param_forwardable) }
 
     can_send
 }
@@ -1688,11 +1732,13 @@ impl Function {
                     }
                 },
             &Return { val } => Return { val: find!(val) },
+            &FixnumBitCheck { val, index } => FixnumBitCheck { val: find!(val), index },
             &Throw { throw_state, val, state } => Throw { throw_state, val: find!(val), state },
             &StringCopy { val, chilled, state } => StringCopy { val: find!(val), chilled, state },
             &StringIntern { val, state } => StringIntern { val: find!(val), state: find!(state) },
             &StringConcat { ref strings, state } => StringConcat { strings: find_vec!(strings), state: find!(state) },
             &StringGetbyteFixnum { string, index } => StringGetbyteFixnum { string: find!(string), index: find!(index) },
+            &StringSetbyteFixnum { string, index, value } => StringSetbyteFixnum { string: find!(string), index: find!(index), value: find!(value) },
             &StringAppend { recv, other, state } => StringAppend { recv: find!(recv), other: find!(other), state: find!(state) },
             &ToRegexp { opt, ref values, state } => ToRegexp { opt, values: find_vec!(values), state },
             &Test { val } => Test { val: find!(val) },
@@ -1702,6 +1748,7 @@ impl Function {
             &IsBitNotEqual { left, right } => IsBitNotEqual { left: find!(left), right: find!(right) },
             &BoxBool { val } => BoxBool { val: find!(val) },
             &BoxFixnum { val, state } => BoxFixnum { val: find!(val), state: find!(state) },
+            &UnboxFixnum { val } => UnboxFixnum { val: find!(val) },
             Jump(target) => Jump(find_branch_edge!(target)),
             &IfTrue { val, ref target } => IfTrue { val: find!(val), target: find_branch_edge!(target) },
             &IfFalse { val, ref target } => IfFalse { val: find!(val), target: find_branch_edge!(target) },
@@ -1711,6 +1758,8 @@ impl Function {
             &GuardShape { val, shape, state } => GuardShape { val: find!(val), shape, state },
             &GuardBlockParamProxy { level, state } => GuardBlockParamProxy { level, state: find!(state) },
             &GuardNotFrozen { val, state } => GuardNotFrozen { val: find!(val), state },
+            &GuardGreaterEq { left, right, state } => GuardGreaterEq { left: find!(left), right: find!(right), state },
+            &GuardLess { left, right, state } => GuardLess { left: find!(left), right: find!(right), state },
             &FixnumAdd { left, right, state } => FixnumAdd { left: find!(left), right: find!(right), state },
             &FixnumSub { left, right, state } => FixnumSub { left: find!(left), right: find!(right), state },
             &FixnumMult { left, right, state } => FixnumMult { left: find!(left), right: find!(right), state },
@@ -1817,6 +1866,7 @@ impl Function {
             &GetIvar { self_val, id, state } => GetIvar { self_val: find!(self_val), id, state },
             &LoadField { recv, id, offset, return_type } => LoadField { recv: find!(recv), id, offset, return_type },
             &SetIvar { self_val, id, val, state } => SetIvar { self_val: find!(self_val), id, val: find!(val), state },
+            &SetInstanceVariable { self_val, id, ic, val, state } => SetInstanceVariable { self_val: find!(self_val), id, ic, val: find!(val), state },
             &GetClassVar { id, ic, state } => GetClassVar { id, ic, state },
             &SetClassVar { id, val, ic, state } => SetClassVar { id, val: find!(val), ic, state },
             &SetLocal { val, ep_offset, level } => SetLocal { val: find!(val), ep_offset, level },
@@ -1870,7 +1920,8 @@ impl Function {
             | Insn::IfTrue { .. } | Insn::IfFalse { .. } | Insn::Return { .. } | Insn::Throw { .. }
             | Insn::PatchPoint { .. } | Insn::SetIvar { .. } | Insn::SetClassVar { .. } | Insn::ArrayExtend { .. }
             | Insn::ArrayPush { .. } | Insn::SideExit { .. } | Insn::SetLocal { .. } | Insn::IncrCounter(_)
-            | Insn::CheckInterrupts { .. } | Insn::GuardBlockParamProxy { .. } | Insn::IncrCounterPtr { .. } =>
+            | Insn::CheckInterrupts { .. } | Insn::GuardBlockParamProxy { .. } | Insn::IncrCounterPtr { .. }
+            | Insn::SetInstanceVariable { .. } =>
                 panic!("Cannot infer type of instruction with no output: {}", self.insns[insn.0]),
             Insn::Const { val: Const::Value(val) } => Type::from_value(*val),
             Insn::Const { val: Const::CBool(val) } => Type::from_cbool(*val),
@@ -1895,10 +1946,12 @@ impl Function {
             Insn::IsBitNotEqual { .. } => types::CBool,
             Insn::BoxBool { .. } => types::BoolExact,
             Insn::BoxFixnum { .. } => types::Fixnum,
+            Insn::UnboxFixnum { .. } => types::CInt64,
             Insn::StringCopy { .. } => types::StringExact,
             Insn::StringIntern { .. } => types::Symbol,
             Insn::StringConcat { .. } => types::StringExact,
             Insn::StringGetbyteFixnum { .. } => types::Fixnum.union(types::NilClass),
+            Insn::StringSetbyteFixnum { .. } => types::Fixnum,
             Insn::StringAppend { .. } => types::StringExact,
             Insn::ToRegexp { .. } => types::RegexpExact,
             Insn::NewArray { .. } => types::ArrayExact,
@@ -1921,6 +1974,8 @@ impl Function {
             Insn::GuardBitEquals { val, expected, .. } => self.type_of(*val).intersection(Type::from_const(*expected)),
             Insn::GuardShape { val, .. } => self.type_of(*val),
             Insn::GuardNotFrozen { val, .. } => self.type_of(*val),
+            Insn::GuardLess { left, .. } => self.type_of(*left),
+            Insn::GuardGreaterEq { left, .. } => self.type_of(*left),
             Insn::FixnumAdd  { .. } => types::Fixnum,
             Insn::FixnumSub  { .. } => types::Fixnum,
             Insn::FixnumMult { .. } => types::Fixnum,
@@ -1947,6 +2002,7 @@ impl Function {
             Insn::DefinedIvar { pushval, .. } => Type::from_value(*pushval).union(types::NilClass),
             Insn::GetConstantPath { .. } => types::BasicObject,
             Insn::IsBlockGiven => types::BoolExact,
+            Insn::FixnumBitCheck { .. } => types::BoolExact,
             Insn::ArrayMax { .. } => types::BasicObject,
             Insn::ArrayInclude { .. } => types::BoolExact,
             Insn::DupArrayInclude { .. } => types::BoolExact,
@@ -2099,26 +2155,59 @@ impl Function {
         None
     }
 
-    /// Return whether a given HIR instruction as profiled by the interpreter is polymorphic or
-    /// whether it lacks a profile entirely.
+    /// Resolve the receiver type for method dispatch optimization.
     ///
-    /// * `Some(true)` if polymorphic
-    /// * `Some(false)` if monomorphic
-    /// * `None` if no profiled information so far
-    fn is_polymorphic_at(&self, insn: InsnId, iseq_insn_idx: usize) -> Option<bool> {
-        let profiles = self.profiles.as_ref()?;
-        let entries = profiles.types.get(&iseq_insn_idx)?;
-        let insn = self.chase_insn(insn);
+    /// Takes the receiver's Type, receiver HIR instruction, and ISEQ instruction index.
+    /// Performs a single iteration through profile data to determine the receiver type.
+    ///
+    /// Returns:
+    /// - `StaticallyKnown` if the receiver's exact class is known at compile-time
+    /// - `Monomorphic`/`SkewedPolymorphic` if we have usable profile data
+    /// - `Polymorphic` if the receiver has multiple types
+    /// - `Megamorphic`/`SkewedMegamorphic` if the receiver has too many types to optimize
+    ///   (SkewedMegamorphic may be optimized in the future, but for now we don't)
+    /// - `NoProfile` if we have no type information
+    fn resolve_receiver_type(&self, recv: InsnId, recv_type: Type, insn_idx: usize) -> ReceiverTypeResolution {
+        if let Some(class) = recv_type.runtime_exact_ruby_class() {
+            return ReceiverTypeResolution::StaticallyKnown { class };
+        }
+        let Some(profiles) = self.profiles.as_ref() else {
+            return ReceiverTypeResolution::NoProfile;
+        };
+        let Some(entries) = profiles.types.get(&insn_idx) else {
+            return ReceiverTypeResolution::NoProfile;
+        };
+        let recv = self.chase_insn(recv);
+
         for (entry_insn, entry_type_summary) in entries {
-            if self.union_find.borrow().find_const(*entry_insn) == insn {
-                if !entry_type_summary.is_monomorphic() && !entry_type_summary.is_skewed_polymorphic() {
-                    return Some(true);
-                } else {
-                    return Some(false);
+            if self.union_find.borrow().find_const(*entry_insn) == recv {
+                if entry_type_summary.is_monomorphic() {
+                    let profiled_type = entry_type_summary.bucket(0);
+                    return ReceiverTypeResolution::Monomorphic {
+                        class: profiled_type.class(),
+                        profiled_type,
+                    };
+                } else if entry_type_summary.is_skewed_polymorphic() {
+                    let profiled_type = entry_type_summary.bucket(0);
+                    return ReceiverTypeResolution::SkewedPolymorphic {
+                        class: profiled_type.class(),
+                        profiled_type,
+                    };
+                } else if entry_type_summary.is_skewed_megamorphic() {
+                    let profiled_type = entry_type_summary.bucket(0);
+                    return ReceiverTypeResolution::SkewedMegamorphic {
+                        class: profiled_type.class(),
+                        profiled_type,
+                    };
+                } else if entry_type_summary.is_polymorphic() {
+                    return ReceiverTypeResolution::Polymorphic;
+                } else if entry_type_summary.is_megamorphic() {
+                    return ReceiverTypeResolution::Megamorphic;
                 }
             }
         }
-        None
+
+        ReceiverTypeResolution::NoProfile
     }
 
     pub fn assume_expected_cfunc(&mut self, block: BlockId, class: VALUE, method_id: ID, cfunc: *mut c_void, state: InsnId) -> bool {
@@ -2153,16 +2242,16 @@ impl Function {
         self.push_insn(block, Insn::GuardType { val, guard_type, state })
     }
 
-    fn count_fancy_call_features(&mut self, block: BlockId, ci_flags: c_uint) {
+    fn count_complex_call_features(&mut self, block: BlockId, ci_flags: c_uint) {
         use Counter::*;
-        if 0 != ci_flags & VM_CALL_ARGS_SPLAT     { self.push_insn(block, Insn::IncrCounter(fancy_arg_pass_caller_splat));      }
-        if 0 != ci_flags & VM_CALL_ARGS_BLOCKARG  { self.push_insn(block, Insn::IncrCounter(fancy_arg_pass_caller_blockarg));   }
-        if 0 != ci_flags & VM_CALL_KWARG          { self.push_insn(block, Insn::IncrCounter(fancy_arg_pass_caller_kwarg));      }
-        if 0 != ci_flags & VM_CALL_KW_SPLAT       { self.push_insn(block, Insn::IncrCounter(fancy_arg_pass_caller_kw_splat));   }
-        if 0 != ci_flags & VM_CALL_TAILCALL       { self.push_insn(block, Insn::IncrCounter(fancy_arg_pass_caller_tailcall));   }
-        if 0 != ci_flags & VM_CALL_SUPER          { self.push_insn(block, Insn::IncrCounter(fancy_arg_pass_caller_super));      }
-        if 0 != ci_flags & VM_CALL_ZSUPER         { self.push_insn(block, Insn::IncrCounter(fancy_arg_pass_caller_zsuper));     }
-        if 0 != ci_flags & VM_CALL_FORWARDING     { self.push_insn(block, Insn::IncrCounter(fancy_arg_pass_caller_forwarding)); }
+        if 0 != ci_flags & VM_CALL_ARGS_SPLAT     { self.push_insn(block, Insn::IncrCounter(complex_arg_pass_caller_splat));      }
+        if 0 != ci_flags & VM_CALL_ARGS_BLOCKARG  { self.push_insn(block, Insn::IncrCounter(complex_arg_pass_caller_blockarg));   }
+        if 0 != ci_flags & VM_CALL_KWARG          { self.push_insn(block, Insn::IncrCounter(complex_arg_pass_caller_kwarg));      }
+        if 0 != ci_flags & VM_CALL_KW_SPLAT       { self.push_insn(block, Insn::IncrCounter(complex_arg_pass_caller_kw_splat));   }
+        if 0 != ci_flags & VM_CALL_TAILCALL       { self.push_insn(block, Insn::IncrCounter(complex_arg_pass_caller_tailcall));   }
+        if 0 != ci_flags & VM_CALL_SUPER          { self.push_insn(block, Insn::IncrCounter(complex_arg_pass_caller_super));      }
+        if 0 != ci_flags & VM_CALL_ZSUPER         { self.push_insn(block, Insn::IncrCounter(complex_arg_pass_caller_zsuper));     }
+        if 0 != ci_flags & VM_CALL_FORWARDING     { self.push_insn(block, Insn::IncrCounter(complex_arg_pass_caller_forwarding)); }
     }
 
     fn try_rewrite_fixnum_op(&mut self, block: BlockId, orig_insn_id: InsnId, f: &dyn Fn(InsnId, InsnId) -> Insn, bop: u32, left: InsnId, right: InsnId, state: InsnId) {
@@ -2265,31 +2354,41 @@ impl Function {
                         self.try_rewrite_uminus(block, insn_id, recv, state),
                     Insn::SendWithoutBlock { mut recv, cd, args, state, .. } => {
                         let frame_state = self.frame_state(state);
-                        let (klass, profiled_type) = if let Some(klass) = self.type_of(recv).runtime_exact_ruby_class() {
-                            // If we know the class statically, use it to fold the lookup at compile-time.
-                            (klass, None)
-                        } else {
-                            // If we know that self is reasonably monomorphic from profile information, guard and use it to fold the lookup at compile-time.
-                            // TODO(max): Figure out how to handle top self?
-                            let Some(recv_type) = self.profiled_type_of_at(recv, frame_state.insn_idx) else {
+                        let (klass, profiled_type) = match self.resolve_receiver_type(recv, self.type_of(recv), frame_state.insn_idx) {
+                            ReceiverTypeResolution::StaticallyKnown { class } => (class, None),
+                            ReceiverTypeResolution::Monomorphic { class, profiled_type }
+                            | ReceiverTypeResolution::SkewedPolymorphic { class, profiled_type } => (class, Some(profiled_type)),
+                            ReceiverTypeResolution::SkewedMegamorphic { .. }
+                            | ReceiverTypeResolution::Megamorphic => {
                                 if get_option!(stats) {
-                                    match self.is_polymorphic_at(recv, frame_state.insn_idx) {
-                                        Some(true) => self.set_dynamic_send_reason(insn_id, SendWithoutBlockPolymorphic),
-                                        // If the class isn't known statically, then it should not also be monomorphic
-                                        Some(false) => panic!("Should not have monomorphic profile at this point in this branch"),
-                                        None => self.set_dynamic_send_reason(insn_id, SendWithoutBlockNoProfiles),
-                                    }
+                                    self.set_dynamic_send_reason(insn_id, SendWithoutBlockMegamorphic);
                                 }
-                                self.push_insn_id(block, insn_id); continue;
-                            };
-                            (recv_type.class(), Some(recv_type))
+                                self.push_insn_id(block, insn_id);
+                                continue;
+                            }
+                            ReceiverTypeResolution::Polymorphic => {
+                                if get_option!(stats) {
+                                    self.set_dynamic_send_reason(insn_id, SendWithoutBlockPolymorphic);
+                                }
+                                self.push_insn_id(block, insn_id);
+                                continue;
+                            }
+                            ReceiverTypeResolution::NoProfile => {
+                                if get_option!(stats) {
+                                    self.set_dynamic_send_reason(insn_id, SendWithoutBlockNoProfiles);
+                                }
+                                self.push_insn_id(block, insn_id);
+                                continue;
+                            }
                         };
                         let ci = unsafe { get_call_data_ci(cd) }; // info about the call site
 
-                        // If the call site info indicates that the `Function` has `VM_CALL_ARGS_SPLAT` set, then
+                        // If the call site info indicates that the `Function` has overly complex arguments, then
                         // do not optimize into a `SendWithoutBlockDirect`.
                         let flags = unsafe { rb_vm_ci_flag(ci) };
                         if unspecializable_call_type(flags) {
+                            self.count_complex_call_features(block, flags);
+                            self.set_dynamic_send_reason(insn_id, ComplexArgPass);
                             self.push_insn_id(block, insn_id); continue;
                         }
 
@@ -2314,7 +2413,7 @@ impl Function {
                             // TODO(max): Handle other kinds of parameter passing
                             let iseq = unsafe { get_def_iseq_ptr((*cme).def) };
                             if !can_direct_send(self, block, iseq) {
-                                self.set_dynamic_send_reason(insn_id, FancyFeatureUse);
+                                self.set_dynamic_send_reason(insn_id, ComplexArgPass);
                                 self.push_insn_id(block, insn_id); continue;
                             }
                             self.push_insn(block, Insn::PatchPoint { invariant: Invariant::MethodRedefined { klass, method: mid, cme }, state });
@@ -2340,7 +2439,7 @@ impl Function {
                             let iseq = unsafe { *capture.code.iseq.as_ref() };
 
                             if !can_direct_send(self, block, iseq) {
-                                self.set_dynamic_send_reason(insn_id, FancyFeatureUse);
+                                self.set_dynamic_send_reason(insn_id, ComplexArgPass);
                                 self.push_insn_id(block, insn_id); continue;
                             }
                             // Can't pass a block to a block for now
@@ -2456,22 +2555,32 @@ impl Function {
                     // The actual optimization is done in reduce_send_to_ccall.
                     Insn::Send { recv, cd, state, .. } => {
                         let frame_state = self.frame_state(state);
-                        let klass = if let Some(klass) = self.type_of(recv).runtime_exact_ruby_class() {
-                            // If we know the class statically, use it to fold the lookup at compile-time.
-                            klass
-                        } else {
-                            let Some(recv_type) = self.profiled_type_of_at(recv, frame_state.insn_idx) else {
+                        let klass = match self.resolve_receiver_type(recv, self.type_of(recv), frame_state.insn_idx) {
+                            ReceiverTypeResolution::StaticallyKnown { class } => class,
+                            ReceiverTypeResolution::Monomorphic { class, .. }
+                            | ReceiverTypeResolution::SkewedPolymorphic { class, .. } => class,
+                            ReceiverTypeResolution::SkewedMegamorphic { .. }
+                            | ReceiverTypeResolution::Megamorphic => {
                                 if get_option!(stats) {
-                                    match self.is_polymorphic_at(recv, frame_state.insn_idx) {
-                                        Some(true) => self.set_dynamic_send_reason(insn_id, SendPolymorphic),
-                                        // If the class isn't known statically, then it should not also be monomorphic
-                                        Some(false) => panic!("Should not have monomorphic profile at this point in this branch"),
-                                        None => self.set_dynamic_send_reason(insn_id, SendNoProfiles),
-                                    }
+                                    self.set_dynamic_send_reason(insn_id, SendMegamorphic);
                                 }
-                                self.push_insn_id(block, insn_id); continue;
-                            };
-                            recv_type.class()
+                                self.push_insn_id(block, insn_id);
+                                continue;
+                            }
+                            ReceiverTypeResolution::Polymorphic => {
+                                if get_option!(stats) {
+                                    self.set_dynamic_send_reason(insn_id, SendPolymorphic);
+                                }
+                                self.push_insn_id(block, insn_id);
+                                continue;
+                            }
+                            ReceiverTypeResolution::NoProfile => {
+                                if get_option!(stats) {
+                                    self.set_dynamic_send_reason(insn_id, SendNoProfiles);
+                                }
+                                self.push_insn_id(block, insn_id);
+                                continue;
+                            }
                         };
                         let ci = unsafe { get_call_data_ci(cd) }; // info about the call site
                         let mid = unsafe { vm_ci_mid(ci) };
@@ -2733,12 +2842,12 @@ impl Function {
             let method_id = unsafe { rb_vm_ci_mid(call_info) };
 
             // If we have info about the class of the receiver
-            let (recv_class, profiled_type) = if let Some(class) = self_type.runtime_exact_ruby_class() {
-                (class, None)
-            } else {
-                let iseq_insn_idx = fun.frame_state(state).insn_idx;
-                let Some(recv_type) = fun.profiled_type_of_at(recv, iseq_insn_idx) else { return Err(()) };
-                (recv_type.class(), Some(recv_type))
+            let iseq_insn_idx = fun.frame_state(state).insn_idx;
+            let (recv_class, profiled_type) = match fun.resolve_receiver_type(recv, self_type, iseq_insn_idx) {
+                ReceiverTypeResolution::StaticallyKnown { class } => (class, None),
+                ReceiverTypeResolution::Monomorphic { class, profiled_type }
+                | ReceiverTypeResolution::SkewedPolymorphic { class, profiled_type } => (class, Some(profiled_type)),
+                ReceiverTypeResolution::SkewedMegamorphic { .. } | ReceiverTypeResolution::Polymorphic | ReceiverTypeResolution::Megamorphic | ReceiverTypeResolution::NoProfile => return Err(()),
             };
 
             // Do method lookup
@@ -2770,6 +2879,8 @@ impl Function {
                     // When seeing &block argument, fall back to dynamic dispatch for now
                     // TODO: Support block forwarding
                     if unspecializable_call_type(ci_flags) {
+                        fun.count_complex_call_features(block, ci_flags);
+                        fun.set_dynamic_send_reason(send_insn_id, ComplexArgPass);
                         return Err(());
                     }
 
@@ -2836,12 +2947,12 @@ impl Function {
             let method_id = unsafe { rb_vm_ci_mid(call_info) };
 
             // If we have info about the class of the receiver
-            let (recv_class, profiled_type) = if let Some(class) = self_type.runtime_exact_ruby_class() {
-                (class, None)
-            } else {
-                let iseq_insn_idx = fun.frame_state(state).insn_idx;
-                let Some(recv_type) = fun.profiled_type_of_at(recv, iseq_insn_idx) else { return Err(()) };
-                (recv_type.class(), Some(recv_type))
+            let iseq_insn_idx = fun.frame_state(state).insn_idx;
+            let (recv_class, profiled_type) = match fun.resolve_receiver_type(recv, self_type, iseq_insn_idx) {
+                ReceiverTypeResolution::StaticallyKnown { class } => (class, None),
+                ReceiverTypeResolution::Monomorphic { class, profiled_type }
+                | ReceiverTypeResolution::SkewedPolymorphic { class, profiled_type } => (class, Some(profiled_type)),
+                ReceiverTypeResolution::SkewedMegamorphic { .. } | ReceiverTypeResolution::Polymorphic | ReceiverTypeResolution::Megamorphic | ReceiverTypeResolution::NoProfile => return Err(()),
             };
 
             // Do method lookup
@@ -2876,7 +2987,8 @@ impl Function {
 
                     // Filter for simple call sites (i.e. no splats etc.)
                     if ci_flags & VM_CALL_ARGS_SIMPLE == 0 {
-                        fun.count_fancy_call_features(block, ci_flags);
+                        fun.count_complex_call_features(block, ci_flags);
+                        fun.set_dynamic_send_reason(send_insn_id, ComplexArgPass);
                         return Err(());
                     }
 
@@ -2948,7 +3060,10 @@ impl Function {
                     // func(int argc, VALUE *argv, VALUE recv)
                     let ci_flags = unsafe { vm_ci_flag(call_info) };
                     if ci_flags & VM_CALL_ARGS_SIMPLE == 0 {
-                        fun.count_fancy_call_features(block, ci_flags);
+                        // TODO(alan): Add fun.count_complex_call_features() here without double
+                        // counting splat
+                        fun.set_dynamic_send_reason(send_insn_id, ComplexArgPass);
+                        return Err(());
                     } else {
                         fun.gen_patch_points_for_optimized_ccall(block, recv_class, method_id, cme, state);
 
@@ -3232,6 +3347,9 @@ impl Function {
             | &Insn::GetConstantPath { ic: _, state } => {
                 worklist.push_back(state);
             }
+            &Insn::FixnumBitCheck { val, index: _ } => {
+                worklist.push_back(val)
+            }
             &Insn::ArrayMax { ref elements, state }
             | &Insn::NewHash { ref elements, state }
             | &Insn::NewArray { ref elements, state } => {
@@ -3260,6 +3378,11 @@ impl Function {
             &Insn::StringGetbyteFixnum { string, index } => {
                 worklist.push_back(string);
                 worklist.push_back(index);
+            }
+            &Insn::StringSetbyteFixnum { string, index, value } => {
+                worklist.push_back(string);
+                worklist.push_back(index);
+                worklist.push_back(value);
             }
             &Insn::StringAppend { recv, other, state } => {
                 worklist.push_back(recv);
@@ -3291,6 +3414,16 @@ impl Function {
             | &Insn::ToNewArray { val, state }
             | &Insn::BoxFixnum { val, state } => {
                 worklist.push_back(val);
+                worklist.push_back(state);
+            }
+            &Insn::GuardGreaterEq { left, right, state } => {
+                worklist.push_back(left);
+                worklist.push_back(right);
+                worklist.push_back(state);
+            }
+            &Insn::GuardLess { left, right, state } => {
+                worklist.push_back(left);
+                worklist.push_back(right);
                 worklist.push_back(state);
             }
             Insn::Snapshot { state } => {
@@ -3371,7 +3504,8 @@ impl Function {
                 worklist.push_back(self_val);
                 worklist.push_back(state);
             }
-            &Insn::SetIvar { self_val, val, state, .. } => {
+            &Insn::SetIvar { self_val, val, state, .. }
+            | &Insn::SetInstanceVariable { self_val, val, state, .. } => {
                 worklist.push_back(self_val);
                 worklist.push_back(val);
                 worklist.push_back(state);
@@ -3406,6 +3540,7 @@ impl Function {
             &Insn::GetSpecialNumber { state, .. } |
             &Insn::ObjectAllocClass { state, .. } |
             &Insn::SideExit { state, .. } => worklist.push_back(state),
+            &Insn::UnboxFixnum { val } => worklist.push_back(val),
         }
     }
 
@@ -3768,6 +3903,7 @@ impl Function {
             }
             Insn::BoxBool { val } => self.assert_subtype(insn_id, val, types::CBool),
             Insn::BoxFixnum { val, .. } => self.assert_subtype(insn_id, val, types::CInt64),
+            Insn::UnboxFixnum { val } => self.assert_subtype(insn_id, val, types::Fixnum),
             Insn::SetGlobal { val, .. } => self.assert_subtype(insn_id, val, types::BasicObject),
             Insn::GetIvar { self_val, .. } => self.assert_subtype(insn_id, self_val, types::BasicObject),
             Insn::SetIvar { self_val, val, .. } => {
@@ -3843,9 +3979,18 @@ impl Function {
             }
             Insn::GuardShape { val, .. } => self.assert_subtype(insn_id, val, types::BasicObject),
             Insn::GuardNotFrozen { val, .. } => self.assert_subtype(insn_id, val, types::BasicObject),
+            Insn::GuardLess { left, right, .. } | Insn::GuardGreaterEq { left, right, .. } => {
+                self.assert_subtype(insn_id, left, types::CInt64)?;
+                self.assert_subtype(insn_id, right, types::CInt64)
+            },
             Insn::StringGetbyteFixnum { string, index } => {
                 self.assert_subtype(insn_id, string, types::String)?;
                 self.assert_subtype(insn_id, index, types::Fixnum)
+            },
+            Insn::StringSetbyteFixnum { string, index, value } => {
+                self.assert_subtype(insn_id, string, types::String)?;
+                self.assert_subtype(insn_id, index, types::Fixnum)?;
+                self.assert_subtype(insn_id, value, types::Fixnum)
             }
             _ => Ok(()),
         }
@@ -4257,13 +4402,13 @@ fn num_locals(iseq: *const rb_iseq_t) -> usize {
 
 /// If we can't handle the type of send (yet), bail out.
 fn unhandled_call_type(flags: u32) -> Result<(), CallType> {
-    if (flags & VM_CALL_KWARG) != 0 { return Err(CallType::Kwarg); }
     if (flags & VM_CALL_TAILCALL) != 0 { return Err(CallType::Tailcall); }
     Ok(())
 }
 
-/// If a given call uses splatting or block arguments, then we won't specialize.
+/// If a given call uses overly complex arguments, then we won't specialize.
 fn unspecializable_call_type(flags: u32) -> bool {
+    ((flags & VM_CALL_KWARG) != 0) ||
     ((flags & VM_CALL_ARGS_SPLAT) != 0) ||
     ((flags & VM_CALL_ARGS_BLOCKARG) != 0)
 }
@@ -4399,6 +4544,33 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
             // profiled cfp->self.
             if opcode == YARVINSN_getinstancevariable || opcode == YARVINSN_trace_getinstancevariable {
                 profiles.profile_self(&exit_state, self_param);
+            } else if opcode == YARVINSN_invokeblock || opcode == YARVINSN_trace_invokeblock {
+                if get_option!(stats) {
+                    let iseq_insn_idx = exit_state.insn_idx;
+                    if let Some(operand_types) = profiles.payload.profile.get_operand_types(iseq_insn_idx) {
+                        if let [self_type_distribution] = &operand_types[..] {
+                            let summary = TypeDistributionSummary::new(&self_type_distribution);
+                            if summary.is_monomorphic() {
+                                let obj = summary.bucket(0).class();
+                                if unsafe { rb_IMEMO_TYPE_P(obj, imemo_iseq) == 1 } {
+                                    fun.push_insn(block, Insn::IncrCounter(Counter::invokeblock_handler_monomorphic_iseq));
+                                } else if unsafe { rb_IMEMO_TYPE_P(obj, imemo_ifunc) == 1 } {
+                                    fun.push_insn(block, Insn::IncrCounter(Counter::invokeblock_handler_monomorphic_ifunc));
+                                } else {
+                                    fun.push_insn(block, Insn::IncrCounter(Counter::invokeblock_handler_monomorphic_other));
+                                }
+                            } else if summary.is_skewed_polymorphic() || summary.is_polymorphic() {
+                                fun.push_insn(block, Insn::IncrCounter(Counter::invokeblock_handler_polymorphic));
+                            } else if summary.is_skewed_megamorphic() || summary.is_megamorphic() {
+                                fun.push_insn(block, Insn::IncrCounter(Counter::invokeblock_handler_megamorphic));
+                            } else {
+                                fun.push_insn(block, Insn::IncrCounter(Counter::invokeblock_handler_no_profiles));
+                            }
+                        } else {
+                            fun.push_insn(block, Insn::IncrCounter(Counter::invokeblock_handler_no_profiles));
+                        }
+                    }
+                }
             } else {
                 profiles.profile_stack(&exit_state);
             }
@@ -4606,6 +4778,22 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     let pushval = get_arg(pc, 2);
                     let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });
                     state.stack_push(fun.push_insn(block, Insn::DefinedIvar { self_val: self_param, id, pushval, state: exit_id }));
+                }
+                YARVINSN_checkkeyword => {
+                    // When a keyword is unspecified past index 32, a hash will be used instead.
+                    // This can only happen in iseqs taking more than 32 keywords.
+                    // In this case, we side exit to the interpreter.
+                    // TODO(Jacob): Replace the magic number 32 with a named constant. (Can be completed after PR 15039)
+                    if unsafe {(*rb_get_iseq_body_param_keyword(iseq)).num >= 32} {
+                        let exit_id = fun.push_insn(block, Insn::Snapshot {state: exit_state});
+                        fun.push_insn(block, Insn::SideExit { state: exit_id, reason: SideExitReason::TooManyKeywordParameters });
+                        break;
+                    }
+                    let ep_offset = get_arg(pc, 0).as_u32();
+                    let index = get_arg(pc, 1).as_u64();
+                    let index: u8 = index.try_into().map_err(|_| ParseError::MalformedIseq(insn_idx))?;
+                    let val = fun.push_insn(block, Insn::GetLocal { ep_offset, level: 0, use_sp: false, rest_param: false });
+                    state.stack_push(fun.push_insn(block, Insn::FixnumBitCheck { val, index }));
                 }
                 YARVINSN_opt_getconstant_path => {
                     let ic = get_arg(pc, 0).as_ptr();
@@ -5053,13 +5241,13 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                 }
                 YARVINSN_setinstancevariable => {
                     let id = ID(get_arg(pc, 0).as_u64());
-                    // ic is in arg 1
+                    let ic = get_arg(pc, 1).as_ptr();
                     let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });
                     // Assume single-Ractor mode to omit gen_prepare_non_leaf_call on gen_setivar
                     // TODO: We only really need this if self_val is a class/module
                     fun.push_insn(block, Insn::PatchPoint { invariant: Invariant::SingleRactorMode, state: exit_id });
                     let val = state.stack_pop()?;
-                    fun.push_insn(block, Insn::SetIvar { self_val: self_param, id, val, state: exit_id });
+                    fun.push_insn(block, Insn::SetInstanceVariable { self_val: self_param, id, ic, val, state: exit_id });
                 }
                 YARVINSN_getclassvariable => {
                     let id = ID(get_arg(pc, 0).as_u64());

@@ -6059,6 +6059,32 @@ vm_define_method(const rb_execution_context_t *ec, VALUE obj, ID id, VALUE iseqv
     }
 }
 
+// Return the untagged block handler:
+// * If it's an ISEQ or an IFUNC, fetch it from its rb_captured_block
+// * If it's a PROC or SYMBOL, return it as is
+static VALUE
+rb_vm_untag_block_handler(VALUE block_handler)
+{
+    switch (vm_block_handler_type(block_handler)) {
+      case block_handler_type_iseq:
+      case block_handler_type_ifunc: {
+        struct rb_captured_block *captured = VM_TAGGED_PTR_REF(block_handler, 0x03);
+        return captured->code.val;
+      }
+      case block_handler_type_proc:
+      case block_handler_type_symbol:
+        return block_handler;
+      default:
+        rb_bug("rb_vm_untag_block_handler: unreachable");
+    }
+}
+
+VALUE
+rb_vm_get_untagged_block_handler(rb_control_frame_t *reg_cfp)
+{
+    return rb_vm_untag_block_handler(VM_CF_BLOCK_HANDLER(reg_cfp));
+}
+
 static VALUE
 vm_invokeblock_i(struct rb_execution_context_struct *ec,
                  struct rb_control_frame_struct *reg_cfp,

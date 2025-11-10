@@ -146,6 +146,8 @@ make_counters! {
         exit_guard_int_equals_failure,
         exit_guard_shape_failure,
         exit_guard_not_frozen_failure,
+        exit_guard_less_failure,
+        exit_guard_greater_eq_failure,
         exit_patchpoint_bop_redefined,
         exit_patchpoint_method_redefined,
         exit_patchpoint_stable_constant_names,
@@ -159,12 +161,14 @@ make_counters! {
         exit_stackoverflow,
         exit_block_param_proxy_modified,
         exit_block_param_proxy_not_iseq_or_ifunc,
+        exit_too_many_keyword_parameters,
     }
 
     // Send fallback counters that are summed as dynamic_send_count
     dynamic_send {
         // send_fallback_: Fallback reasons for send-ish instructions
         send_fallback_send_without_block_polymorphic,
+        send_fallback_send_without_block_megamorphic,
         send_fallback_send_without_block_no_profiles,
         send_fallback_send_without_block_cfunc_not_variadic,
         send_fallback_send_without_block_cfunc_array_variadic,
@@ -172,12 +176,13 @@ make_counters! {
         send_fallback_send_without_block_not_optimized_optimized_method_type,
         send_fallback_send_without_block_direct_too_many_args,
         send_fallback_send_polymorphic,
+        send_fallback_send_megamorphic,
         send_fallback_send_no_profiles,
         send_fallback_send_not_optimized_method_type,
         send_fallback_ccall_with_frame_too_many_args,
         // The call has at least one feature on the caller or callee side
         // that the optimizer does not support.
-        send_fallback_fancy_call_feature,
+        send_fallback_one_or_more_complex_arg_pass,
         send_fallback_bmethod_non_iseq_proc,
         send_fallback_obj_to_string_not_string,
         send_fallback_not_optimized_instruction,
@@ -257,22 +262,22 @@ make_counters! {
     unspecialized_send_def_type_null,
 
     // Unsupported parameter features
-    fancy_arg_pass_param_rest,
-    fancy_arg_pass_param_opt,
-    fancy_arg_pass_param_kw,
-    fancy_arg_pass_param_kwrest,
-    fancy_arg_pass_param_block,
-    fancy_arg_pass_param_forwardable,
+    complex_arg_pass_param_rest,
+    complex_arg_pass_param_opt,
+    complex_arg_pass_param_kw,
+    complex_arg_pass_param_kwrest,
+    complex_arg_pass_param_block,
+    complex_arg_pass_param_forwardable,
 
     // Unsupported caller side features
-    fancy_arg_pass_caller_splat,
-    fancy_arg_pass_caller_blockarg,
-    fancy_arg_pass_caller_kwarg,
-    fancy_arg_pass_caller_kw_splat,
-    fancy_arg_pass_caller_tailcall,
-    fancy_arg_pass_caller_super,
-    fancy_arg_pass_caller_zsuper,
-    fancy_arg_pass_caller_forwarding,
+    complex_arg_pass_caller_splat,
+    complex_arg_pass_caller_blockarg,
+    complex_arg_pass_caller_kwarg,
+    complex_arg_pass_caller_kw_splat,
+    complex_arg_pass_caller_tailcall,
+    complex_arg_pass_caller_super,
+    complex_arg_pass_caller_zsuper,
+    complex_arg_pass_caller_forwarding,
 
     // Writes to the VM frame
     vm_write_pc_count,
@@ -286,6 +291,14 @@ make_counters! {
 
     // The number of times we ran a dynamic check
     guard_type_count,
+    guard_shape_count,
+
+    invokeblock_handler_monomorphic_iseq,
+    invokeblock_handler_monomorphic_ifunc,
+    invokeblock_handler_monomorphic_other,
+    invokeblock_handler_polymorphic,
+    invokeblock_handler_megamorphic,
+    invokeblock_handler_no_profiles,
 }
 
 /// Increase a counter by a specified amount
@@ -323,8 +336,6 @@ pub enum CompileError {
     IseqStackTooLarge,
     ExceptionHandler,
     OutOfMemory,
-    RegisterSpillOnAlloc,
-    RegisterSpillOnCCall,
     ParseError(ParseError),
     JitToJitOptional,
 }
@@ -339,8 +350,6 @@ pub fn exit_counter_for_compile_error(compile_error: &CompileError) -> Counter {
         IseqStackTooLarge     => compile_error_iseq_stack_too_large,
         ExceptionHandler      => compile_error_exception_handler,
         OutOfMemory           => compile_error_out_of_memory,
-        RegisterSpillOnAlloc  => compile_error_register_spill_on_alloc,
-        RegisterSpillOnCCall  => compile_error_register_spill_on_ccall,
         JitToJitOptional      => compile_error_jit_to_jit_optional,
         ParseError(parse_error) => match parse_error {
             StackUnderflow(_)       => compile_error_parse_stack_underflow,
@@ -385,12 +394,15 @@ pub fn side_exit_counter(reason: crate::hir::SideExitReason) -> Counter {
         GuardBitEquals(_)             => exit_guard_bit_equals_failure,
         GuardShape(_)                 => exit_guard_shape_failure,
         GuardNotFrozen                => exit_guard_not_frozen_failure,
+        GuardLess                     => exit_guard_less_failure,
+        GuardGreaterEq                => exit_guard_greater_eq_failure,
         CalleeSideExit                => exit_callee_side_exit,
         ObjToStringFallback           => exit_obj_to_string_fallback,
         Interrupt                     => exit_interrupt,
         StackOverflow                 => exit_stackoverflow,
         BlockParamProxyModified       => exit_block_param_proxy_modified,
         BlockParamProxyNotIseqOrIfunc => exit_block_param_proxy_not_iseq_or_ifunc,
+        TooManyKeywordParameters      => exit_too_many_keyword_parameters,
         PatchPoint(Invariant::BOPRedefined { .. })
                                       => exit_patchpoint_bop_redefined,
         PatchPoint(Invariant::MethodRedefined { .. })
@@ -418,6 +430,7 @@ pub fn send_fallback_counter(reason: crate::hir::SendFallbackReason) -> Counter 
     use crate::stats::Counter::*;
     match reason {
         SendWithoutBlockPolymorphic               => send_fallback_send_without_block_polymorphic,
+        SendWithoutBlockMegamorphic               => send_fallback_send_without_block_megamorphic,
         SendWithoutBlockNoProfiles                => send_fallback_send_without_block_no_profiles,
         SendWithoutBlockCfuncNotVariadic          => send_fallback_send_without_block_cfunc_not_variadic,
         SendWithoutBlockCfuncArrayVariadic        => send_fallback_send_without_block_cfunc_array_variadic,
@@ -426,8 +439,9 @@ pub fn send_fallback_counter(reason: crate::hir::SendFallbackReason) -> Counter 
                                                   => send_fallback_send_without_block_not_optimized_optimized_method_type,
         SendWithoutBlockDirectTooManyArgs         => send_fallback_send_without_block_direct_too_many_args,
         SendPolymorphic                           => send_fallback_send_polymorphic,
+        SendMegamorphic                           => send_fallback_send_megamorphic,
         SendNoProfiles                            => send_fallback_send_no_profiles,
-        FancyFeatureUse                           => send_fallback_fancy_call_feature,
+        ComplexArgPass                            => send_fallback_one_or_more_complex_arg_pass,
         BmethodNonIseqProc                        => send_fallback_bmethod_non_iseq_proc,
         SendNotOptimizedMethodType(_)             => send_fallback_send_not_optimized_method_type,
         CCallWithFrameTooManyArgs                 => send_fallback_ccall_with_frame_too_many_args,
@@ -549,7 +563,10 @@ pub extern "C" fn rb_zjit_stats(_ec: EcPtr, _self: VALUE, target_key: VALUE) -> 
     }
 
     // Memory usage stats
-    set_stat_usize!(hash, "code_region_bytes", ZJITState::get_code_block().mapped_region_size());
+    let code_region_bytes = ZJITState::get_code_block().mapped_region_size();
+    set_stat_usize!(hash, "code_region_bytes", code_region_bytes);
+    set_stat_usize!(hash, "zjit_alloc_bytes", zjit_alloc_bytes());
+    set_stat_usize!(hash, "total_mem_bytes", code_region_bytes + zjit_alloc_bytes());
 
     // End of default stats. Every counter beyond this is provided only for --zjit-stats.
     if !get_option!(stats) {
@@ -644,7 +661,7 @@ pub fn with_time_stat<F, R>(counter: Counter, func: F) -> R where F: FnOnce() ->
 }
 
 /// The number of bytes ZJIT has allocated on the Rust heap.
-pub fn zjit_alloc_size() -> usize {
+pub fn zjit_alloc_bytes() -> usize {
     jit::GLOBAL_ALLOCATOR.alloc_size.load(Ordering::SeqCst)
 }
 

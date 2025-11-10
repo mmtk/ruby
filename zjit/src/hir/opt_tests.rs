@@ -2549,7 +2549,7 @@ mod hir_opt_tests {
           Jump bb2(v4)
         bb2(v6:BasicObject):
           v10:Fixnum[1] = Const Value(1)
-          IncrCounter fancy_arg_pass_param_opt
+          IncrCounter complex_arg_pass_param_opt
           v12:BasicObject = SendWithoutBlock v6, :foo, v10
           CheckInterrupts
           Return v12
@@ -2633,7 +2633,7 @@ mod hir_opt_tests {
           Jump bb2(v4)
         bb2(v6:BasicObject):
           v10:Fixnum[1] = Const Value(1)
-          IncrCounter fancy_arg_pass_param_rest
+          IncrCounter complex_arg_pass_param_rest
           v12:BasicObject = SendWithoutBlock v6, :foo, v10
           CheckInterrupts
           Return v12
@@ -2659,7 +2659,10 @@ mod hir_opt_tests {
           Jump bb2(v4)
         bb2(v6:BasicObject):
           v10:Fixnum[1] = Const Value(1)
-          SideExit UnhandledCallType(Kwarg)
+          IncrCounter complex_arg_pass_caller_kwarg
+          v12:BasicObject = SendWithoutBlock v6, :foo, v10
+          CheckInterrupts
+          Return v12
         ");
     }
 
@@ -2682,7 +2685,10 @@ mod hir_opt_tests {
           Jump bb2(v4)
         bb2(v6:BasicObject):
           v10:Fixnum[1] = Const Value(1)
-          SideExit UnhandledCallType(Kwarg)
+          IncrCounter complex_arg_pass_caller_kwarg
+          v12:BasicObject = SendWithoutBlock v6, :foo, v10
+          CheckInterrupts
+          Return v12
         ");
     }
 
@@ -2940,9 +2946,9 @@ mod hir_opt_tests {
           v12:NilClass = Const Value(nil)
           PatchPoint MethodRedefined(Hash@0x1008, new@0x1010, cme:0x1018)
           v43:HashExact = ObjectAllocClass Hash:VALUE(0x1008)
-          IncrCounter fancy_arg_pass_param_opt
-          IncrCounter fancy_arg_pass_param_kw
-          IncrCounter fancy_arg_pass_param_block
+          IncrCounter complex_arg_pass_param_opt
+          IncrCounter complex_arg_pass_param_kw
+          IncrCounter complex_arg_pass_param_block
           v18:BasicObject = SendWithoutBlock v43, :initialize
           CheckInterrupts
           CheckInterrupts
@@ -3192,7 +3198,7 @@ mod hir_opt_tests {
         bb2(v6:BasicObject):
           v10:Fixnum[1] = Const Value(1)
           PatchPoint SingleRactorMode
-          SetIvar v6, :@foo, v10
+          SetInstanceVariable v6, :@foo, v10
           CheckInterrupts
           Return v10
         ");
@@ -4815,6 +4821,7 @@ mod hir_opt_tests {
           v14:ArrayExact = NewArray
           GuardBlockParamProxy l0
           v17:HeapObject[BlockParamProxy] = Const Value(VALUE(0x1000))
+          IncrCounter complex_arg_pass_caller_blockarg
           v19:BasicObject = Send v14, 0x1008, :map, v17
           CheckInterrupts
           Return v19
@@ -5791,6 +5798,116 @@ mod hir_opt_tests {
           v20:Fixnum[5] = Const Value(5)
           CheckInterrupts
           Return v20
+        ");
+    }
+
+    #[test]
+    fn test_optimize_string_setbyte_fixnum() {
+        eval(r#"
+            def test(s, idx, val)
+                s.setbyte(idx, val)
+            end
+            test("foo", 0, 127)
+        "#);
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:3:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:BasicObject = GetLocal l0, SP@6
+          v3:BasicObject = GetLocal l0, SP@5
+          v4:BasicObject = GetLocal l0, SP@4
+          Jump bb2(v1, v2, v3, v4)
+        bb1(v7:BasicObject, v8:BasicObject, v9:BasicObject, v10:BasicObject):
+          EntryPoint JIT(0)
+          Jump bb2(v7, v8, v9, v10)
+        bb2(v12:BasicObject, v13:BasicObject, v14:BasicObject, v15:BasicObject):
+          PatchPoint MethodRedefined(String@0x1000, setbyte@0x1008, cme:0x1010)
+          PatchPoint NoSingletonClass(String@0x1000)
+          v29:StringExact = GuardType v13, StringExact
+          v30:Fixnum = GuardType v14, Fixnum
+          v31:Fixnum = GuardType v15, Fixnum
+          v32:CInt64 = UnboxFixnum v30
+          v33:CInt64 = LoadField v29, :len@0x1038
+          v34:CInt64 = GuardLess v32, v33
+          v35:CInt64[0] = Const CInt64(0)
+          v36:CInt64 = GuardGreaterEq v34, v35
+          v37:StringExact = GuardNotFrozen v29
+          v38:Fixnum = StringSetbyteFixnum v37, v30, v31
+          IncrCounter inline_cfunc_optimized_send_count
+          CheckInterrupts
+          Return v31
+        ");
+    }
+
+    #[test]
+    fn test_optimize_string_subclass_setbyte_fixnum() {
+        eval(r#"
+            class MyString < String
+            end
+            def test(s, idx, val)
+                s.setbyte(idx, val)
+            end
+            test(MyString.new('foo'), 0, 127)
+        "#);
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:5:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:BasicObject = GetLocal l0, SP@6
+          v3:BasicObject = GetLocal l0, SP@5
+          v4:BasicObject = GetLocal l0, SP@4
+          Jump bb2(v1, v2, v3, v4)
+        bb1(v7:BasicObject, v8:BasicObject, v9:BasicObject, v10:BasicObject):
+          EntryPoint JIT(0)
+          Jump bb2(v7, v8, v9, v10)
+        bb2(v12:BasicObject, v13:BasicObject, v14:BasicObject, v15:BasicObject):
+          PatchPoint MethodRedefined(MyString@0x1000, setbyte@0x1008, cme:0x1010)
+          PatchPoint NoSingletonClass(MyString@0x1000)
+          v29:StringSubclass[class_exact:MyString] = GuardType v13, StringSubclass[class_exact:MyString]
+          v30:Fixnum = GuardType v14, Fixnum
+          v31:Fixnum = GuardType v15, Fixnum
+          v32:CInt64 = UnboxFixnum v30
+          v33:CInt64 = LoadField v29, :len@0x1038
+          v34:CInt64 = GuardLess v32, v33
+          v35:CInt64[0] = Const CInt64(0)
+          v36:CInt64 = GuardGreaterEq v34, v35
+          v37:StringSubclass[class_exact:MyString] = GuardNotFrozen v29
+          v38:Fixnum = StringSetbyteFixnum v37, v30, v31
+          IncrCounter inline_cfunc_optimized_send_count
+          CheckInterrupts
+          Return v31
+        ");
+    }
+
+    #[test]
+    fn test_do_not_optimize_string_setbyte_non_fixnum() {
+        eval(r#"
+            def test(s, idx, val)
+                s.setbyte(idx, val)
+            end
+            test("foo", 0, 3.14)
+        "#);
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:3:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:BasicObject = GetLocal l0, SP@6
+          v3:BasicObject = GetLocal l0, SP@5
+          v4:BasicObject = GetLocal l0, SP@4
+          Jump bb2(v1, v2, v3, v4)
+        bb1(v7:BasicObject, v8:BasicObject, v9:BasicObject, v10:BasicObject):
+          EntryPoint JIT(0)
+          Jump bb2(v7, v8, v9, v10)
+        bb2(v12:BasicObject, v13:BasicObject, v14:BasicObject, v15:BasicObject):
+          PatchPoint MethodRedefined(String@0x1000, setbyte@0x1008, cme:0x1010)
+          PatchPoint NoSingletonClass(String@0x1000)
+          v29:StringExact = GuardType v13, StringExact
+          v30:BasicObject = CCallWithFrame setbyte@0x1038, v29, v14, v15
+          CheckInterrupts
+          Return v30
         ");
     }
 
@@ -6842,6 +6959,51 @@ mod hir_opt_tests {
     }
 
     #[test]
+    fn test_splat() {
+        eval("
+            def foo = itself
+
+            def test
+              # Use a local to inhibit compile.c peephole optimization to ensure callsites have VM_CALL_ARGS_SPLAT
+              empty = []
+              foo(*empty)
+              ''.display(*empty)
+              itself(*empty)
+            end
+            test
+        ");
+        assert_snapshot!(hir_string("test"), @r"
+        fn test@<compiled>:6:
+        bb0():
+          EntryPoint interpreter
+          v1:BasicObject = LoadSelf
+          v2:NilClass = Const Value(nil)
+          Jump bb2(v1, v2)
+        bb1(v5:BasicObject):
+          EntryPoint JIT(0)
+          v6:NilClass = Const Value(nil)
+          Jump bb2(v5, v6)
+        bb2(v8:BasicObject, v9:NilClass):
+          v14:ArrayExact = NewArray
+          v18:ArrayExact = ToArray v14
+          IncrCounter complex_arg_pass_caller_splat
+          v20:BasicObject = SendWithoutBlock v8, :foo, v18
+          v23:StringExact[VALUE(0x1000)] = Const Value(VALUE(0x1000))
+          v25:StringExact = StringCopy v23
+          PatchPoint NoEPEscape(test)
+          v29:ArrayExact = ToArray v14
+          IncrCounter complex_arg_pass_caller_splat
+          v31:BasicObject = SendWithoutBlock v25, :display, v29
+          PatchPoint NoEPEscape(test)
+          v37:ArrayExact = ToArray v14
+          IncrCounter complex_arg_pass_caller_splat
+          v39:BasicObject = SendWithoutBlock v8, :itself, v37
+          CheckInterrupts
+          Return v39
+        ");
+    }
+
+    #[test]
     fn test_inline_symbol_to_sym() {
         eval(r#"
             def test(o) = o.to_sym
@@ -7222,7 +7384,7 @@ mod hir_opt_tests {
     }
 
     #[test]
-    fn counting_fancy_feature_use_for_fallback() {
+    fn counting_complex_feature_use_for_fallback() {
         eval("
             define_method(:fancy) { |_a, *_b, kw: 100, **kw_rest, &block| }
             def test = fancy(1)
@@ -7239,10 +7401,10 @@ mod hir_opt_tests {
           Jump bb2(v4)
         bb2(v6:BasicObject):
           v10:Fixnum[1] = Const Value(1)
-          IncrCounter fancy_arg_pass_param_rest
-          IncrCounter fancy_arg_pass_param_kw
-          IncrCounter fancy_arg_pass_param_kwrest
-          IncrCounter fancy_arg_pass_param_block
+          IncrCounter complex_arg_pass_param_rest
+          IncrCounter complex_arg_pass_param_kw
+          IncrCounter complex_arg_pass_param_kwrest
+          IncrCounter complex_arg_pass_param_block
           v12:BasicObject = SendWithoutBlock v6, :fancy, v10
           CheckInterrupts
           Return v12
@@ -7266,7 +7428,7 @@ mod hir_opt_tests {
           EntryPoint JIT(0)
           Jump bb2(v4)
         bb2(v6:BasicObject):
-          IncrCounter fancy_arg_pass_param_forwardable
+          IncrCounter complex_arg_pass_param_forwardable
           v11:BasicObject = SendWithoutBlock v6, :forwardable
           CheckInterrupts
           Return v11
