@@ -937,21 +937,25 @@ rb_mmtk_call_obj_free_for_each_on_exit(VALUE *objects, size_t len)
 void
 rb_mmtk_call_obj_free_on_exit(void)
 {
-    struct MMTk_RawVecOfObjRef registered_candidates = mmtk_get_all_obj_free_candidates();
-    rb_mmtk_call_obj_free_for_each_on_exit((VALUE*)registered_candidates.ptr, registered_candidates.len);
-    mmtk_free_raw_vec_of_obj_ref(registered_candidates);
+    unsigned int lev = RB_GC_VM_LOCK();
+    {
+        struct MMTk_RawVecOfObjRef registered_candidates = mmtk_get_all_obj_free_candidates();
+        rb_mmtk_call_obj_free_for_each_on_exit((VALUE*)registered_candidates.ptr, registered_candidates.len);
+        mmtk_free_raw_vec_of_obj_ref(registered_candidates);
 
-    rb_vm_t *vm = GET_VM();
-    rb_ractor_t *ractor;
+        rb_vm_t *vm = GET_VM();
+        rb_ractor_t *ractor;
 
-    ccan_list_for_each(&vm->ractor.set, ractor, vmlr_node) {
-        // ractor.set only contains blocking or running ractors
-        GC_ASSERT(rb_ractor_status_p(ractor, ractor_blocking) ||
-                  rb_ractor_status_p(ractor, ractor_running));
-        struct rb_mmtk_mutator_local *local = rb_mmtk_ractor_get_mutator_local(ractor);
-        struct rb_mmtk_values_buffer *buffer = &local->obj_free_candidates;
-        rb_mmtk_call_obj_free_for_each_on_exit(buffer->objects, buffer->len);
+        ccan_list_for_each(&vm->ractor.set, ractor, vmlr_node) {
+            // ractor.set only contains blocking or running ractors
+            GC_ASSERT(rb_ractor_status_p(ractor, ractor_blocking) ||
+                    rb_ractor_status_p(ractor, ractor_running));
+            struct rb_mmtk_mutator_local *local = rb_mmtk_ractor_get_mutator_local(ractor);
+            struct rb_mmtk_values_buffer *buffer = &local->obj_free_candidates;
+            rb_mmtk_call_obj_free_for_each_on_exit(buffer->objects, buffer->len);
+        }
     }
+    RB_GC_VM_UNLOCK(lev);
 }
 
 bool
