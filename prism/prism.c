@@ -8606,6 +8606,7 @@ static const uint32_t context_terminators[] = {
     [PM_CONTEXT_BLOCK_KEYWORDS] = (1U << PM_TOKEN_KEYWORD_END) | (1U << PM_TOKEN_KEYWORD_RESCUE) | (1U << PM_TOKEN_KEYWORD_ENSURE),
     [PM_CONTEXT_BLOCK_ENSURE] = (1U << PM_TOKEN_KEYWORD_END),
     [PM_CONTEXT_BLOCK_ELSE] = (1U << PM_TOKEN_KEYWORD_ENSURE) | (1U << PM_TOKEN_KEYWORD_END),
+    [PM_CONTEXT_BLOCK_PARAMETERS] = (1U << PM_TOKEN_PIPE),
     [PM_CONTEXT_BLOCK_RESCUE] = (1U << PM_TOKEN_KEYWORD_ENSURE) | (1U << PM_TOKEN_KEYWORD_RESCUE) | (1U << PM_TOKEN_KEYWORD_ELSE) | (1U << PM_TOKEN_KEYWORD_END),
     [PM_CONTEXT_CASE_WHEN] = (1U << PM_TOKEN_KEYWORD_WHEN) | (1U << PM_TOKEN_KEYWORD_END) | (1U << PM_TOKEN_KEYWORD_ELSE),
     [PM_CONTEXT_CASE_IN] = (1U << PM_TOKEN_KEYWORD_IN) | (1U << PM_TOKEN_KEYWORD_END) | (1U << PM_TOKEN_KEYWORD_ELSE),
@@ -8756,6 +8757,7 @@ context_human(pm_context_t context) {
         case PM_CONTEXT_BEGIN: return "begin statement";
         case PM_CONTEXT_BLOCK_BRACES: return "'{'..'}' block";
         case PM_CONTEXT_BLOCK_KEYWORDS: return "'do'..'end' block";
+        case PM_CONTEXT_BLOCK_PARAMETERS: return "'|'..'|' block parameter";
         case PM_CONTEXT_CASE_WHEN: return "'when' clause";
         case PM_CONTEXT_CASE_IN: return "'in' clause";
         case PM_CONTEXT_CLASS: return "class definition";
@@ -15357,6 +15359,9 @@ parse_block_parameters(
 ) {
     pm_parameters_node_t *parameters = NULL;
     if (!match1(parser, PM_TOKEN_SEMICOLON)) {
+        if (!is_lambda_literal) {
+            context_push(parser, PM_CONTEXT_BLOCK_PARAMETERS);
+        }
         parameters = parse_parameters(
             parser,
             is_lambda_literal ? PM_BINDING_POWER_DEFINED : PM_BINDING_POWER_INDEX,
@@ -15367,6 +15372,9 @@ parse_block_parameters(
             true,
             (uint16_t) (depth + 1)
         );
+        if (!is_lambda_literal) {
+            context_pop(parser);
+        }
     }
 
     pm_block_parameters_node_t *block_parameters = pm_block_parameters_node_create(parser, parameters, opening);
@@ -15722,6 +15730,7 @@ parse_return(pm_parser_t *parser, pm_node_t *node) {
             case PM_CONTEXT_BLOCK_ENSURE:
             case PM_CONTEXT_BLOCK_KEYWORDS:
             case PM_CONTEXT_BLOCK_RESCUE:
+            case PM_CONTEXT_BLOCK_PARAMETERS:
             case PM_CONTEXT_DEF_ELSE:
             case PM_CONTEXT_DEF_ENSURE:
             case PM_CONTEXT_DEF_PARAMS:
@@ -15758,6 +15767,7 @@ parse_block_exit(pm_parser_t *parser, pm_node_t *node) {
             case PM_CONTEXT_BLOCK_KEYWORDS:
             case PM_CONTEXT_BLOCK_ELSE:
             case PM_CONTEXT_BLOCK_ENSURE:
+            case PM_CONTEXT_BLOCK_PARAMETERS:
             case PM_CONTEXT_BLOCK_RESCUE:
             case PM_CONTEXT_DEFINED:
             case PM_CONTEXT_FOR:
@@ -17612,6 +17622,26 @@ parse_pattern_primitive(pm_parser_t *parser, pm_constant_id_list_t *captures, pm
     }
 }
 
+static bool
+parse_pattern_alternation_error_each(const pm_node_t *node, void *data) {
+    switch (PM_NODE_TYPE(node)) {
+        case PM_LOCAL_VARIABLE_TARGET_NODE:
+            pm_parser_err((pm_parser_t *) data, node->location.start, node->location.end, PM_ERR_PATTERN_CAPTURE_IN_ALTERNATIVE);
+            return false;
+        default:
+            return true;
+    }
+}
+
+/**
+ * When we get here, we know that we already have a syntax error, because we
+ * know we have captured a variable and that we are in an alternation.
+ */
+static void
+parse_pattern_alternation_error(pm_parser_t *parser, const pm_node_t *node) {
+    pm_visit_node(node, parse_pattern_alternation_error_each, parser);
+}
+
 /**
  * Parse any number of primitives joined by alternation and ended optionally by
  * assignment.
@@ -17619,9 +17649,12 @@ parse_pattern_primitive(pm_parser_t *parser, pm_constant_id_list_t *captures, pm
 static pm_node_t *
 parse_pattern_primitives(pm_parser_t *parser, pm_constant_id_list_t *captures, pm_node_t *first_node, pm_diagnostic_id_t diag_id, uint16_t depth) {
     pm_node_t *node = first_node;
+    bool alternation = false;
 
-    while ((node == NULL) || accept1(parser, PM_TOKEN_PIPE)) {
-        pm_token_t operator = parser->previous;
+    while ((node == NULL) || (alternation = accept1(parser, PM_TOKEN_PIPE))) {
+        if (alternation && !PM_NODE_TYPE_P(node, PM_ALTERNATION_PATTERN_NODE) && captures->size) {
+            parse_pattern_alternation_error(parser, node);
+        }
 
         switch (parser->current.type) {
             case PM_TOKEN_IDENTIFIER:
@@ -17633,10 +17666,13 @@ parse_pattern_primitives(pm_parser_t *parser, pm_constant_id_list_t *captures, p
             case PM_TOKEN_UDOT_DOT:
             case PM_TOKEN_UDOT_DOT_DOT:
             case PM_CASE_PRIMITIVE: {
-                if (node == NULL) {
+                if (!alternation) {
                     node = parse_pattern_primitive(parser, captures, diag_id, (uint16_t) (depth + 1));
                 } else {
+                    pm_token_t operator = parser->previous;
                     pm_node_t *right = parse_pattern_primitive(parser, captures, PM_ERR_PATTERN_EXPRESSION_AFTER_PIPE, (uint16_t) (depth + 1));
+
+                    if (captures->size) parse_pattern_alternation_error(parser, right);
                     node = (pm_node_t *) pm_alternation_pattern_node_create(parser, node, right, &operator);
                 }
 
@@ -17644,6 +17680,7 @@ parse_pattern_primitives(pm_parser_t *parser, pm_constant_id_list_t *captures, p
             }
             case PM_TOKEN_PARENTHESIS_LEFT:
             case PM_TOKEN_PARENTHESIS_LEFT_PARENTHESES: {
+                pm_token_t operator = parser->previous;
                 pm_token_t opening = parser->current;
                 parser_lex(parser);
 
@@ -17652,9 +17689,10 @@ parse_pattern_primitives(pm_parser_t *parser, pm_constant_id_list_t *captures, p
                 expect1(parser, PM_TOKEN_PARENTHESIS_RIGHT, PM_ERR_PATTERN_TERM_PAREN);
                 pm_node_t *right = (pm_node_t *) pm_parentheses_node_create(parser, &opening, body, &parser->previous, 0);
 
-                if (node == NULL) {
+                if (!alternation) {
                     node = right;
                 } else {
+                    if (captures->size) parse_pattern_alternation_error(parser, right);
                     node = (pm_node_t *) pm_alternation_pattern_node_create(parser, node, right, &operator);
                 }
 
@@ -17664,10 +17702,11 @@ parse_pattern_primitives(pm_parser_t *parser, pm_constant_id_list_t *captures, p
                 pm_parser_err_current(parser, diag_id);
                 pm_node_t *right = (pm_node_t *) pm_missing_node_create(parser, parser->current.start, parser->current.end);
 
-                if (node == NULL) {
+                if (!alternation) {
                     node = right;
                 } else {
-                    node = (pm_node_t *) pm_alternation_pattern_node_create(parser, node, right, &operator);
+                    if (captures->size) parse_pattern_alternation_error(parser, right);
+                    node = (pm_node_t *) pm_alternation_pattern_node_create(parser, node, right, &parser->previous);
                 }
 
                 break;
@@ -17975,6 +18014,7 @@ parse_retry(pm_parser_t *parser, const pm_node_t *node) {
             case PM_CONTEXT_BEGIN:
             case PM_CONTEXT_BLOCK_BRACES:
             case PM_CONTEXT_BLOCK_KEYWORDS:
+            case PM_CONTEXT_BLOCK_PARAMETERS:
             case PM_CONTEXT_CASE_IN:
             case PM_CONTEXT_CASE_WHEN:
             case PM_CONTEXT_DEFAULT_PARAMS:
@@ -18055,6 +18095,7 @@ parse_yield(pm_parser_t *parser, const pm_node_t *node) {
             case PM_CONTEXT_BLOCK_KEYWORDS:
             case PM_CONTEXT_BLOCK_ELSE:
             case PM_CONTEXT_BLOCK_ENSURE:
+            case PM_CONTEXT_BLOCK_PARAMETERS:
             case PM_CONTEXT_BLOCK_RESCUE:
             case PM_CONTEXT_CASE_IN:
             case PM_CONTEXT_CASE_WHEN:
@@ -19617,6 +19658,12 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
                 }
                 if (!accept_endless_def) {
                     pm_parser_err_previous(parser, PM_ERR_DEF_ENDLESS_PARAMETERS);
+                }
+                if (
+                    parser->current_context->context == PM_CONTEXT_DEFAULT_PARAMS &&
+                    parser->current_context->prev->context == PM_CONTEXT_BLOCK_PARAMETERS
+                ) {
+                    PM_PARSER_ERR_FORMAT(parser, def_keyword.start, parser->previous.end, PM_ERR_UNEXPECTED_PARAMETER_DEFAULT_VALUE, "endless method definition");
                 }
                 equal = parser->previous;
 

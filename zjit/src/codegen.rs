@@ -7,7 +7,6 @@ use std::rc::Rc;
 use std::ffi::{c_int, c_long, c_void};
 use std::slice;
 
-use crate::asm::Label;
 use crate::backend::current::ALLOC_REGS;
 use crate::invariants::{
     track_bop_assumption, track_cme_assumption, track_no_ep_escape_assumption, track_no_trace_point_assumption,
@@ -16,10 +15,10 @@ use crate::invariants::{
 use crate::gc::append_gc_offsets;
 use crate::payload::{get_or_create_iseq_payload, get_or_create_iseq_payload_ptr, IseqCodePtrs, IseqPayload, IseqStatus};
 use crate::state::ZJITState;
-use crate::stats::{send_fallback_counter, exit_counter_for_compile_error, incr_counter, incr_counter_by, send_fallback_counter_for_method_type, send_without_block_fallback_counter_for_method_type, send_without_block_fallback_counter_for_optimized_method_type, send_fallback_counter_ptr_for_opcode, CompileError};
+use crate::stats::{CompileError, exit_counter_for_compile_error, exit_counter_for_unhandled_hir_insn, incr_counter, incr_counter_by, send_fallback_counter, send_fallback_counter_for_method_type, send_fallback_counter_ptr_for_opcode, send_without_block_fallback_counter_for_method_type, send_without_block_fallback_counter_for_optimized_method_type};
 use crate::stats::{counter_ptr, with_time_stat, Counter, Counter::{compile_time_ns, exit_compile_error}};
 use crate::{asm::CodeBlock, cruby::*, options::debug, virtualmem::CodePtr};
-use crate::backend::lir::{self, asm_comment, asm_ccall, Assembler, Opnd, Target, CFP, C_ARG_OPNDS, C_RET_OPND, EC, NATIVE_STACK_PTR, NATIVE_BASE_PTR, SP};
+use crate::backend::lir::{self, Assembler, C_ARG_OPNDS, C_RET_OPND, CFP, EC, NATIVE_BASE_PTR, NATIVE_STACK_PTR, Opnd, SP, SideExit, Target, asm_ccall, asm_comment};
 use crate::hir::{iseq_to_hir, BlockId, BranchEdge, Invariant, RangeType, SideExitReason::{self, *}, SpecialBackrefSymbol, SpecialObjectType};
 use crate::hir::{Const, FrameState, Function, Insn, InsnId, SendFallbackReason};
 use crate::hir_type::{types, Type};
@@ -281,6 +280,7 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, function: &Function) -> Resul
             let insn = function.find(insn_id);
             if let Err(last_snapshot) = gen_insn(cb, &mut jit, &mut asm, function, insn_id, &insn) {
                 debug!("ZJIT: gen_function: Failed to compile insn: {insn_id} {insn}. Generating side-exit.");
+                gen_incr_counter(&mut asm, exit_counter_for_unhandled_hir_insn(&insn));
                 gen_side_exit(&mut jit, &mut asm, &SideExitReason::UnhandledHIRInsn(insn_id), &function.frame_state(last_snapshot));
                 // Don't bother generating code after a side-exit. We won't run it.
                 // TODO(max): Generate ud2 or equivalent.
@@ -380,7 +380,7 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         &Insn::SendWithoutBlock { cd, state, reason, .. } => gen_send_without_block(jit, asm, cd, &function.frame_state(state), reason),
         // Give up SendWithoutBlockDirect for 6+ args since asm.ccall() doesn't support it.
         Insn::SendWithoutBlockDirect { cd, state, args, .. } if args.len() + 1 > C_ARG_OPNDS.len() => // +1 for self
-            gen_send_without_block(jit, asm, *cd, &function.frame_state(*state), SendFallbackReason::SendWithoutBlockDirectTooManyArgs),
+            gen_send_without_block(jit, asm, *cd, &function.frame_state(*state), SendFallbackReason::TooManyArgsForLir),
         Insn::SendWithoutBlockDirect { cme, iseq, recv, args, state, .. } => gen_send_without_block_direct(cb, jit, asm, *cme, *iseq, opnd!(recv), opnds!(args), &function.frame_state(*state)),
         &Insn::InvokeSuper { cd, blockiseq, state, reason, .. } => gen_invokesuper(jit, asm, cd, blockiseq, &function.frame_state(state), reason),
         &Insn::InvokeBlock { cd, state, reason, .. } => gen_invokeblock(jit, asm, cd, &function.frame_state(state), reason),
@@ -701,15 +701,26 @@ fn gen_invokebuiltin(jit: &JITState, asm: &mut Assembler, state: &FrameState, bf
 /// Record a patch point that should be invalidated on a given invariant
 fn gen_patch_point(jit: &mut JITState, asm: &mut Assembler, invariant: &Invariant, state: &FrameState) {
     let payload_ptr = get_or_create_iseq_payload_ptr(jit.iseq);
-    let label = asm.new_label("patch_point").unwrap_label();
     let invariant = *invariant;
+    let exit = build_side_exit(jit, state);
 
-    // Compile a side exit. Fill nop instructions if the last patch point is too close.
-    asm.patch_point(build_side_exit(jit, state, PatchPoint(invariant), Some(label)));
+    // Let compile_exits compile a side exit. Let scratch_split lower it with split_patch_point.
+    asm.patch_point(Target::SideExit { exit, reason: PatchPoint(invariant) }, invariant, payload_ptr);
+}
+
+/// This is used by scratch_split to lower PatchPoint into PadPatchPoint and PosMarker.
+/// It's called at scratch_split so that we can use the Label after side-exit deduplication in compile_exits.
+pub fn split_patch_point(asm: &mut Assembler, target: &Target, invariant: Invariant, payload_ptr: *mut IseqPayload) {
+    let Target::Label(exit_label) = *target else {
+        unreachable!("PatchPoint's target should have been lowered to Target::Label by compile_exits: {target:?}");
+    };
+
+    // Fill nop instructions if the last patch point is too close.
+    asm.pad_patch_point();
 
     // Remember the current address as a patch point
     asm.pos_marker(move |code_ptr, cb| {
-        let side_exit_ptr = cb.resolve_label(label);
+        let side_exit_ptr = cb.resolve_label(exit_label);
         match invariant {
             Invariant::BOPRedefined { klass, bop } => {
                 track_bop_assumption(klass, bop, code_ptr, side_exit_ptr, payload_ptr);
@@ -1253,10 +1264,21 @@ fn gen_send_without_block_direct(
 
     // Set up arguments
     let mut c_args = vec![recv];
-    c_args.extend(args);
+    c_args.extend(&args);
+
+    let num_optionals_passed = if unsafe { get_iseq_flags_has_opt(iseq) } {
+        // See vm_call_iseq_setup_normal_opt_start in vm_inshelper.c
+        let lead_num = unsafe { get_iseq_body_param_lead_num(iseq) } as u32;
+        let opt_num = unsafe { get_iseq_body_param_opt_num(iseq) } as u32;
+        assert!(args.len() as u32 <= lead_num + opt_num);
+        let num_optionals_passed = args.len() as u32 - lead_num;
+        num_optionals_passed
+    } else {
+        0
+    };
 
     // Make a method call. The target address will be rewritten once compiled.
-    let iseq_call = IseqCall::new(iseq);
+    let iseq_call = IseqCall::new(iseq, num_optionals_passed);
     let dummy_ptr = cb.get_write_ptr().raw_ptr(cb);
     jit.iseq_calls.push(iseq_call.clone());
     let ret = asm.ccall_with_iseq_call(dummy_ptr, c_args, &iseq_call);
@@ -1818,13 +1840,13 @@ fn gen_incr_send_fallback_counter(asm: &mut Assembler, reason: SendFallbackReaso
 
     use SendFallbackReason::*;
     match reason {
-        NotOptimizedInstruction(opcode) => {
+        Uncategorized(opcode) => {
             gen_incr_counter_ptr(asm, send_fallback_counter_ptr_for_opcode(opcode));
         }
         SendWithoutBlockNotOptimizedMethodType(method_type) => {
             gen_incr_counter(asm, send_without_block_fallback_counter_for_method_type(method_type));
         }
-        SendWithoutBlockNotOptimizedOptimizedMethodType(method_type) => {
+        SendWithoutBlockNotOptimizedMethodTypeOptimized(method_type) => {
             gen_incr_counter(asm, send_without_block_fallback_counter_for_optimized_method_type(method_type));
         }
         SendNotOptimizedMethodType(method_type) => {
@@ -1840,6 +1862,8 @@ fn gen_incr_send_fallback_counter(asm: &mut Assembler, reason: SendFallbackReaso
 ///
 /// Unlike YJIT, we don't need to save the stack slots to protect them from GC
 /// because the backend spills all live registers onto the C stack on CCall.
+/// However, to avoid marking uninitialized stack slots, this also updates SP,
+/// which may have cfp->sp for a past frame or a past non-leaf call.
 fn gen_prepare_call_with_gc(asm: &mut Assembler, state: &FrameState, leaf: bool) {
     let opcode: usize = state.get_opcode().try_into().unwrap();
     let next_pc: *const VALUE = unsafe { state.pc.offset(insn_len(opcode) as isize) };
@@ -1848,13 +1872,27 @@ fn gen_prepare_call_with_gc(asm: &mut Assembler, state: &FrameState, leaf: bool)
     asm_comment!(asm, "save PC to CFP");
     asm.mov(Opnd::mem(64, CFP, RUBY_OFFSET_CFP_PC), Opnd::const_ptr(next_pc));
 
+    gen_save_sp(asm, state.stack_size());
     if leaf {
         asm.expect_leaf_ccall(state.stack_size());
     }
 }
 
 fn gen_prepare_leaf_call_with_gc(asm: &mut Assembler, state: &FrameState) {
-    gen_prepare_call_with_gc(asm, state, true);
+    // In gen_prepare_call_with_gc(), we update cfp->sp for leaf calls too.
+    //
+    // Here, cfp->sp may be pointing to either of the following:
+    //   1. cfp->sp for a past frame, which gen_push_frame() skips to initialize
+    //   2. cfp->sp set by gen_prepare_non_leaf_call() for the current frame
+    //
+    // When (1), to avoid marking dead objects, we need to set cfp->sp for the current frame.
+    // When (2), setting cfp->sp at gen_push_frame() and not updating cfp->sp here could lead to
+    // keeping objects longer than it should, so we set cfp->sp at every call of this function.
+    //
+    // We use state.without_stack() to pass stack_size=0 to gen_save_sp() because we don't write
+    // VM stack slots on leaf calls, which leaves those stack slots uninitialized. ZJIT keeps
+    // live objects on the C stack, so they are protected from GC properly.
+    gen_prepare_call_with_gc(asm, &state.without_stack(), true);
 }
 
 /// Save the current SP on the CFP
@@ -1896,11 +1934,11 @@ fn gen_spill_stack(jit: &JITState, asm: &mut Assembler, state: &FrameState) {
 fn gen_prepare_non_leaf_call(jit: &JITState, asm: &mut Assembler, state: &FrameState) {
     // TODO: Lazily materialize caller frames when needed
     // Save PC for backtraces and allocation tracing
+    // and SP to avoid marking uninitialized stack slots
     gen_prepare_call_with_gc(asm, state, false);
 
-    // Save SP and spill the virtual stack in case it raises an exception
+    // Spill the virtual stack in case it raises an exception
     // and the interpreter uses the stack for handling the exception
-    gen_save_sp(asm, state.stack().len());
     gen_spill_stack(jit, asm, state);
 
     // Spill locals in case the method looks at caller Bindings
@@ -1947,8 +1985,8 @@ fn gen_push_frame(asm: &mut Assembler, argc: usize, state: &FrameState, frame: C
     asm_comment!(asm, "push callee control frame");
 
     if let Some(iseq) = frame.iseq {
-        // cfp_opnd(RUBY_OFFSET_CFP_PC): written by the callee frame on side-exits or non-leaf calls
-        // cfp_opnd(RUBY_OFFSET_CFP_SP): written by the callee frame on side-exits or non-leaf calls
+        // cfp_opnd(RUBY_OFFSET_CFP_PC): written by the callee frame on side-exits, non-leaf calls, or calls with GC
+        // cfp_opnd(RUBY_OFFSET_CFP_SP): written by the callee frame on side-exits, non-leaf calls, or calls with GC
         asm.mov(cfp_opnd(RUBY_OFFSET_CFP_ISEQ), VALUE::from(iseq).into());
     } else {
         // C frames don't have a PC and ISEQ in normal operation.
@@ -2038,13 +2076,14 @@ fn compile_iseq(iseq: IseqPtr) -> Result<Function, CompileError> {
     Ok(function)
 }
 
-/// Build a Target::SideExit for non-PatchPoint instructions
+/// Build a Target::SideExit
 fn side_exit(jit: &JITState, state: &FrameState, reason: SideExitReason) -> Target {
-    build_side_exit(jit, state, reason, None)
+    let exit = build_side_exit(jit, state);
+    Target::SideExit { exit, reason }
 }
 
-/// Build a Target::SideExit out of a FrameState
-fn build_side_exit(jit: &JITState, state: &FrameState, reason: SideExitReason, label: Option<Label>) -> Target {
+/// Build a side-exit context
+fn build_side_exit(jit: &JITState, state: &FrameState) -> SideExit {
     let mut stack = Vec::new();
     for &insn_id in state.stack() {
         stack.push(jit.get_opnd(insn_id));
@@ -2055,12 +2094,10 @@ fn build_side_exit(jit: &JITState, state: &FrameState, reason: SideExitReason, l
         locals.push(jit.get_opnd(insn_id));
     }
 
-    Target::SideExit {
-        pc: state.pc,
+    SideExit{
+        pc: Opnd::const_ptr(state.pc),
         stack,
         locals,
-        reason,
-        label,
     }
 }
 
@@ -2103,7 +2140,8 @@ c_callable! {
             // function_stub_hit_body() may allocate and call gc_validate_pc(), so we always set PC.
             let iseq_call = unsafe { Rc::from_raw(iseq_call_ptr as *const IseqCall) };
             let iseq = iseq_call.iseq.get();
-            let pc = unsafe { rb_iseq_pc_at_idx(iseq, 0) }; // TODO: handle opt_pc once supported
+            let entry_insn_idxs = crate::hir::jit_entry_insns(iseq);
+            let pc = unsafe { rb_iseq_pc_at_idx(iseq, entry_insn_idxs[iseq_call.jit_entry_idx.to_usize()]) };
             unsafe { rb_set_cfp_pc(cfp, pc) };
 
             // JIT-to-JIT calls don't set SP or fill nils to uninitialized (non-argument) locals.
@@ -2163,13 +2201,8 @@ fn function_stub_hit_body(cb: &mut CodeBlock, iseq_call: &IseqCallRef) -> Result
         debug!("{err:?}: gen_iseq failed: {}", iseq_get_location(iseq_call.iseq.get(), 0));
     })?;
 
-    // We currently don't support JIT-to-JIT calls for ISEQs with optional arguments.
-    // So we only need to use jit_entry_ptrs[0] for now. TODO(Shopify/ruby#817): Support optional arguments.
-    let Some(&jit_entry_ptr) = jit_entry_ptrs.first() else {
-        return Err(CompileError::JitToJitOptional)
-    };
-
     // Update the stub to call the code pointer
+    let jit_entry_ptr = jit_entry_ptrs[iseq_call.jit_entry_idx.to_usize()];
     let code_addr = jit_entry_ptr.raw_ptr(cb);
     let iseq = iseq_call.iseq.get();
     iseq_call.regenerate(cb, |asm| {
@@ -2381,7 +2414,7 @@ impl Assembler {
 
 /// Store info about a JIT entry point
 pub struct JITEntry {
-    /// Index that corresponds to jit_entry_insns()
+    /// Index that corresponds to [crate::hir::jit_entry_insns]
     jit_entry_idx: usize,
     /// Position where the entry point starts
     start_addr: Cell<Option<CodePtr>>,
@@ -2404,6 +2437,9 @@ pub struct IseqCall {
     /// Callee ISEQ that start_addr jumps to
     pub iseq: Cell<IseqPtr>,
 
+    /// Index that corresponds to [crate::hir::jit_entry_insns]
+    jit_entry_idx: u32,
+
     /// Position where the call instruction starts
     start_addr: Cell<Option<CodePtr>>,
 
@@ -2415,11 +2451,12 @@ pub type IseqCallRef = Rc<IseqCall>;
 
 impl IseqCall {
     /// Allocate a new IseqCall
-    fn new(iseq: IseqPtr) -> IseqCallRef {
+    fn new(iseq: IseqPtr, jit_entry_idx: u32) -> IseqCallRef {
         let iseq_call = IseqCall {
             iseq: Cell::new(iseq),
             start_addr: Cell::new(None),
             end_addr: Cell::new(None),
+            jit_entry_idx,
         };
         Rc::new(iseq_call)
     }

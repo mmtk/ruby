@@ -134,8 +134,8 @@ Note: We're only listing outstanding class updates.
 
 * String
 
-    * Update Unicode to Version 16.0.0 and Emoji Version 16.0.
-      [[Feature #19908]][[Feature #20724]] (also applies to Regexp)
+    * Update Unicode to Version 17.0.0 and Emoji Version 17.0.
+      [[Feature #19908]][[Feature #20724]][[Feature #21275]] (also applies to Regexp)
 
 * Thread
 
@@ -170,7 +170,7 @@ The following bundled gems are promoted from default gems.
 * rdoc 6.15.1
 * win32ole 1.9.2
 * irb 1.15.3
-* reline 0.6.2
+* reline 0.6.3
 * readline 0.0.4
 * fiddle 1.1.8
 
@@ -191,22 +191,22 @@ The following default gems are updated.
 * date 3.5.0
 * digest 3.2.1
 * english 0.8.1
-* erb 5.1.3
+* erb 6.0.0
 * etc 1.4.6
 * fcntl 1.3.0
 * fileutils 1.8.0
 * io-console 0.8.1
 * io-nonblock 0.3.2
-* io-wait 0.3.3
+* io-wait 0.4.0.dev
 * json 2.16.0
-* net-http 0.7.0
+* net-http 0.8.0
 * openssl 4.0.0.pre
 * optparse 0.8.0
 * pp 0.6.3
 * prism 1.6.0
 * psych 5.2.6
 * resolv 0.6.3
-* stringio 3.1.8.dev
+* stringio 3.1.9.dev
 * strscan 3.1.6.dev
 * timeout 0.4.4
 * uri 1.1.1
