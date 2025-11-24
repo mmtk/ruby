@@ -1582,6 +1582,8 @@ before_fork_ruby(void)
 static void
 after_fork_ruby(rb_pid_t pid)
 {
+    rb_gc_after_fork(pid);
+
     if (pid == 0) {
         // child
         clear_pid_cache();
@@ -4139,10 +4141,8 @@ rb_fork_ruby(int *status)
         disable_child_handler_before_fork(&old);
 
         RB_VM_LOCKING() {
-            rb_gc_before_fork();
             child.pid = pid = rb_fork();
             child.error = err = errno;
-            rb_gc_after_fork(pid);
         }
 
         disable_child_handler_fork_parent(&old); /* yes, bad name */
