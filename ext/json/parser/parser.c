@@ -5,8 +5,7 @@
 static VALUE mJSON, eNestingError, Encoding_UTF_8;
 static VALUE CNaN, CInfinity, CMinusInfinity;
 
-static ID i_chr, i_aset, i_aref,
-          i_leftshift, i_new, i_try_convert, i_uminus, i_encode;
+static ID i_new, i_try_convert, i_uminus, i_encode;
 
 static VALUE sym_max_nesting, sym_allow_nan, sym_allow_trailing_comma, sym_symbolize_names, sym_freeze,
              sym_decimal_class, sym_on_load, sym_allow_duplicate_key;
@@ -296,15 +295,6 @@ static void rvalue_stack_eagerly_release(VALUE handle)
     }
 }
 
-
-#ifndef HAVE_STRNLEN
-static size_t strnlen(const char *s, size_t maxlen)
-{
-    char *p;
-    return ((p = memchr(s, '\0', maxlen)) ? p - s : maxlen);
-}
-#endif
-
 static int convert_UTF32_to_UTF8(char *buf, uint32_t ch)
 {
     int len = 1;
@@ -345,7 +335,6 @@ typedef struct JSON_ParserStruct {
     int max_nesting;
     bool allow_nan;
     bool allow_trailing_comma;
-    bool parsing_name;
     bool symbolize_names;
     bool freeze;
 } JSON_ParserConfig;
@@ -627,8 +616,10 @@ static inline bool json_string_cacheable_p(const char *string, size_t length)
     return length <= JSON_RVALUE_CACHE_MAX_ENTRY_LENGTH && rb_isalpha(string[0]);
 }
 
-static inline VALUE json_string_fastpath(JSON_ParserState *state, const char *string, const char *stringEnd, bool is_name, bool intern, bool symbolize)
+static inline VALUE json_string_fastpath(JSON_ParserState *state, JSON_ParserConfig *config, const char *string, const char *stringEnd, bool is_name)
 {
+    bool intern = is_name || config->freeze;
+    bool symbolize = is_name && config->symbolize_names;
     size_t bufferSize = stringEnd - string;
 
     if (is_name && state->in_array && RB_LIKELY(json_string_cacheable_p(string, bufferSize))) {
@@ -647,47 +638,71 @@ static inline VALUE json_string_fastpath(JSON_ParserState *state, const char *st
     return build_string(string, stringEnd, intern, symbolize);
 }
 
-static VALUE json_string_unescape(JSON_ParserState *state, const char *string, const char *stringEnd, bool is_name, bool intern, bool symbolize)
+#define JSON_MAX_UNESCAPE_POSITIONS 16
+typedef struct _json_unescape_positions {
+    long size;
+    const char **positions;
+    bool has_more;
+} JSON_UnescapePositions;
+
+static inline const char *json_next_backslash(const char *pe, const char *stringEnd, JSON_UnescapePositions *positions)
 {
+    while (positions->size) {
+        positions->size--;
+        const char *next_position = positions->positions[0];
+        positions->positions++;
+        return next_position;
+    }
+
+    if (positions->has_more) {
+        return memchr(pe, '\\', stringEnd - pe);
+    }
+
+    return NULL;
+}
+
+static NOINLINE() VALUE json_string_unescape(JSON_ParserState *state, JSON_ParserConfig *config, const char *string, const char *stringEnd, bool is_name, JSON_UnescapePositions *positions)
+{
+    bool intern = is_name || config->freeze;
+    bool symbolize = is_name && config->symbolize_names;
     size_t bufferSize = stringEnd - string;
-    const char *p = string, *pe = string, *unescape, *bufferStart;
+    const char *p = string, *pe = string, *bufferStart;
     char *buffer;
-    int unescape_len;
-    char buf[4];
 
     VALUE result = rb_str_buf_new(bufferSize);
     rb_enc_associate_index(result, utf8_encindex);
     buffer = RSTRING_PTR(result);
     bufferStart = buffer;
 
-    while (pe < stringEnd && (pe = memchr(pe, '\\', stringEnd - pe))) {
-        unescape = (char *) "?";
-        unescape_len = 1;
+#define APPEND_CHAR(chr) *buffer++ = chr; p = ++pe;
+
+    while (pe < stringEnd && (pe = json_next_backslash(pe, stringEnd, positions))) {
         if (pe > p) {
           MEMCPY(buffer, p, char, pe - p);
           buffer += pe - p;
         }
         switch (*++pe) {
-            case 'n':
-                unescape = (char *) "\n";
-                break;
-            case 'r':
-                unescape = (char *) "\r";
-                break;
-            case 't':
-                unescape = (char *) "\t";
-                break;
             case '"':
-                unescape = (char *) "\"";
+            case '/':
+                p = pe; // nothing to unescape just need to skip the backslash
                 break;
             case '\\':
-                unescape = (char *) "\\";
+                APPEND_CHAR('\\');
+                break;
+            case 'n':
+                APPEND_CHAR('\n');
+                break;
+            case 'r':
+                APPEND_CHAR('\r');
+                break;
+            case 't':
+                APPEND_CHAR('\t');
                 break;
             case 'b':
-                unescape = (char *) "\b";
+                APPEND_CHAR('\b');
                 break;
             case 'f':
-                unescape = (char *) "\f";
+                APPEND_CHAR('\f');
                 break;
             case 'u':
                 if (pe > stringEnd - 5) {
@@ -725,18 +740,23 @@ static VALUE json_string_unescape(JSON_ParserState *state, const char *string, c
                             break;
                         }
                     }
-                    unescape_len = convert_UTF32_to_UTF8(buf, ch);
-                    unescape = buf;
+
+                    char buf[4];
+                    int unescape_len = convert_UTF32_to_UTF8(buf, ch);
+                    MEMCPY(buffer, buf, char, unescape_len);
+                    buffer += unescape_len;
+                    p = ++pe;
                 }
                 break;
             default:
-                p = pe;
-                continue;
+                if ((unsigned char)*pe < 0x20) {
+                    raise_parse_error_at("invalid ASCII control character in string: %s", state, pe - 1);
+                }
+                raise_parse_error_at("invalid escape character in string: %s", state, pe - 1);
+                break;
         }
-        MEMCPY(buffer, unescape, char, unescape_len);
-        buffer += unescape_len;
-        p = ++pe;
     }
+#undef APPEND_CHAR
 
     if (stringEnd > p) {
       MEMCPY(buffer, p, char, stringEnd - p);
@@ -900,20 +920,6 @@ static inline VALUE json_decode_object(JSON_ParserState *state, JSON_ParserConfi
     return object;
 }
 
-static inline VALUE json_decode_string(JSON_ParserState *state, JSON_ParserConfig *config, const char *start, const char *end, bool escaped, bool is_name)
-{
-    VALUE string;
-    bool intern = is_name || config->freeze;
-    bool symbolize = is_name && config->symbolize_names;
-    if (escaped) {
-        string = json_string_unescape(state, start, end, is_name, intern, symbolize);
-    } else {
-        string = json_string_fastpath(state, start, end, is_name, intern, symbolize);
-    }
-
-    return string;
-}
-
 static inline VALUE json_push_value(JSON_ParserState *state, JSON_ParserConfig *config, VALUE value)
 {
     if (RB_UNLIKELY(config->on_load_proc)) {
@@ -948,7 +954,7 @@ static ALWAYS_INLINE() bool string_scan(JSON_ParserState *state)
     uint64_t mask = 0;
     if (string_scan_simd_neon(&state->cursor, state->end, &mask)) {
         state->cursor += trailing_zeros64(mask) >> 2;
-        return 1;
+        return true;
     }
 
 #elif defined(HAVE_SIMD_SSE2)
@@ -956,7 +962,7 @@ static ALWAYS_INLINE() bool string_scan(JSON_ParserState *state)
         int mask = 0;
         if (string_scan_simd_sse2(&state->cursor, state->end, &mask)) {
             state->cursor += trailing_zeros(mask);
-            return 1;
+            return true;
         }
     }
 #endif /* HAVE_SIMD_NEON or HAVE_SIMD_SSE2 */
@@ -964,32 +970,37 @@ static ALWAYS_INLINE() bool string_scan(JSON_ParserState *state)
 
     while (!eos(state)) {
         if (RB_UNLIKELY(string_scan_table[(unsigned char)*state->cursor])) {
-            return 1;
+            return true;
         }
         state->cursor++;
     }
-    return 0;
+    return false;
 }
 
-static inline VALUE json_parse_string(JSON_ParserState *state, JSON_ParserConfig *config, bool is_name)
+static VALUE json_parse_escaped_string(JSON_ParserState *state, JSON_ParserConfig *config, bool is_name, const char *start)
 {
-    state->cursor++;
-    const char *start = state->cursor;
-    bool escaped = false;
+    const char *backslashes[JSON_MAX_UNESCAPE_POSITIONS];
+    JSON_UnescapePositions positions = {
+        .size = 0,
+        .positions = backslashes,
+        .has_more = false,
+    };
 
-    while (RB_UNLIKELY(string_scan(state))) {
+    do {
         switch (*state->cursor) {
             case '"': {
-                VALUE string = json_decode_string(state, config, start, state->cursor, escaped, is_name);
+                VALUE string = json_string_unescape(state, config, start, state->cursor, is_name, &positions);
                 state->cursor++;
                 return json_push_value(state, config, string);
             }
             case '\\': {
-                state->cursor++;
-                escaped = true;
-                if ((unsigned char)*state->cursor < 0x20) {
-                    raise_parse_error("invalid ASCII control character in string: %s", state);
+                if (RB_LIKELY(positions.size < JSON_MAX_UNESCAPE_POSITIONS)) {
+                    backslashes[positions.size] = state->cursor;
+                    positions.size++;
+                } else {
+                    positions.has_more = true;
                 }
+                state->cursor++;
                 break;
             }
             default:
@@ -998,10 +1009,27 @@ static inline VALUE json_parse_string(JSON_ParserState *state, JSON_ParserConfig
         }
 
         state->cursor++;
-    }
+    } while (string_scan(state));
 
     raise_parse_error("unexpected end of input, expected closing \"", state);
     return Qfalse;
+}
+
+static ALWAYS_INLINE() VALUE json_parse_string(JSON_ParserState *state, JSON_ParserConfig *config, bool is_name)
+{
+    state->cursor++;
+    const char *start = state->cursor;
+
+    if (RB_UNLIKELY(!string_scan(state))) {
+        raise_parse_error("unexpected end of input, expected closing \"", state);
+    }
+
+    if (RB_LIKELY(*state->cursor == '"')) {
+        VALUE string = json_string_fastpath(state, config, start, state->cursor, is_name);
+        state->cursor++;
+        return json_push_value(state, config, string);
+    }
+    return json_parse_escaped_string(state, config, is_name, start);
 }
 
 #if JSON_CPU_LITTLE_ENDIAN_64BITS
@@ -1477,6 +1505,7 @@ static void parser_config_init(JSON_ParserConfig *config, VALUE opts)
  */
 static VALUE cParserConfig_initialize(VALUE self, VALUE opts)
 {
+    rb_check_frozen(self);
     GET_PARSER_CONFIG;
 
     parser_config_init(config, opts);
@@ -1572,7 +1601,7 @@ static const rb_data_type_t JSON_ParserConfig_type = {
         JSON_ParserConfig_memsize,
     },
     0, 0,
-    RUBY_TYPED_FREE_IMMEDIATELY | RUBY_TYPED_WB_PROTECTED,
+    RUBY_TYPED_FREE_IMMEDIATELY | RUBY_TYPED_WB_PROTECTED | RUBY_TYPED_FROZEN_SHAREABLE,
 };
 
 static VALUE cJSON_parser_s_allocate(VALUE klass)
@@ -1622,10 +1651,6 @@ void Init_parser(void)
     sym_decimal_class = ID2SYM(rb_intern("decimal_class"));
     sym_allow_duplicate_key = ID2SYM(rb_intern("allow_duplicate_key"));
 
-    i_chr = rb_intern("chr");
-    i_aset = rb_intern("[]=");
-    i_aref = rb_intern("[]");
-    i_leftshift = rb_intern("<<");
     i_new = rb_intern("new");
     i_try_convert = rb_intern("try_convert");
     i_uminus = rb_intern("-@");

@@ -2747,7 +2747,7 @@ fn gen_checkkeyword(
 ) -> Option<CodegenStatus> {
     // When a keyword is unspecified past index 32, a hash will be used
     // instead. This can only happen in iseqs taking more than 32 keywords.
-    if unsafe { (*get_iseq_body_param_keyword(jit.iseq)).num >= 32 } {
+    if unsafe { (*get_iseq_body_param_keyword(jit.iseq)).num >= VM_KW_SPECIFIED_BITS_MAX.try_into().unwrap() } {
         return None;
     }
 
@@ -9332,13 +9332,6 @@ fn gen_send_general(
 
                         if flags & VM_CALL_ARGS_SPLAT != 0 {
                             gen_counter_incr(jit, asm, Counter::send_args_splat_opt_call);
-                            return None;
-                        }
-
-                        // Optimize for single ractor mode and avoid runtime check for
-                        // "defined with an un-shareable Proc in a different Ractor"
-                        if !assume_single_ractor_mode(jit, asm) {
-                            gen_counter_incr(jit, asm, Counter::send_call_multi_ractor);
                             return None;
                         }
 

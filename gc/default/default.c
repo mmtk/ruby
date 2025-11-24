@@ -2334,6 +2334,17 @@ rb_gc_impl_size_allocatable_p(size_t size)
 }
 
 static const size_t ALLOCATED_COUNT_STEP = 1024;
+static void
+ractor_cache_flush_count(rb_objspace_t *objspace, rb_ractor_newobj_cache_t *cache)
+{
+    for (int heap_idx = 0; heap_idx < HEAP_COUNT; heap_idx++) {
+        rb_ractor_newobj_heap_cache_t *heap_cache = &cache->heap_caches[heap_idx];
+
+        rb_heap_t *heap = &heaps[heap_idx];
+        RUBY_ATOMIC_SIZE_ADD(heap->total_allocated_objects, heap_cache->allocated_objects_count);
+        heap_cache->allocated_objects_count = 0;
+    }
+}
 
 static inline VALUE
 ractor_cache_allocate_slot(rb_objspace_t *objspace, rb_ractor_newobj_cache_t *cache,
@@ -2358,19 +2369,11 @@ ractor_cache_allocate_slot(rb_objspace_t *objspace, rb_ractor_newobj_cache_t *ca
         rb_asan_unpoison_object(obj, true);
         heap_cache->freelist = p->next;
 
-        if (rb_gc_multi_ractor_p()) {
-            heap_cache->allocated_objects_count++;
-            rb_heap_t *heap = &heaps[heap_idx];
-            if (heap_cache->allocated_objects_count >= ALLOCATED_COUNT_STEP) {
-                RUBY_ATOMIC_SIZE_ADD(heap->total_allocated_objects, heap_cache->allocated_objects_count);
-                heap_cache->allocated_objects_count = 0;
-            }
-        }
-        else {
-            rb_heap_t *heap = &heaps[heap_idx];
-            heap->total_allocated_objects++;
-            GC_ASSERT(heap->total_slots >=
-                    (heap->total_allocated_objects - heap->total_freed_objects - heap->final_slots_count));
+        heap_cache->allocated_objects_count++;
+        rb_heap_t *heap = &heaps[heap_idx];
+        if (heap_cache->allocated_objects_count >= ALLOCATED_COUNT_STEP) {
+            RUBY_ATOMIC_SIZE_ADD(heap->total_allocated_objects, heap_cache->allocated_objects_count);
+            heap_cache->allocated_objects_count = 0;
         }
 
 #if RGENGC_CHECK_MODE
@@ -5752,6 +5755,8 @@ gc_verify_internal_consistency_(rb_objspace_t *objspace)
 
     /* check counters */
 
+    ractor_cache_flush_count(objspace, rb_gc_get_ractor_newobj_cache());
+
     if (!is_lazy_sweeping(objspace) &&
             !finalizing &&
             !rb_gc_multi_ractor_p()) {
@@ -8231,6 +8236,8 @@ rb_gc_impl_stat(void *objspace_ptr, VALUE hash_or_sym)
 
     setup_gc_stat_symbols();
 
+    ractor_cache_flush_count(objspace, rb_gc_get_ractor_newobj_cache());
+
     if (RB_TYPE_P(hash_or_sym, T_HASH)) {
         hash = hash_or_sym;
     }
@@ -8326,6 +8333,9 @@ rb_gc_impl_stat(void *objspace_ptr, VALUE hash_or_sym)
 
 enum gc_stat_heap_sym {
     gc_stat_heap_sym_slot_size,
+    gc_stat_heap_sym_heap_live_slots,
+    gc_stat_heap_sym_heap_free_slots,
+    gc_stat_heap_sym_heap_final_slots,
     gc_stat_heap_sym_heap_eden_pages,
     gc_stat_heap_sym_heap_eden_slots,
     gc_stat_heap_sym_total_allocated_pages,
@@ -8344,6 +8354,9 @@ setup_gc_stat_heap_symbols(void)
     if (gc_stat_heap_symbols[0] == 0) {
 #define S(s) gc_stat_heap_symbols[gc_stat_heap_sym_##s] = ID2SYM(rb_intern_const(#s))
         S(slot_size);
+        S(heap_live_slots);
+        S(heap_free_slots);
+        S(heap_final_slots);
         S(heap_eden_pages);
         S(heap_eden_slots);
         S(total_allocated_pages);
@@ -8365,6 +8378,9 @@ stat_one_heap(rb_heap_t *heap, VALUE hash, VALUE key)
         rb_hash_aset(hash, gc_stat_heap_symbols[gc_stat_heap_sym_##name], SIZET2NUM(attr));
 
     SET(slot_size, heap->slot_size);
+    SET(heap_live_slots, heap->total_allocated_objects - heap->total_freed_objects - heap->final_slots_count);
+    SET(heap_free_slots, heap->total_slots - (heap->total_allocated_objects - heap->total_freed_objects));
+    SET(heap_final_slots, heap->final_slots_count);
     SET(heap_eden_pages, heap->total_pages);
     SET(heap_eden_slots, heap->total_slots);
     SET(total_allocated_pages, heap->total_allocated_pages);
@@ -8386,6 +8402,8 @@ VALUE
 rb_gc_impl_stat_heap(void *objspace_ptr, VALUE heap_name, VALUE hash_or_sym)
 {
     rb_objspace_t *objspace = objspace_ptr;
+
+    ractor_cache_flush_count(objspace, rb_gc_get_ractor_newobj_cache());
 
     setup_gc_stat_heap_symbols();
 

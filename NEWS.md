@@ -186,8 +186,8 @@ The following default gem is added.
 
 The following default gems are updated.
 
-* RubyGems 4.0.0.dev
-* bundler 4.0.0.dev
+* RubyGems 4.0.0.beta1
+* bundler 4.0.0.beta1
 * date 3.5.0
 * digest 3.2.1
 * english 0.8.1
@@ -218,7 +218,7 @@ The following bundled gems are added.
 
 The following bundled gems are updated.
 
-* minitest 5.26.1
+* minitest 5.26.2
 * power_assert 3.0.1
 * rake 13.3.1
 * test-unit 3.7.1

@@ -39,12 +39,14 @@
 #  endif
 #  define RUBY_REVISION_STR " "RUBY_BRANCH_NAME" "RUBY_REVISION
 # else
-#  define RUBY_API_VERSION_NAME RUBY_API_VERSION_STR
 #  define RUBY_REVISION_STR " revision "RUBY_REVISION
 # endif
 #else
 # define RUBY_REVISION "HEAD"
 # define RUBY_REVISION_STR ""
+#endif
+#ifndef RUBY_API_VERSION_NAME
+# define RUBY_API_VERSION_NAME RUBY_API_VERSION_STR
 #endif
 #if !defined RUBY_RELEASE_DATETIME || RUBY_PATCHLEVEL != -1
 # undef RUBY_RELEASE_DATETIME
@@ -138,7 +140,7 @@ Init_version(void)
      * The constants defined here are aliased in the toplevel with
      * +RUBY_+ prefix.
      */
-    VALUE mRuby = rb_path2class("Ruby");
+    VALUE mRuby = rb_define_module("Ruby");
 
     enum {ruby_patchlevel = RUBY_PATCHLEVEL};
     VALUE version = MKSTR(version);
@@ -289,6 +291,15 @@ ruby_set_yjit_description(void)
     rb_const_remove(rb_cObject, rb_intern("RUBY_DESCRIPTION"));
     rb_const_remove(mRuby, rb_intern("DESCRIPTION"));
     define_ruby_description(YJIT_DESCRIPTION);
+}
+
+void
+ruby_set_zjit_description(void)
+{
+    VALUE mRuby = rb_path2class("Ruby");
+    rb_const_remove(rb_cObject, rb_intern("RUBY_DESCRIPTION"));
+    rb_const_remove(mRuby, rb_intern("DESCRIPTION"));
+    define_ruby_description(ZJIT_DESCRIPTION);
 }
 
 void

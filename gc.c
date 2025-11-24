@@ -187,13 +187,13 @@ rb_gc_vm_barrier(void)
     rb_vm_barrier();
 }
 
-#if USE_MODULAR_GC
 void *
 rb_gc_get_ractor_newobj_cache(void)
 {
     return GET_RACTOR()->newobj_cache;
 }
 
+#if USE_MODULAR_GC
 void
 rb_gc_initialize_vm_context(struct rb_gc_vm_context *context)
 {
@@ -3468,7 +3468,13 @@ rb_gc_obj_optimal_size(VALUE obj)
             return sizeof(struct RObject);
         }
         else {
-            return rb_obj_embedded_size(ROBJECT_FIELDS_CAPACITY(obj));
+            size_t size = rb_obj_embedded_size(ROBJECT_FIELDS_CAPACITY(obj));
+            if (rb_gc_size_allocatable_p(size)) {
+                return size;
+            }
+            else {
+                return sizeof(struct RObject);
+            }
         }
 
       case T_STRING:
