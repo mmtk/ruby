@@ -116,12 +116,16 @@ struct RubyMMTKGlobal {
     pthread_mutex_t mutex;
     pthread_cond_t cond_world_stopped;
     pthread_cond_t cond_world_started;
+    rb_atomic_t mutator_blocking_count;
+    unsigned int fork_hook_vm_lock_lev;
     bool world_stopped;
     size_t start_the_world_count;
 } rb_mmtk_global = {
     .mutex = PTHREAD_MUTEX_INITIALIZER,
     .cond_world_stopped = PTHREAD_COND_INITIALIZER,
     .cond_world_started = PTHREAD_COND_INITIALIZER,
+    .mutator_blocking_count = 0,
+    .fork_hook_vm_lock_lev = 0,
     .world_stopped = false,
     .start_the_world_count = 0,
 };
@@ -1432,12 +1436,34 @@ rb_mmtk_assert_is_pinned(VALUE obj)
 void
 rb_mmtk_shutdown_gc_threads(void)
 {
+  retry:
+    rb_mmtk_global.fork_hook_vm_lock_lev = RB_GC_VM_LOCK();
+    rb_gc_vm_barrier();
+
+    /* At this point, we know that all the Ractors are paused because of the
+     * rb_gc_vm_barrier above. Since rb_mmtk_block_for_gc is a barrier point,
+     * one or more Ractors could be paused there. However, mmtk_before_fork is
+     * not compatible with that because it assumes that the MMTk workers are idle,
+     * but the workers are not idle because they are busy working on a GC.
+     *
+     * This essentially implements a trylock. It will optimistically lock but will
+     * release the lock if it detects that any other Ractors are waiting in
+     * rb_mmtk_block_for_gc.
+     */
+    rb_atomic_t mutator_blocking_count = RUBY_ATOMIC_LOAD(rb_mmtk_global.mutator_blocking_count);
+    if (mutator_blocking_count != 0) {
+        RB_GC_VM_UNLOCK(rb_mmtk_global.fork_hook_vm_lock_lev);
+        goto retry;
+    }
+
     mmtk_prepare_to_fork();
 }
 
 void rb_mmtk_respawn_gc_threads(void)
 {
     mmtk_after_fork(GET_THREAD());
+
+    RB_GC_VM_UNLOCK(rb_mmtk_global.fork_hook_vm_lock_lev);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1780,7 +1806,11 @@ rb_mmtk_block_for_gc(MMTk_VMMutatorThread tls)
     // Note that the current ractor may not be the only mutator that requests GC.
     // The first mutator reached here will acquire the lock and initiate the VM barrier.
     // Subsequent mutators reached here will block until the GC finishes.
+    // We use a mutator blocking count to communicate with rb_gc_impl_before_fork.
+    RUBY_ATOMIC_INC(rb_mmtk_global.mutator_blocking_count);
     int lock_lev = RB_GC_VM_LOCK();
+    RUBY_ATOMIC_DEC(rb_mmtk_global.mutator_blocking_count);
+
 
     if (rb_mmtk_global.start_the_world_count == my_count) {
         // If the GC count is the same, we are the first mutator reached here.
