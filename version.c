@@ -227,7 +227,7 @@ define_ruby_description(const char *const jit_opt)
         + rb_strlen_lit(" +MN")
 #if USE_MMTK
         // This should be long enough for all plans we have.
-        + rb_strlen_lit(" +MMTk(XXXXXXXXXXXXXXXX)")
+        + rb_strlen_lit(" +MMTk[XXXXXXXXXXXXXXXX]")
 #endif
         + rb_strlen_lit(" +PRISM")
 #if USE_MODULAR_GC
@@ -248,9 +248,9 @@ define_ruby_description(const char *const jit_opt)
     if (ruby_mn_threads_enabled) append(" +MN");
     if (rb_ruby_prism_p()) append(" +PRISM");
     WHEN_USING_MMTK({
-        append(" +MMTk(");
+        append(" +MMTk[");
         append(mmtk_plan_name());
-        append(")");
+        append("]");
     })
 #if USE_MODULAR_GC
     append(GC_DESCRIPTION);

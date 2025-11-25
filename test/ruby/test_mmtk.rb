@@ -34,7 +34,7 @@ class TestMMTk < Test::Unit::TestCase
     ['--disable=mmtk', '--mmtk-max-heap=10240000']
   ]
 
-  MMTK_EXPECETED_PART = '+MMTk(XGC)'
+  MMTK_EXPECETED_PART = '+MMTk[XGC]'
 
   def test_enable
     ENABLE_OPTIONS.each do |version_args|
@@ -107,6 +107,6 @@ class TestMMTk < Test::Unit::TestCase
   end
 
   def scrub_desc(desc)
-    desc.gsub(/\((MarkSweep|NoGC|Immix|StickyImmix)\)/, '(XGC)')
+    desc.gsub(/\[(MarkSweep|NoGC|Immix|StickyImmix)\]/, '[XGC]')
   end
 end
