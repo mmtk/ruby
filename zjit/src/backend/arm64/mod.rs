@@ -24,13 +24,15 @@ pub const EC: Opnd = Opnd::Reg(X20_REG);
 pub const SP: Opnd = Opnd::Reg(X21_REG);
 
 // C argument registers on this platform
-pub const C_ARG_OPNDS: [Opnd; 6] = [
+pub const C_ARG_OPNDS: [Opnd; 8] = [
     Opnd::Reg(X0_REG),
     Opnd::Reg(X1_REG),
     Opnd::Reg(X2_REG),
     Opnd::Reg(X3_REG),
     Opnd::Reg(X4_REG),
-    Opnd::Reg(X5_REG)
+    Opnd::Reg(X5_REG),
+    Opnd::Reg(X6_REG),
+    Opnd::Reg(X7_REG)
 ];
 
 // C return value register on this platform
@@ -199,6 +201,8 @@ pub const ALLOC_REGS: &[Reg] = &[
     X3_REG,
     X4_REG,
     X5_REG,
+    X6_REG,
+    X7_REG,
     X11_REG,
     X12_REG,
 ];
@@ -231,7 +235,7 @@ impl Assembler {
 
     /// Get a list of all of the caller-saved registers
     pub fn get_caller_save_regs() -> Vec<Reg> {
-        vec![X1_REG, X9_REG, X10_REG, X11_REG, X12_REG, X13_REG, X14_REG, X15_REG]
+        vec![X1_REG, X6_REG, X7_REG, X9_REG, X10_REG, X11_REG, X12_REG, X13_REG, X14_REG, X15_REG]
     }
 
     /// How many bytes a call and a [Self::frame_setup] would change native SP
@@ -391,10 +395,10 @@ impl Assembler {
 
         let mut asm_local = Assembler::new_with_asm(&self);
         let live_ranges: Vec<LiveRange> = take(&mut self.live_ranges);
-        let mut iterator = self.insns.into_iter().enumerate().peekable();
+        let mut iterator = self.instruction_iterator();
         let asm = &mut asm_local;
 
-        while let Some((index, mut insn)) = iterator.next() {
+        while let Some((index, mut insn)) = iterator.next(asm) {
             // Here we're going to map the operands of the instruction to load
             // any Opnd::Value operands into registers if they are heap objects
             // such that only the Op::Load instruction needs to handle that
@@ -428,13 +432,13 @@ impl Assembler {
                             *right = split_shifted_immediate(asm, other_opnd);
                             // Now `right` is either a register or an immediate, both can try to
                             // merge with a subsequent mov.
-                            merge_three_reg_mov(&live_ranges, &mut iterator, left, left, out);
+                            merge_three_reg_mov(&live_ranges, &mut iterator, asm, left, left, out);
                             asm.push_insn(insn);
                         }
                         _ => {
                             *left = split_load_operand(asm, *left);
                             *right = split_shifted_immediate(asm, *right);
-                            merge_three_reg_mov(&live_ranges, &mut iterator, left, right, out);
+                            merge_three_reg_mov(&live_ranges, &mut iterator, asm, left, right, out);
                             asm.push_insn(insn);
                         }
                     }
@@ -444,7 +448,7 @@ impl Assembler {
                     *right = split_shifted_immediate(asm, *right);
                     // Now `right` is either a register or an immediate,
                     // both can try to merge with a subsequent mov.
-                    merge_three_reg_mov(&live_ranges, &mut iterator, left, left, out);
+                    merge_three_reg_mov(&live_ranges, &mut iterator, asm, left, left, out);
                     asm.push_insn(insn);
                 }
                 Insn::And { left, right, out } |
@@ -454,7 +458,7 @@ impl Assembler {
                     *left = opnd0;
                     *right = opnd1;
 
-                    merge_three_reg_mov(&live_ranges, &mut iterator, left, right, out);
+                    merge_three_reg_mov(&live_ranges, &mut iterator, asm, left, right, out);
 
                     asm.push_insn(insn);
                 }
@@ -488,31 +492,13 @@ impl Assembler {
                 }
                 */
                 Insn::CCall { opnds, .. } => {
-                    assert!(opnds.len() <= C_ARG_OPNDS.len());
-
-                    // Load each operand into the corresponding argument
-                    // register.
-                    // Note: the iteration order is reversed to avoid corrupting x0,
-                    // which is both the return value and first argument register
-                    if !opnds.is_empty() {
-                        let mut args: Vec<(Opnd, Opnd)> = vec![];
-                        for (idx, opnd) in opnds.iter_mut().enumerate().rev() {
-                            // If the value that we're sending is 0, then we can use
-                            // the zero register, so in this case we'll just send
-                            // a UImm of 0 along as the argument to the move.
-                            let value = match opnd {
-                                Opnd::UImm(0) | Opnd::Imm(0) => Opnd::UImm(0),
-                                Opnd::Mem(_) => split_memory_address(asm, *opnd),
-                                _ => *opnd
-                            };
-                            args.push((C_ARG_OPNDS[idx], value));
-                        }
-                        asm.parallel_mov(args);
-                    }
-
-                    // Now we push the CCall without any arguments so that it
-                    // just performs the call.
-                    *opnds = vec![];
+                    opnds.iter_mut().for_each(|opnd| {
+                        *opnd = match opnd {
+                            Opnd::UImm(0) | Opnd::Imm(0) => Opnd::UImm(0),
+                            Opnd::Mem(_) => split_memory_address(asm, *opnd),
+                            _ => *opnd
+                        };
+                    });
                     asm.push_insn(insn);
                 },
                 Insn::Cmp { left, right } => {
@@ -567,7 +553,7 @@ impl Assembler {
                         if matches!(out, Opnd::VReg { .. }) && *out == *src && live_ranges[out.vreg_idx()].end() == index + 1 => {
                             *out = Opnd::Reg(*reg);
                             asm.push_insn(insn);
-                            iterator.next(); // Pop merged Insn::Mov
+                            iterator.next(asm); // Pop merged Insn::Mov
                         }
                         _ => {
                             asm.push_insn(insn);
@@ -694,7 +680,7 @@ impl Assembler {
     /// VRegs, most splits should happen in [`Self::arm64_split`]. However, some instructions
     /// need to be split with registers after `alloc_regs`, e.g. for `compile_exits`, so this
     /// splits them and uses scratch registers for it.
-    fn arm64_scratch_split(self) -> Assembler {
+    fn arm64_scratch_split(mut self) -> Assembler {
         /// If opnd is Opnd::Mem with a too large disp, make the disp smaller using lea.
         fn split_large_disp(asm: &mut Assembler, opnd: Opnd, scratch_opnd: Opnd) -> Opnd {
             match opnd {
@@ -753,9 +739,9 @@ impl Assembler {
         let mut asm_local = Assembler::new_with_asm(&self);
         let asm = &mut asm_local;
         asm.accept_scratch_reg = true;
-        let mut iterator = self.insns.into_iter().enumerate().peekable();
+        let iterator = &mut self.instruction_iterator();
 
-        while let Some((_, mut insn)) = iterator.next() {
+        while let Some((_, mut insn)) = iterator.next(asm) {
             match &mut insn {
                 Insn::Add { left, right, out } |
                 Insn::Sub { left, right, out } |
@@ -903,8 +889,8 @@ impl Assembler {
                         }
                     }
                 }
-                &mut Insn::PatchPoint { ref target, invariant, payload } => {
-                    split_patch_point(asm, target, invariant, payload);
+                &mut Insn::PatchPoint { ref target, invariant, version } => {
+                    split_patch_point(asm, target, invariant, version);
                 }
                 _ => {
                     asm.push_insn(insn);
@@ -1311,7 +1297,7 @@ impl Assembler {
                         64 | 32 => stur(cb, src, dest.into()),
                         16 => sturh(cb, src, dest.into()),
                         8 => sturb(cb, src, dest.into()),
-                        num_bits => panic!("unexpected dest num_bits: {} (src: {:?}, dest: {:?})", num_bits, src, dest),
+                        num_bits => panic!("unexpected dest num_bits: {num_bits} (src: {src:?}, dest: {dest:?})"),
                     }
                 },
                 Insn::Load { opnd, out } |
@@ -1331,7 +1317,7 @@ impl Assembler {
                                 64 | 32 => ldur(cb, out.into(), opnd.into()),
                                 16 => ldurh(cb, out.into(), opnd.into()),
                                 8 => ldurb(cb, out.into(), opnd.into()),
-                                num_bits => panic!("unexpected num_bits: {}", num_bits)
+                                num_bits => panic!("unexpected num_bits: {num_bits}"),
                             };
                         },
                         Opnd::Value(value) => {
@@ -1660,7 +1646,8 @@ impl Assembler {
 /// If a, b, and c are all registers.
 fn merge_three_reg_mov(
     live_ranges: &[LiveRange],
-    iterator: &mut std::iter::Peekable<impl Iterator<Item = (usize, Insn)>>,
+    iterator: &mut InsnIter,
+    asm: &mut Assembler,
     left: &Opnd,
     right: &Opnd,
     out: &mut Opnd,
@@ -1671,7 +1658,7 @@ fn merge_three_reg_mov(
             = (left, right, iterator.peek()) {
         if out == src && live_ranges[out.vreg_idx()].end() == *mov_idx && matches!(*dest, Opnd::Reg(_) | Opnd::VReg{..}) {
             *out = *dest;
-            iterator.next(); // Pop merged Insn::Mov
+            iterator.next(asm); // Pop merged Insn::Mov
         }
     }
 }
@@ -1856,17 +1843,19 @@ mod tests {
 
         assert_disasm_snapshot!(cb.disasm(), @r"
         0x0: str x1, [sp, #-0x10]!
-        0x4: str x9, [sp, #-0x10]!
-        0x8: str x10, [sp, #-0x10]!
-        0xc: str x11, [sp, #-0x10]!
-        0x10: str x12, [sp, #-0x10]!
-        0x14: str x13, [sp, #-0x10]!
-        0x18: str x14, [sp, #-0x10]!
-        0x1c: str x15, [sp, #-0x10]!
-        0x20: mrs x16, nzcv
-        0x24: str x16, [sp, #-0x10]!
+        0x4: str x6, [sp, #-0x10]!
+        0x8: str x7, [sp, #-0x10]!
+        0xc: str x9, [sp, #-0x10]!
+        0x10: str x10, [sp, #-0x10]!
+        0x14: str x11, [sp, #-0x10]!
+        0x18: str x12, [sp, #-0x10]!
+        0x1c: str x13, [sp, #-0x10]!
+        0x20: str x14, [sp, #-0x10]!
+        0x24: str x15, [sp, #-0x10]!
+        0x28: mrs x16, nzcv
+        0x2c: str x16, [sp, #-0x10]!
         ");
-        assert_snapshot!(cb.hexdump(), @"e10f1ff8e90f1ff8ea0f1ff8eb0f1ff8ec0f1ff8ed0f1ff8ee0f1ff8ef0f1ff810423bd5f00f1ff8");
+        assert_snapshot!(cb.hexdump(), @"e10f1ff8e60f1ff8e70f1ff8e90f1ff8ea0f1ff8eb0f1ff8ec0f1ff8ed0f1ff8ee0f1ff8ef0f1ff810423bd5f00f1ff8");
     }
 
     #[test]
@@ -1886,9 +1875,11 @@ mod tests {
         0x18: ldr x11, [sp], #0x10
         0x1c: ldr x10, [sp], #0x10
         0x20: ldr x9, [sp], #0x10
-        0x24: ldr x1, [sp], #0x10
+        0x24: ldr x7, [sp], #0x10
+        0x28: ldr x6, [sp], #0x10
+        0x2c: ldr x1, [sp], #0x10
         ");
-        assert_snapshot!(cb.hexdump(), @"10421bd5f00741f8ef0741f8ee0741f8ed0741f8ec0741f8eb0741f8ea0741f8e90741f8e10741f8");
+        assert_snapshot!(cb.hexdump(), @"10421bd5f00741f8ef0741f8ee0741f8ed0741f8ec0741f8eb0741f8ea0741f8e90741f8e70741f8e60741f8e10741f8");
     }
 
     #[test]
@@ -2657,14 +2648,14 @@ mod tests {
         ]);
         asm.compile_with_num_regs(&mut cb, ALLOC_REGS.len());
 
-        assert_disasm_snapshot!(cb.disasm(), @"
-            0x0: mov x15, x0
-            0x4: mov x0, x1
-            0x8: mov x1, x15
-            0xc: mov x16, #0
-            0x10: blr x16
+        assert_disasm_snapshot!(cb.disasm(), @r"
+        0x0: mov x15, x1
+        0x4: mov x1, x0
+        0x8: mov x0, x15
+        0xc: mov x16, #0
+        0x10: blr x16
         ");
-        assert_snapshot!(cb.hexdump(), @"ef0300aae00301aae1030faa100080d200023fd6");
+        assert_snapshot!(cb.hexdump(), @"ef0301aae10300aae0030faa100080d200023fd6");
     }
 
     #[test]
@@ -2680,17 +2671,17 @@ mod tests {
         ]);
         asm.compile_with_num_regs(&mut cb, ALLOC_REGS.len());
 
-        assert_disasm_snapshot!(cb.disasm(), @"
-            0x0: mov x15, x2
-            0x4: mov x2, x3
-            0x8: mov x3, x15
-            0xc: mov x15, x0
-            0x10: mov x0, x1
-            0x14: mov x1, x15
-            0x18: mov x16, #0
-            0x1c: blr x16
+        assert_disasm_snapshot!(cb.disasm(), @r"
+        0x0: mov x15, x1
+        0x4: mov x1, x0
+        0x8: mov x0, x15
+        0xc: mov x15, x3
+        0x10: mov x3, x2
+        0x14: mov x2, x15
+        0x18: mov x16, #0
+        0x1c: blr x16
         ");
-        assert_snapshot!(cb.hexdump(), @"ef0302aae20303aae3030faaef0300aae00301aae1030faa100080d200023fd6");
+        assert_snapshot!(cb.hexdump(), @"ef0301aae10300aae0030faaef0303aae30302aae2030faa100080d200023fd6");
     }
 
     #[test]
@@ -2705,15 +2696,15 @@ mod tests {
         ]);
         asm.compile_with_num_regs(&mut cb, ALLOC_REGS.len());
 
-        assert_disasm_snapshot!(cb.disasm(), @"
-            0x0: mov x15, x0
-            0x4: mov x0, x1
-            0x8: mov x1, x2
-            0xc: mov x2, x15
-            0x10: mov x16, #0
-            0x14: blr x16
+        assert_disasm_snapshot!(cb.disasm(), @r"
+        0x0: mov x15, x1
+        0x4: mov x1, x2
+        0x8: mov x2, x0
+        0xc: mov x0, x15
+        0x10: mov x16, #0
+        0x14: blr x16
         ");
-        assert_snapshot!(cb.hexdump(), @"ef0300aae00301aae10302aae2030faa100080d200023fd6");
+        assert_snapshot!(cb.hexdump(), @"ef0301aae10302aae20300aae0030faa100080d200023fd6");
     }
 
     #[test]

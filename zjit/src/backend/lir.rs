@@ -9,7 +9,7 @@ use crate::cruby::{Qundef, RUBY_OFFSET_CFP_PC, RUBY_OFFSET_CFP_SP, SIZEOF_VALUE_
 use crate::hir::{Invariant, SideExitReason};
 use crate::options::{TraceExits, debug, get_option};
 use crate::cruby::VALUE;
-use crate::payload::IseqPayload;
+use crate::payload::IseqVersionRef;
 use crate::stats::{exit_counter_ptr, exit_counter_ptr_for_opcode, side_exit_counter, CompileError};
 use crate::virtualmem::CodePtr;
 use crate::asm::{CodeBlock, Label};
@@ -531,7 +531,7 @@ pub enum Insn {
     Or { left: Opnd, right: Opnd, out: Opnd },
 
     /// Patch point that will be rewritten to a jump to a side exit on invalidation.
-    PatchPoint { target: Target, invariant: Invariant, payload: *mut IseqPayload },
+    PatchPoint { target: Target, invariant: Invariant, version: IseqVersionRef },
 
     /// Make sure the last PatchPoint has enough space to insert a jump.
     /// We insert this instruction at the end of each block so that the jump
@@ -1399,6 +1399,15 @@ impl Assembler
         }
     }
 
+    pub fn instruction_iterator(&mut self) -> InsnIter {
+        let insns = take(&mut self.insns);
+        InsnIter {
+            old_insns_iter: insns.into_iter(),
+            peeked: None,
+            index: 0,
+        }
+    }
+
     pub fn expect_leaf_ccall(&mut self, stack_size: usize) {
         self.leaf_ccall_stack_size = Some(stack_size);
     }
@@ -1550,9 +1559,8 @@ impl Assembler
                 frame_setup_idxs.push(asm.insns.len());
             }
 
-            let before_ccall = match (&insn, iterator.peek().map(|(_, insn)| insn)) {
-                (Insn::ParallelMov { .. }, Some(Insn::CCall { .. })) |
-                (Insn::CCall { .. }, _) if !pool.is_empty() => {
+            let before_ccall = match &insn {
+                Insn::CCall { .. } if !pool.is_empty() => {
                     // If C_RET_REG is in use, move it to another register.
                     // This must happen before last-use registers are deallocated.
                     if let Some(vreg_idx) = pool.vreg_for(&C_RET_REG) {
@@ -1602,6 +1610,25 @@ impl Assembler
                 // On x86_64, maintain 16-byte stack alignment
                 if cfg!(target_arch = "x86_64") && saved_regs.len() % 2 == 1 {
                     asm.cpush(Opnd::Reg(saved_regs.last().unwrap().0));
+                }
+                if let Insn::ParallelMov { moves } = &insn {
+                    if moves.len() > C_ARG_OPNDS.len() {
+                        let difference = moves.len().saturating_sub(C_ARG_OPNDS.len());
+
+                        #[cfg(target_arch = "x86_64")]
+                        let offset = {
+                            // double quadword alignment
+                            ((difference + 3) / 4) * 4
+                        };
+
+                        #[cfg(target_arch = "aarch64")]
+                        let offset = {
+                            // quadword alignment
+                            if difference % 2 == 0 { difference } else { difference + 1 }
+                        };
+
+                        asm.sub_into(NATIVE_STACK_PTR, (offset * 8).into());
+                    }
                 }
             }
 
@@ -1694,7 +1721,23 @@ impl Assembler
             // Push instruction(s)
             let is_ccall = matches!(insn, Insn::CCall { .. });
             match insn {
-                Insn::ParallelMov { moves } => {
+                Insn::CCall { opnds, fptr, start_marker, end_marker, out } => {
+                    let mut moves: Vec<(Opnd, Opnd)> = vec![];
+                    let num_reg_args = opnds.len().min(C_ARG_OPNDS.len());
+                    let num_stack_args = opnds.len().saturating_sub(C_ARG_OPNDS.len());
+
+                    if num_stack_args > 0 {
+                        for (i, opnd) in opnds.iter().skip(num_reg_args).enumerate() {
+                            moves.push((Opnd::mem(64, NATIVE_STACK_PTR, 8 * i as i32), *opnd));
+                        }
+                    }
+
+                    if num_reg_args > 0 {
+                        for (i, opnd) in opnds.iter().take(num_reg_args).enumerate() {
+                            moves.push((C_ARG_OPNDS[i], *opnd));
+                        }
+                    }
+
                     // For trampolines that use scratch registers, attempt to lower ParallelMov without scratch_reg.
                     if let Some(moves) = Self::resolve_parallel_moves(&moves, None) {
                         for (dst, src) in moves {
@@ -1704,13 +1747,12 @@ impl Assembler
                         // If it needs a scratch_reg, leave it to *_split_with_scratch_regs to handle it.
                         asm.push_insn(Insn::ParallelMov { moves });
                     }
-                }
-                Insn::CCall { opnds, fptr, start_marker, end_marker, out } => {
+
                     // Split start_marker and end_marker here to avoid inserting push/pop between them.
                     if let Some(start_marker) = start_marker {
                         asm.push_insn(Insn::PosMarker(start_marker));
                     }
-                    asm.push_insn(Insn::CCall { opnds, fptr, start_marker: None, end_marker: None, out });
+                    asm.push_insn(Insn::CCall { opnds: vec![], fptr, start_marker: None, end_marker: None, out });
                     if let Some(end_marker) = end_marker {
                         asm.push_insn(Insn::PosMarker(end_marker));
                     }
@@ -1995,6 +2037,44 @@ impl fmt::Debug for Assembler {
         }
 
         Ok(())
+    }
+}
+
+pub struct InsnIter {
+    old_insns_iter: std::vec::IntoIter<Insn>,
+    peeked: Option<(usize, Insn)>,
+    index: usize,
+}
+
+impl InsnIter {
+    // We're implementing our own peek() because we don't want peek to
+    // cross basic blocks as we're iterating.
+    pub fn peek(&mut self) -> Option<&(usize, Insn)> {
+        // If we don't have a peeked value, get one
+        if self.peeked.is_none() {
+            let insn = self.old_insns_iter.next()?;
+            let idx = self.index;
+            self.index += 1;
+            self.peeked = Some((idx, insn));
+        }
+        // Return a reference to the peeked value
+        self.peeked.as_ref()
+    }
+
+    // Get the next instruction.  Right now we're passing the "new" assembler
+    // (the assembler we're copying in to) as a parameter.  Once we've
+    // introduced basic blocks to LIR, we'll use the to set the correct BB
+    // on the new assembler, but for now it is unused.
+    pub fn next(&mut self, _new_asm: &mut Assembler) -> Option<(usize, Insn)> {
+        // If we have a peeked value, return it
+        if let Some(item) = self.peeked.take() {
+            return Some(item);
+        }
+        // Otherwise get the next from underlying iterator
+        let insn = self.old_insns_iter.next()?;
+        let idx = self.index;
+        self.index += 1;
+        Some((idx, insn))
     }
 }
 
@@ -2311,8 +2391,8 @@ impl Assembler {
         out
     }
 
-    pub fn patch_point(&mut self, target: Target, invariant: Invariant, payload: *mut IseqPayload) {
-        self.push_insn(Insn::PatchPoint { target, invariant, payload });
+    pub fn patch_point(&mut self, target: Target, invariant: Invariant, version: IseqVersionRef) {
+        self.push_insn(Insn::PatchPoint { target, invariant, version });
     }
 
     pub fn pad_patch_point(&mut self) {

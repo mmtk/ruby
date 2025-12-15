@@ -1036,7 +1036,7 @@ rb_method_definition_set(const rb_method_entry_t *me, rb_method_definition_t *de
             }
           case VM_METHOD_TYPE_BMETHOD:
             RB_OBJ_WRITE(me, &def->body.bmethod.proc, (VALUE)opts);
-            RB_OBJ_WRITE(me, &def->body.bmethod.defined_ractor, rb_ractor_self(GET_RACTOR()));
+            def->body.bmethod.defined_ractor_id = rb_ractor_id(rb_ec_ractor_ptr(GET_EC()));
             return;
           case VM_METHOD_TYPE_NOTIMPLEMENTED:
             setup_method_cfunc_struct(UNALIGNED_MEMBER_PTR(def, body.cfunc), (VALUE(*)(ANYARGS))rb_f_notimplement_internal, -1);
@@ -1076,7 +1076,6 @@ method_definition_reset(const rb_method_entry_t *me)
         break;
       case VM_METHOD_TYPE_BMETHOD:
         RB_OBJ_WRITTEN(me, Qundef, def->body.bmethod.proc);
-        RB_OBJ_WRITTEN(me, Qundef, def->body.bmethod.defined_ractor);
         /* give up to check all in a list */
         if (def->body.bmethod.hooks) rb_gc_writebarrier_remember((VALUE)me);
         break;
@@ -1298,6 +1297,7 @@ check_override_opt_method(VALUE klass, VALUE mid)
     }
 }
 
+static inline rb_method_entry_t* search_method0(VALUE klass, ID id, VALUE *defined_class_ptr, bool skip_refined);
 /*
  * klass->method_table[mid] = method_entry(defined_class, visi, def)
  *
@@ -1338,7 +1338,12 @@ rb_method_entry_make(VALUE klass, ID mid, VALUE defined_class, rb_method_visibil
 
     if (RB_TYPE_P(klass, T_MODULE) && FL_TEST(klass, RMODULE_IS_REFINEMENT)) {
         VALUE refined_class = rb_refinement_module_get_refined_class(klass);
+        bool search_superclass = type == VM_METHOD_TYPE_ZSUPER && !lookup_method_table(refined_class, mid);
         rb_add_refined_method_entry(refined_class, mid);
+        if (search_superclass) {
+            rb_method_entry_t *me = lookup_method_table(refined_class, mid);
+            me->def->body.refined.orig_me = search_method0(refined_class, mid, NULL, true);
+        }
     }
     if (type == VM_METHOD_TYPE_REFINED) {
         rb_method_entry_t *old_me = lookup_method_table(RCLASS_ORIGIN(klass), mid);
@@ -1646,10 +1651,20 @@ rb_undef_alloc_func(VALUE klass)
 rb_alloc_func_t
 rb_get_alloc_func(VALUE klass)
 {
-    Check_Type(klass, T_CLASS);
+    RBIMPL_ASSERT_TYPE(klass, T_CLASS);
 
-    for (; klass; klass = RCLASS_SUPER(klass)) {
-        rb_alloc_func_t allocator = RCLASS_ALLOCATOR(klass);
+    rb_alloc_func_t allocator = RCLASS_ALLOCATOR(klass);
+    if (allocator == UNDEF_ALLOC_FUNC) return 0;
+    if (allocator) return allocator;
+
+    VALUE *superclasses = RCLASS_SUPERCLASSES(klass);
+    size_t depth = RCLASS_SUPERCLASS_DEPTH(klass);
+
+    for (size_t i = depth; i > 0; i--) {
+        klass = superclasses[i - 1];
+        RBIMPL_ASSERT_TYPE(klass, T_CLASS);
+
+        allocator = RCLASS_ALLOCATOR(klass);
         if (allocator == UNDEF_ALLOC_FUNC) break;
         if (allocator) return allocator;
     }

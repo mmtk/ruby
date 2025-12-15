@@ -2012,10 +2012,9 @@ fiber_alloc(VALUE klass)
 }
 
 static rb_serial_t
-next_fiber_serial(void)
+next_fiber_serial(rb_ractor_t *cr)
 {
-    static rbimpl_atomic_uint64_t fiber_serial = 1;
-    return (rb_serial_t)ATOMIC_U64_FETCH_ADD(fiber_serial, 1);
+    return cr->next_fiber_serial++;
 }
 
 static rb_fiber_t*
@@ -2034,7 +2033,7 @@ fiber_t_alloc(VALUE fiber_value, unsigned int blocking)
     fiber->cont.type = FIBER_CONTEXT;
     fiber->blocking = blocking;
     fiber->killed = 0;
-    fiber->serial = next_fiber_serial();
+    fiber->serial = next_fiber_serial(th->ractor);
     cont_init(&fiber->cont, th);
 
     fiber->cont.saved_ec.fiber_ptr = fiber;
@@ -2209,7 +2208,7 @@ rb_fiber_storage_set(VALUE self, VALUE value)
  *  Returns the value of the fiber storage variable identified by +key+.
  *
  *  The +key+ must be a symbol, and the value is set by Fiber#[]= or
- *  Fiber#store.
+ *  Fiber#storage.
  *
  *  See also Fiber::[]=.
  */
@@ -2587,7 +2586,7 @@ rb_threadptr_root_fiber_setup(rb_thread_t *th)
     fiber->cont.saved_ec.thread_ptr = th;
     fiber->blocking = 1;
     fiber->killed = 0;
-    fiber->serial = next_fiber_serial();
+    fiber->serial = next_fiber_serial(th->ractor);
     fiber_status_set(fiber, FIBER_RESUMED); /* skip CREATED */
     th->ec = &fiber->cont.saved_ec;
     cont_init_jit_cont(&fiber->cont);
@@ -2924,6 +2923,7 @@ void
 rb_fiber_close(rb_fiber_t *fiber)
 {
     fiber_status_set(fiber, FIBER_TERMINATED);
+    rb_ec_close(&fiber->cont.saved_ec);
 }
 
 static void
@@ -3387,6 +3387,8 @@ rb_fiber_atfork(rb_thread_t *th)
             th->root_fiber = th->ec->fiber_ptr;
         }
         th->root_fiber->prev = 0;
+        th->root_fiber->blocking = 1;
+        th->blocking = 1;
     }
 }
 #endif

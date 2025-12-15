@@ -1894,7 +1894,7 @@ rb_mmtk_scan_roots_in_mutator_thread(MMTk_VMMutatorThread vm_mutator, MMTk_VMWor
 bool
 rb_mmtk_has_exivar(MMTk_ObjectReference object)
 {
-    return rb_obj_exivar_p((VALUE)object);
+    return rb_obj_gen_fields_p((VALUE)object);
 }
 
 static MMTk_ObjectReference

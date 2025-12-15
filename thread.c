@@ -221,7 +221,18 @@ vm_check_ints_blocking(rb_execution_context_t *ec)
         th->pending_interrupt_queue_checked = 0;
         RUBY_VM_SET_INTERRUPT(ec);
     }
-    return rb_threadptr_execute_interrupts(th, 1);
+
+    int result = rb_threadptr_execute_interrupts(th, 1);
+
+    // When a signal is received, we yield to the scheduler as soon as possible:
+    if (result || RUBY_VM_INTERRUPTED(ec)) {
+        VALUE scheduler = rb_fiber_scheduler_current_for_threadptr(th);
+        if (scheduler != Qnil) {
+            rb_fiber_scheduler_yield(scheduler);
+        }
+    }
+
+    return result;
 }
 
 int
@@ -1013,7 +1024,7 @@ rb_thread_create_ractor(rb_ractor_t *r, VALUE args, VALUE proc)
         .args = args,
         .proc = proc,
     };
-    return thread_create_core(rb_thread_alloc(rb_cThread), &params);;
+    return thread_create_core(rb_thread_alloc(rb_cThread), &params);
 }
 
 
@@ -1064,7 +1075,7 @@ thread_join_sleep(VALUE arg)
     }
 
     while (!thread_finished(target_th)) {
-        VALUE scheduler = rb_fiber_scheduler_current();
+        VALUE scheduler = rb_fiber_scheduler_current_for_threadptr(th);
 
         if (!limit) {
             if (scheduler != Qnil) {
@@ -1413,17 +1424,18 @@ rb_thread_sleep_deadly(void)
 static void
 rb_thread_sleep_deadly_allow_spurious_wakeup(VALUE blocker, VALUE timeout, rb_hrtime_t end)
 {
-    VALUE scheduler = rb_fiber_scheduler_current();
+    rb_thread_t *th = GET_THREAD();
+    VALUE scheduler = rb_fiber_scheduler_current_for_threadptr(th);
     if (scheduler != Qnil) {
         rb_fiber_scheduler_block(scheduler, blocker, timeout);
     }
     else {
         RUBY_DEBUG_LOG("...");
         if (end) {
-            sleep_hrtime_until(GET_THREAD(), end, SLEEP_SPURIOUS_CHECK);
+            sleep_hrtime_until(th, end, SLEEP_SPURIOUS_CHECK);
         }
         else {
-            sleep_forever(GET_THREAD(), SLEEP_DEADLOCKABLE);
+            sleep_forever(th, SLEEP_DEADLOCKABLE);
         }
     }
 }
@@ -2042,6 +2054,9 @@ rb_thread_io_blocking_region(struct rb_io *io, rb_blocking_function_t *func, voi
  *       created as Ruby thread (created by Thread.new or so).  In other
  *       words, this function *DOES NOT* associate or convert a NON-Ruby
  *       thread to a Ruby thread.
+ *
+ * NOTE: If this thread has already acquired the GVL, then the method call
+ *       is performed without acquiring or releasing the GVL (from Ruby 4.0).
  */
 void *
 rb_thread_call_with_gvl(void *(*func)(void *), void *data1)
@@ -2065,7 +2080,8 @@ rb_thread_call_with_gvl(void *(*func)(void *), void *data1)
     prev_unblock = th->unblock;
 
     if (brb == 0) {
-        rb_bug("rb_thread_call_with_gvl: called by a thread which has GVL.");
+        /* the GVL is already acquired, call method directly */
+        return (*func)(data1);
     }
 
     blocking_region_end(th, brb);
@@ -4586,7 +4602,7 @@ wait_for_single_fd_blocking_region(rb_thread_t *th, struct pollfd *fds, nfds_t n
  * returns a mask of events
  */
 static int
-thread_io_wait(struct rb_io *io, int fd, int events, struct timeval *timeout)
+thread_io_wait(rb_thread_t *th, struct rb_io *io, int fd, int events, struct timeval *timeout)
 {
     struct pollfd fds[1] = {{
         .fd = fd,
@@ -4599,8 +4615,8 @@ thread_io_wait(struct rb_io *io, int fd, int events, struct timeval *timeout)
     enum ruby_tag_type state;
     volatile int lerrno;
 
-    rb_execution_context_t *ec = GET_EC();
-    rb_thread_t *th = rb_ec_thread_ptr(ec);
+    RUBY_ASSERT(th);
+    rb_execution_context_t *ec = th->ec;
 
     if (io) {
         blocking_operation.ec = ec;
@@ -4734,7 +4750,7 @@ init_set_fd(int fd, rb_fdset_t *fds)
 }
 
 static int
-thread_io_wait(struct rb_io *io, int fd, int events, struct timeval *timeout)
+thread_io_wait(rb_thread_t *th, struct rb_io *io, int fd, int events, struct timeval *timeout)
 {
     rb_fdset_t rfds, wfds, efds;
     struct select_args args;
@@ -4743,7 +4759,7 @@ thread_io_wait(struct rb_io *io, int fd, int events, struct timeval *timeout)
     struct rb_io_blocking_operation blocking_operation;
     if (io) {
         args.io = io;
-        blocking_operation.ec = GET_EC();
+        blocking_operation.ec = th->ec;
         rb_io_blocking_operation_enter(io, &blocking_operation);
         args.blocking_operation = &blocking_operation;
     }
@@ -4768,15 +4784,15 @@ thread_io_wait(struct rb_io *io, int fd, int events, struct timeval *timeout)
 #endif /* ! USE_POLL */
 
 int
-rb_thread_wait_for_single_fd(int fd, int events, struct timeval *timeout)
+rb_thread_wait_for_single_fd(rb_thread_t *th, int fd, int events, struct timeval *timeout)
 {
-    return thread_io_wait(NULL, fd, events, timeout);
+    return thread_io_wait(th, NULL, fd, events, timeout);
 }
 
 int
-rb_thread_io_wait(struct rb_io *io, int events, struct timeval * timeout)
+rb_thread_io_wait(rb_thread_t *th, struct rb_io *io, int events, struct timeval * timeout)
 {
-    return thread_io_wait(io, io->fd, events, timeout);
+    return thread_io_wait(th, io, io->fd, events, timeout);
 }
 
 /*
@@ -4979,6 +4995,9 @@ static void
 terminate_atfork_i(rb_thread_t *th, const rb_thread_t *current_th)
 {
     if (th != current_th) {
+        // Clear the scheduler as it is no longer operational:
+        th->scheduler = Qnil;
+
         rb_native_mutex_initialize(&th->interrupt_lock);
         rb_mutex_abandon_keeping_mutexes(th);
         rb_mutex_abandon_locking_mutex(th);
@@ -4994,6 +5013,7 @@ rb_thread_atfork(void)
     rb_threadptr_pending_interrupt_clear(th);
     rb_thread_atfork_internal(th, terminate_atfork_i);
     th->join_list = NULL;
+    th->scheduler = Qnil;
     rb_fiber_atfork(th);
 
     /* We don't want reproduce CVE-2003-0900. */

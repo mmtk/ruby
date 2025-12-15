@@ -2258,7 +2258,8 @@ fn gen_expandarray(
 
     let comptime_recv = jit.peek_at_stack(&asm.ctx, 0);
 
-    // If the comptime receiver is not an array
+    // If the comptime receiver is not an array, speculate for when the `rb_check_array_type()`
+    // conversion returns nil and without side-effects (e.g. arbitrary method calls).
     if !unsafe { RB_TYPE_P(comptime_recv, RUBY_T_ARRAY) } {
         // at compile time, ensure to_ary is not defined
         let target_cme = unsafe { rb_callable_method_entry_or_negative(comptime_recv.class_of(), ID!(to_ary)) };
@@ -2267,6 +2268,13 @@ fn gen_expandarray(
         // if to_ary is defined, return can't compile so to_ary can be called
         if cme_def_type != VM_METHOD_TYPE_UNDEF {
             gen_counter_incr(jit, asm, Counter::expandarray_to_ary);
+            return None;
+        }
+
+        // Bail when method_missing is defined to avoid generating code to call it.
+        // Also, for simplicity, bail when BasicObject#method_missing has been removed.
+        if !assume_method_basic_definition(jit, asm, comptime_recv.class_of(), ID!(method_missing)) {
+            gen_counter_incr(jit, asm, Counter::expandarray_method_missing);
             return None;
         }
 
@@ -2510,6 +2518,7 @@ fn gen_setlocal_generic(
     ep_offset: u32,
     level: u32,
 ) -> Option<CodegenStatus> {
+    // Post condition: The type of of the set local is updated in the Context.
     let value_type = asm.ctx.get_opnd_type(StackOpnd(0));
 
     // Fallback because of write barrier
@@ -2531,6 +2540,11 @@ fn gen_setlocal_generic(
         );
         asm.stack_pop(1);
 
+        // Set local type in the context
+        if level == 0 {
+            let local_idx = ep_offset_to_local_idx(jit.get_iseq(), ep_offset).as_usize();
+            asm.ctx.set_local_type(local_idx, value_type);
+        }
         return Some(KeepCompiling);
     }
 
@@ -2583,6 +2597,7 @@ fn gen_setlocal_generic(
         );
     }
 
+    // Set local type in the context
     if level == 0 {
         let local_idx = ep_offset_to_local_idx(jit.get_iseq(), ep_offset).as_usize();
         asm.ctx.set_local_type(local_idx, value_type);
@@ -3093,7 +3108,9 @@ fn gen_set_ivar(
     let mut new_shape_too_complex = false;
     let new_shape = if !shape_too_complex && receiver_t_object && ivar_index.is_none() {
         let current_shape_id = comptime_receiver.shape_id_of();
-        let next_shape_id = unsafe { rb_shape_transition_add_ivar_no_warnings(comptime_receiver, ivar_name) };
+        // We don't need to check about imemo_fields here because we're definitely looking at a T_OBJECT.
+        let klass = unsafe { rb_obj_class(comptime_receiver) };
+        let next_shape_id = unsafe { rb_shape_transition_add_ivar_no_warnings(klass, current_shape_id, ivar_name) };
 
         // If the VM ran out of shapes, or this class generated too many leaf,
         // it may be de-optimized into OBJ_TOO_COMPLEX_SHAPE (hash-table).
@@ -6236,7 +6253,7 @@ fn jit_rb_str_concat_codepoint(
 
     guard_object_is_fixnum(jit, asm, codepoint, StackOpnd(0));
 
-    asm.ccall(rb_yjit_str_concat_codepoint as *const u8, vec![recv, codepoint]);
+    asm.ccall(rb_jit_str_concat_codepoint as *const u8, vec![recv, codepoint]);
 
     // The receiver is the return value, so we only need to pop the codepoint argument off the stack.
     // We can reuse the receiver slot in the stack as the return value.
@@ -7448,6 +7465,12 @@ fn iseq_get_return_value(iseq: IseqPtr, captured_opnd: Option<Opnd>, block: Opti
 
             let ep_offset = unsafe { *rb_iseq_pc_at_idx(iseq, 1) }.as_u32();
             let local_idx = ep_offset_to_local_idx(iseq, ep_offset);
+
+            // Only inline getlocal on a parameter. DCE in the IESQ builder can
+            // make a two-instruction ISEQ that does not return a parameter.
+            if local_idx >= unsafe { get_iseq_body_param_size(iseq) } {
+                return None;
+            }
 
             if unsafe { rb_simple_iseq_p(iseq) } {
                 return Some(IseqReturn::LocalVariable(local_idx));

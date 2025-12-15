@@ -787,7 +787,7 @@ fstring_concurrent_set_create(VALUE str, void *data)
     RUBY_ASSERT(RB_TYPE_P(str, T_STRING));
     RUBY_ASSERT(OBJ_FROZEN(str));
     RUBY_ASSERT(!FL_TEST_RAW(str, STR_FAKESTR));
-    RUBY_ASSERT(!rb_obj_exivar_p(str));
+    RUBY_ASSERT(!rb_shape_obj_has_ivars(str));
     RUBY_ASSERT(RBASIC_CLASS(str) == rb_cString);
     RUBY_ASSERT(!rb_objspace_garbage_object_p(str));
 
@@ -3075,7 +3075,7 @@ rb_str_times(VALUE str, VALUE times)
  *
  *  Returns the result of formatting +object+ into the format specifications
  *  contained in +self+
- *  (see {Format Specifications}[rdoc-ref:format_specifications.rdoc]):
+ *  (see {Format Specifications}[rdoc-ref:language/format_specifications.rdoc]):
  *
  *    '%05d' % 123 # => "00123"
  *
@@ -4465,7 +4465,7 @@ rb_str_append_as_bytes(int argc, VALUE *argv, VALUE str)
 
   clear_cr:
     // If no fast path was hit, we clear the coderange.
-    // append_as_bytes is predominently meant to be used in
+    // append_as_bytes is predominantly meant to be used in
     // buffering situation, hence it's likely the coderange
     // will never be scanned, so it's not worth spending time
     // precomputing the coderange except for simple and common
@@ -8067,16 +8067,18 @@ undump_after_backslash(VALUE undumped, const char **ss, const char *s_end, rb_en
         }
         break;
       case 'x':
-        if (*utf8) {
-            rb_raise(rb_eRuntimeError, "hex escape and Unicode escape are mixed");
-        }
-        *binary = true;
         if (++s >= s_end) {
             rb_raise(rb_eRuntimeError, "invalid hex escape");
         }
         *buf = scan_hex(s, 2, &hexlen);
         if (hexlen != 2) {
             rb_raise(rb_eRuntimeError, "invalid hex escape");
+        }
+        if (!ISASCII(*buf)) {
+            if (*utf8) {
+                rb_raise(rb_eRuntimeError, "hex escape and Unicode escape are mixed");
+            }
+            *binary = true;
         }
         rb_str_cat(undumped, (char *)buf, 1);
         s += hexlen;
@@ -8457,7 +8459,7 @@ rb_str_upcase_bang(int argc, VALUE *argv, VALUE str)
 
 /*
  *  call-seq:
- *    upcase(mapping) -> string
+ *    upcase(mapping = :ascii) -> new_string
  *
  *  :include: doc/string/upcase.rdoc
  */
@@ -8543,7 +8545,7 @@ rb_str_downcase_bang(int argc, VALUE *argv, VALUE str)
 
 /*
  *  call-seq:
- *    downcase(mapping) -> string
+ *    downcase(mapping = :ascii) -> new_string
  *
  *  :include: doc/string/downcase.rdoc
  *
@@ -8609,29 +8611,10 @@ rb_str_capitalize_bang(int argc, VALUE *argv, VALUE str)
 
 /*
  *  call-seq:
- *    capitalize(mapping = :ascii) -> string
+ *    capitalize(mapping = :ascii) -> new_string
  *
- *  Returns a string containing the characters in +self+,
- *  each with possibly changed case:
+ *  :include: doc/string/capitalize.rdoc
  *
- *  - The first character is upcased.
- *  - All other characters are downcased.
- *
- *  Examples:
- *
- *    'hello world'.capitalize # => "Hello world"
- *    'HELLO WORLD'.capitalize # => "Hello world"
- *
- *  Some characters do not have upcase and downcase, and so are not changed;
- *  see {Case Mapping}[rdoc-ref:case_mapping.rdoc]:
- *
- *    '1, 2, 3, ...'.capitalize # => "1, 2, 3, ..."
- *
- *  The casing is affected by the given +mapping+,
- *  which may be +:ascii+, +:fold+, or +:turkic+;
- *  see {Case Mappings}[rdoc-ref:case_mapping.rdoc@Case+Mappings].
- *
- *  Related: see {Converting to New String}[rdoc-ref:String@Converting+to+New+String].
  */
 
 static VALUE
@@ -8688,7 +8671,7 @@ rb_str_swapcase_bang(int argc, VALUE *argv, VALUE str)
 
 /*
  *  call-seq:
- *    swapcase(mapping) -> new_string
+ *    swapcase(mapping = :ascii) -> new_string
  *
  *  :include: doc/string/swapcase.rdoc
  *
@@ -10732,6 +10715,22 @@ rb_str_chomp(int argc, VALUE *argv, VALUE str)
     return rb_str_subseq(str, 0, chompped_length(str, rs));
 }
 
+static void
+tr_setup_table_multi(char table[TR_TABLE_SIZE], VALUE *tablep, VALUE *ctablep,
+                     VALUE str, int num_selectors, VALUE *selectors)
+{
+    int i;
+
+    for (i=0; i<num_selectors; i++) {
+        VALUE selector = selectors[i];
+        rb_encoding *enc;
+
+        StringValue(selector);
+        enc = rb_enc_check(str, selector);
+        tr_setup_table(selector, table, i==0, tablep, ctablep, enc);
+    }
+}
+
 static long
 lstrip_offset(VALUE str, const char *s, const char *e, rb_encoding *enc)
 {
@@ -10755,9 +10754,28 @@ lstrip_offset(VALUE str, const char *s, const char *e, rb_encoding *enc)
     return s - start;
 }
 
+static long
+lstrip_offset_table(VALUE str, const char *s, const char *e, rb_encoding *enc,
+                    char table[TR_TABLE_SIZE], VALUE del, VALUE nodel)
+{
+    const char *const start = s;
+
+    if (!s || s >= e) return 0;
+
+    /* remove leading characters in the table */
+    while (s < e) {
+        int n;
+        unsigned int cc = rb_enc_codepoint_len(s, e, &n, enc);
+
+        if (!tr_find(cc, table, del, nodel)) break;
+        s += n;
+    }
+    return s - start;
+}
+
 /*
  *  call-seq:
- *    lstrip! -> self or nil
+ *    lstrip!(*selectors) -> self or nil
  *
  *  Like String#lstrip, except that:
  *
@@ -10768,7 +10786,7 @@ lstrip_offset(VALUE str, const char *s, const char *e, rb_encoding *enc)
  */
 
 static VALUE
-rb_str_lstrip_bang(VALUE str)
+rb_str_lstrip_bang(int argc, VALUE *argv, VALUE str)
 {
     rb_encoding *enc;
     char *start, *s;
@@ -10777,7 +10795,17 @@ rb_str_lstrip_bang(VALUE str)
     str_modify_keep_cr(str);
     enc = STR_ENC_GET(str);
     RSTRING_GETMEM(str, start, olen);
-    loffset = lstrip_offset(str, start, start+olen, enc);
+    if (argc > 0) {
+        char table[TR_TABLE_SIZE];
+        VALUE del = 0, nodel = 0;
+
+        tr_setup_table_multi(table, &del, &nodel, str, argc, argv);
+        loffset = lstrip_offset_table(str, start, start+olen, enc, table, del, nodel);
+    }
+    else {
+        loffset = lstrip_offset(str, start, start+olen, enc);
+    }
+
     if (loffset > 0) {
         long len = olen-loffset;
         s = start + loffset;
@@ -10792,7 +10820,7 @@ rb_str_lstrip_bang(VALUE str)
 
 /*
  *  call-seq:
- *    lstrip -> new_string
+ *    lstrip(*selectors) -> new_string
  *
  *  Returns a copy of +self+ with leading whitespace removed;
  *  see {Whitespace in Strings}[rdoc-ref:String@Whitespace+in+Strings]:
@@ -10803,16 +10831,37 @@ rb_str_lstrip_bang(VALUE str)
  *    s.lstrip
  *    # => "abc\u0000\t\n\v\f\r "
  *
+ *  If +selectors+ are given, removes characters of +selectors+ from the beginning of +self+:
+ *
+ *    s = "---abc+++"
+ *    s.lstrip("-") # => "abc+++"
+ *
+ *  +selectors+ must be valid character selectors (see {Character Selectors}[rdoc-ref:character_selectors.rdoc]),
+ *  and may use any of its valid forms, including negation, ranges, and escapes:
+ *
+ *    "01234abc56789".lstrip("0-9") # "abc56789"
+ *    "01234abc56789".lstrip("0-9", "^4-6") # "4abc56789"
+ *
  *  Related: see {Converting to New String}[rdoc-ref:String@Converting+to+New+String].
  */
 
 static VALUE
-rb_str_lstrip(VALUE str)
+rb_str_lstrip(int argc, VALUE *argv, VALUE str)
 {
     char *start;
     long len, loffset;
+
     RSTRING_GETMEM(str, start, len);
-    loffset = lstrip_offset(str, start, start+len, STR_ENC_GET(str));
+    if (argc > 0) {
+        char table[TR_TABLE_SIZE];
+        VALUE del = 0, nodel = 0;
+
+        tr_setup_table_multi(table, &del, &nodel, str, argc, argv);
+        loffset = lstrip_offset_table(str, start, start+len, STR_ENC_GET(str), table, del, nodel);
+    }
+    else {
+        loffset = lstrip_offset(str, start, start+len, STR_ENC_GET(str));
+    }
     if (loffset <= 0) return str_duplicate(rb_cString, str);
     return rb_str_subseq(str, loffset, len - loffset);
 }
@@ -10846,9 +10895,33 @@ rstrip_offset(VALUE str, const char *s, const char *e, rb_encoding *enc)
     return e - t;
 }
 
+static long
+rstrip_offset_table(VALUE str, const char *s, const char *e, rb_encoding *enc,
+                    char table[TR_TABLE_SIZE], VALUE del, VALUE nodel)
+{
+    const char *t;
+    char *tp;
+
+    rb_str_check_dummy_enc(enc);
+    if (rb_enc_str_coderange(str) == ENC_CODERANGE_BROKEN) {
+        rb_raise(rb_eEncCompatError, "invalid byte sequence in %s", rb_enc_name(enc));
+    }
+    if (!s || s >= e) return 0;
+    t = e;
+
+    /* remove trailing characters in the table */
+    while ((tp = rb_enc_prev_char(s, t, e, enc)) != NULL) {
+        unsigned int c = rb_enc_codepoint(tp, e, enc);
+        if (!tr_find(c, table, del, nodel)) break;
+        t = tp;
+    }
+
+    return e - t;
+}
+
 /*
  *  call-seq:
- *    rstrip! -> self or nil
+ *    rstrip!(*selectors) -> self or nil
  *
  *  Like String#rstrip, except that:
  *
@@ -10859,7 +10932,7 @@ rstrip_offset(VALUE str, const char *s, const char *e, rb_encoding *enc)
  */
 
 static VALUE
-rb_str_rstrip_bang(VALUE str)
+rb_str_rstrip_bang(int argc, VALUE *argv, VALUE str)
 {
     rb_encoding *enc;
     char *start;
@@ -10868,7 +10941,16 @@ rb_str_rstrip_bang(VALUE str)
     str_modify_keep_cr(str);
     enc = STR_ENC_GET(str);
     RSTRING_GETMEM(str, start, olen);
-    roffset = rstrip_offset(str, start, start+olen, enc);
+    if (argc > 0) {
+        char table[TR_TABLE_SIZE];
+        VALUE del = 0, nodel = 0;
+
+        tr_setup_table_multi(table, &del, &nodel, str, argc, argv);
+        roffset = rstrip_offset_table(str, start, start+olen, enc, table, del, nodel);
+    }
+    else {
+        roffset = rstrip_offset(str, start, start+olen, enc);
+    }
     if (roffset > 0) {
         long len = olen - roffset;
 
@@ -10882,7 +10964,7 @@ rb_str_rstrip_bang(VALUE str)
 
 /*
  *  call-seq:
- *    rstrip -> new_string
+ *    rstrip(*selectors) -> new_string
  *
  *  Returns a copy of +self+ with trailing whitespace removed;
  *  see {Whitespace in Strings}[rdoc-ref:String@Whitespace+in+Strings]:
@@ -10892,11 +10974,22 @@ rb_str_rstrip_bang(VALUE str)
  *    s        # => "\u0000\t\n\v\f\r abc\u0000\t\n\v\f\r "
  *    s.rstrip # => "\u0000\t\n\v\f\r abc"
  *
+ *  If +selectors+ are given, removes characters of +selectors+ from the end of +self+:
+ *
+ *    s = "---abc+++"
+ *    s.rstrip("+") # => "---abc"
+ *
+ *  +selectors+ must be valid character selectors (see {Character Selectors}[rdoc-ref:character_selectors.rdoc]),
+ *  and may use any of its valid forms, including negation, ranges, and escapes:
+ *
+ *    "01234abc56789".rstrip("0-9") # "01234abc"
+ *    "01234abc56789".rstrip("0-9", "^4-6") # "01234abc56"
+ *
  *  Related: see {Converting to New String}[rdoc-ref:String@Converting+to+New+String].
  */
 
 static VALUE
-rb_str_rstrip(VALUE str)
+rb_str_rstrip(int argc, VALUE *argv, VALUE str)
 {
     rb_encoding *enc;
     char *start;
@@ -10904,8 +10997,16 @@ rb_str_rstrip(VALUE str)
 
     enc = STR_ENC_GET(str);
     RSTRING_GETMEM(str, start, olen);
-    roffset = rstrip_offset(str, start, start+olen, enc);
+    if (argc > 0) {
+        char table[TR_TABLE_SIZE];
+        VALUE del = 0, nodel = 0;
 
+        tr_setup_table_multi(table, &del, &nodel, str, argc, argv);
+        roffset = rstrip_offset_table(str, start, start+olen, enc, table, del, nodel);
+    }
+    else {
+        roffset = rstrip_offset(str, start, start+olen, enc);
+    }
     if (roffset <= 0) return str_duplicate(rb_cString, str);
     return rb_str_subseq(str, 0, olen-roffset);
 }
@@ -10913,7 +11014,7 @@ rb_str_rstrip(VALUE str)
 
 /*
  *  call-seq:
- *    strip! -> self or nil
+ *    strip!(*selectors) -> self or nil
  *
  *  Like String#strip, except that:
  *
@@ -10924,7 +11025,7 @@ rb_str_rstrip(VALUE str)
  */
 
 static VALUE
-rb_str_strip_bang(VALUE str)
+rb_str_strip_bang(int argc, VALUE *argv, VALUE str)
 {
     char *start;
     long olen, loffset, roffset;
@@ -10933,8 +11034,19 @@ rb_str_strip_bang(VALUE str)
     str_modify_keep_cr(str);
     enc = STR_ENC_GET(str);
     RSTRING_GETMEM(str, start, olen);
-    loffset = lstrip_offset(str, start, start+olen, enc);
-    roffset = rstrip_offset(str, start+loffset, start+olen, enc);
+
+    if (argc > 0) {
+        char table[TR_TABLE_SIZE];
+        VALUE del = 0, nodel = 0;
+
+        tr_setup_table_multi(table, &del, &nodel, str, argc, argv);
+        loffset = lstrip_offset_table(str, start, start+olen, enc, table, del, nodel);
+        roffset = rstrip_offset_table(str, start+loffset, start+olen, enc, table, del, nodel);
+    }
+    else {
+        loffset = lstrip_offset(str, start, start+olen, enc);
+        roffset = rstrip_offset(str, start+loffset, start+olen, enc);
+    }
 
     if (loffset > 0 || roffset > 0) {
         long len = olen-roffset;
@@ -10952,7 +11064,7 @@ rb_str_strip_bang(VALUE str)
 
 /*
  *  call-seq:
- *    strip -> new_string
+ *    strip(*selectors) -> new_string
  *
  *  Returns a copy of +self+ with leading and trailing whitespace removed;
  *  see {Whitespace in Strings}[rdoc-ref:String@Whitespace+in+Strings]:
@@ -10962,19 +11074,42 @@ rb_str_strip_bang(VALUE str)
  *    # => "\u0000\t\n\v\f\r abc\u0000\t\n\v\f\r "
  *    s.strip # => "abc"
  *
+ *  If +selectors+ are given, removes characters of +selectors+ from both ends of +self+:
+ *
+ *    s = "---abc+++"
+ *    s.strip("-+") # => "abc"
+ *    s.strip("+-") # => "abc"
+ *
+ *  +selectors+ must be valid character selectors (see {Character Selectors}[rdoc-ref:character_selectors.rdoc]),
+ *  and may use any of its valid forms, including negation, ranges, and escapes:
+ *
+ *    "01234abc56789".strip("0-9") # "abc"
+ *    "01234abc56789".strip("0-9", "^4-6") # "4abc56"
+ *
  *  Related: see {Converting to New String}[rdoc-ref:String@Converting+to+New+String].
  */
 
 static VALUE
-rb_str_strip(VALUE str)
+rb_str_strip(int argc, VALUE *argv, VALUE str)
 {
     char *start;
     long olen, loffset, roffset;
     rb_encoding *enc = STR_ENC_GET(str);
 
     RSTRING_GETMEM(str, start, olen);
-    loffset = lstrip_offset(str, start, start+olen, enc);
-    roffset = rstrip_offset(str, start+loffset, start+olen, enc);
+
+    if (argc > 0) {
+        char table[TR_TABLE_SIZE];
+        VALUE del = 0, nodel = 0;
+
+        tr_setup_table_multi(table, &del, &nodel, str, argc, argv);
+        loffset = lstrip_offset_table(str, start, start+olen, enc, table, del, nodel);
+        roffset = rstrip_offset_table(str, start+loffset, start+olen, enc, table, del, nodel);
+    }
+    else {
+        loffset = lstrip_offset(str, start, start+olen, enc);
+        roffset = rstrip_offset(str, start+loffset, start+olen, enc);
+    }
 
     if (loffset <= 0 && roffset <= 0) return str_duplicate(rb_cString, str);
     return rb_str_subseq(str, loffset, olen-loffset-roffset);
@@ -11905,6 +12040,21 @@ rb_str_setter(VALUE val, ID id, VALUE *var)
 }
 
 static void
+nil_setter_warning(ID id)
+{
+    rb_warn_deprecated("non-nil '%"PRIsVALUE"'", NULL, rb_id2str(id));
+}
+
+void
+rb_deprecated_str_setter(VALUE val, ID id, VALUE *var)
+{
+    rb_str_setter(val, id, var);
+    if (!NIL_P(*var)) {
+        nil_setter_warning(id);
+    }
+}
+
+static void
 rb_fs_setter(VALUE val, ID id, VALUE *var)
 {
     val = rb_fs_check(val);
@@ -11914,7 +12064,7 @@ rb_fs_setter(VALUE val, ID id, VALUE *var)
                  rb_id2str(id));
     }
     if (!NIL_P(val)) {
-        rb_warn_deprecated("'$;'", NULL);
+        nil_setter_warning(id);
     }
     *var = val;
 }
@@ -13109,9 +13259,9 @@ rb_enc_interned_str_cstr(const char *ptr, rb_encoding *enc)
     return rb_enc_interned_str(ptr, strlen(ptr), enc);
 }
 
-#if USE_YJIT
+#if USE_YJIT || USE_ZJIT
 void
-rb_yjit_str_concat_codepoint(VALUE str, VALUE codepoint)
+rb_jit_str_concat_codepoint(VALUE str, VALUE codepoint)
 {
     if (RB_LIKELY(ENCODING_GET_INLINED(str) == rb_ascii8bit_encindex())) {
         ssize_t code = RB_NUM2SSIZE(codepoint);
@@ -13247,9 +13397,9 @@ Init_String(void)
     rb_define_method(rb_cString, "gsub", rb_str_gsub, -1);
     rb_define_method(rb_cString, "chop", rb_str_chop, 0);
     rb_define_method(rb_cString, "chomp", rb_str_chomp, -1);
-    rb_define_method(rb_cString, "strip", rb_str_strip, 0);
-    rb_define_method(rb_cString, "lstrip", rb_str_lstrip, 0);
-    rb_define_method(rb_cString, "rstrip", rb_str_rstrip, 0);
+    rb_define_method(rb_cString, "strip", rb_str_strip, -1);
+    rb_define_method(rb_cString, "lstrip", rb_str_lstrip, -1);
+    rb_define_method(rb_cString, "rstrip", rb_str_rstrip, -1);
     rb_define_method(rb_cString, "delete_prefix", rb_str_delete_prefix, 1);
     rb_define_method(rb_cString, "delete_suffix", rb_str_delete_suffix, 1);
 
@@ -13257,9 +13407,9 @@ Init_String(void)
     rb_define_method(rb_cString, "gsub!", rb_str_gsub_bang, -1);
     rb_define_method(rb_cString, "chop!", rb_str_chop_bang, 0);
     rb_define_method(rb_cString, "chomp!", rb_str_chomp_bang, -1);
-    rb_define_method(rb_cString, "strip!", rb_str_strip_bang, 0);
-    rb_define_method(rb_cString, "lstrip!", rb_str_lstrip_bang, 0);
-    rb_define_method(rb_cString, "rstrip!", rb_str_rstrip_bang, 0);
+    rb_define_method(rb_cString, "strip!", rb_str_strip_bang, -1);
+    rb_define_method(rb_cString, "lstrip!", rb_str_lstrip_bang, -1);
+    rb_define_method(rb_cString, "rstrip!", rb_str_rstrip_bang, -1);
     rb_define_method(rb_cString, "delete_prefix!", rb_str_delete_prefix_bang, 1);
     rb_define_method(rb_cString, "delete_suffix!", rb_str_delete_suffix_bang, 1);
 

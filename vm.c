@@ -1601,7 +1601,10 @@ rb_proc_ractor_make_shareable(VALUE self, VALUE replace_self)
         proc->is_isolated = TRUE;
     }
     else {
-        VALUE proc_self = vm_block_self(vm_proc_block(self));
+        const struct rb_block *block = vm_proc_block(self);
+        if (block->type != block_type_symbol) rb_raise(rb_eRuntimeError, "not supported yet");
+
+        VALUE proc_self = vm_block_self(block);
         if (!rb_ractor_shareable_p(proc_self)) {
             rb_raise(rb_eRactorIsolationError,
                      "Proc's self is not shareable: %" PRIsVALUE,
@@ -2459,6 +2462,7 @@ vm_init_redefined_flag(void)
     OP(GT, GT), (C(Integer), C(Float));
     OP(GE, GE), (C(Integer), C(Float));
     OP(LTLT, LTLT), (C(String), C(Array));
+    OP(GTGT, GTGT), (C(Integer));
     OP(AREF, AREF), (C(Array), C(Hash), C(Integer));
     OP(ASET, ASET), (C(Array), C(Hash));
     OP(Length, LENGTH), (C(Array), C(String), C(Hash));
@@ -3328,6 +3332,8 @@ rb_vm_mark(void *ptr)
 
         rb_gc_mark_values(RUBY_NSIG, vm->trap_list.cmd);
 
+        rb_hook_list_mark(&vm->global_hooks);
+
         rb_id_table_foreach_values(vm->negative_cme_table, vm_mark_negative_cme, NULL);
         rb_mark_tbl_no_pin(vm->overloaded_cme_table);
         for (i=0; i<VM_GLOBAL_CC_CACHE_TABLE_SIZE; i++) {
@@ -3695,6 +3701,13 @@ rb_execution_context_mark(const rb_execution_context_t *ec)
             rb_gc_mark_movable((VALUE)cfp->iseq);
             rb_gc_mark_movable((VALUE)cfp->block_code);
 
+            if (VM_ENV_LOCAL_P(ep) && VM_ENV_BOXED_P(ep)) {
+                const rb_box_t *box = VM_ENV_BOX(ep);
+                if (BOX_USER_P(box)) {
+                    rb_gc_mark_movable(box->box_object);
+                }
+            }
+
             if (!VM_ENV_LOCAL_P(ep)) {
                 const VALUE *prev_ep = VM_ENV_PREV_EP(ep);
                 if (VM_ENV_FLAGS(prev_ep, VM_ENV_FLAG_ESCAPED)) {
@@ -3902,6 +3915,13 @@ rb_ec_clear_vm_stack(rb_execution_context_t *ec)
     // gets called in this middle of `rb_ec_set_vm_stack` via signal handler.
     ec->cfp = NULL;
     rb_ec_set_vm_stack(ec, NULL, 0);
+}
+
+void
+rb_ec_close(rb_execution_context_t *ec)
+{
+    // Fiber storage is not accessible from outside the running fiber, so it is safe to clear it here.
+    ec->storage = Qnil;
 }
 
 static void

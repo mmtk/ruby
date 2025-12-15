@@ -513,6 +513,7 @@ void rb_undef_methods_from(VALUE klass, VALUE super);
 VALUE rb_class_inherited(VALUE, VALUE);
 VALUE rb_keyword_error_new(const char *, VALUE);
 
+rb_classext_t *rb_class_unlink_classext(VALUE klass, const rb_box_t *box);
 void rb_class_classext_free(VALUE klass, rb_classext_t *ext, bool is_prime);
 void rb_iclass_classext_free(VALUE klass, rb_classext_t *ext, bool is_prime);
 
@@ -657,8 +658,8 @@ RCLASS_SET_REFINED_CLASS(VALUE klass, VALUE refined)
 static inline rb_alloc_func_t
 RCLASS_ALLOCATOR(VALUE klass)
 {
-    RUBY_ASSERT(RB_TYPE_P(klass, T_CLASS) || RB_TYPE_P(klass, T_ICLASS));
-    if (RCLASS_SINGLETON_P(klass) || RB_TYPE_P(klass, T_ICLASS)) {
+    RBIMPL_ASSERT_TYPE(klass, T_CLASS);
+    if (RCLASS_SINGLETON_P(klass)) {
         return 0;
     }
     return RCLASS_EXT_PRIME(klass)->as.class.allocator;
