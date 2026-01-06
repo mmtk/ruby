@@ -2943,6 +2943,7 @@ rb_parser_ary_free(rb_parser_t *p, rb_parser_ary_t *ary)
                         $$ = new_args_tail(p, 0, 0, $1, &@1);
                     /*% ripper: [Qnil, Qnil, $:1] %*/
                     }
+                ;
 
 %rule def_endless_method(bodystmt) <node>
                 : defn_head[head] f_opt_paren_args[args] '=' bodystmt
@@ -5148,7 +5149,7 @@ lambda		: tLAMBDA[lpar]
                         CMDARG_POP();
                         $args = args_with_numbered(p, $args, max_numparam, it_id);
                         {
-                            YYLTYPE loc = code_loc_gen(&@args, &@body);
+                            YYLTYPE loc = code_loc_gen(&@lpar, &@body);
                             $$ = NEW_LAMBDA($args, $body->node, &loc, &@lpar, &$body->opening_loc, &$body->closing_loc);
                             nd_set_line(RNODE_LAMBDA($$)->nd_body, @body.end_pos.lineno);
                             nd_set_line($$, @args.end_pos.lineno);

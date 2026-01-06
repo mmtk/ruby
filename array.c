@@ -2389,13 +2389,11 @@ rb_ary_fetch(int argc, VALUE *argv, VALUE ary)
  * With a block given, calls the block with successive elements of the array;
  * returns the first element for which the block returns a truthy value:
  *
- *   (0..9).find {|element| element > 2}                # => 3
+ *   [1, 3, 5].find {|element| element > 2}                # => 3
  *
  * If no such element is found, calls +if_none_proc+ and returns its return value.
  *
- *   (0..9).find(proc {false}) {|element| element > 12} # => false
- *   {foo: 0, bar: 1, baz: 2}.find {|key, value| key.start_with?('b') }            # => [:bar, 1]
- *   {foo: 0, bar: 1, baz: 2}.find(proc {[]}) {|key, value| key.start_with?('c') } # => []
+ *   [1, 3, 5].find(proc {-1}) {|element| element > 12} # => -1
  *
  * With no block given, returns an Enumerator.
  *
@@ -2431,16 +2429,14 @@ rb_ary_find(int argc, VALUE *argv, VALUE ary)
  * Returns the last element for which the block returns a truthy value.
  *
  * With a block given, calls the block with successive elements of the array in
- * reverse order; returns the last element for which the block returns a truthy
+ * reverse order; returns the first element for which the block returns a truthy
  * value:
  *
- *   (0..9).rfind {|element| element < 5}                # => 4
+ *   [1, 2, 3, 4, 5, 6].rfind {|element| element < 5}       # => 4
  *
  * If no such element is found, calls +if_none_proc+ and returns its return value.
  *
- *   (0..9).rfind(proc {false}) {|element| element < -2} # => false
- *   {foo: 0, bar: 1, baz: 2}.rfind {|key, value| key.start_with?('b') }            # => [:baz, 2]
- *   {foo: 0, bar: 1, baz: 2}.rfind(proc {[]}) {|key, value| key.start_with?('c') } # => []
+ *   [1, 2, 3, 4].rfind(proc {0}) {|element| element < -2}  # => 0
  *
  * With no block given, returns an Enumerator.
  *
@@ -9246,6 +9242,7 @@ Init_Array(void)
     rb_define_method(rb_cArray, "size", rb_ary_length, 0);
     rb_define_method(rb_cArray, "empty?", rb_ary_empty_p, 0);
     rb_define_method(rb_cArray, "find", rb_ary_find, -1);
+    rb_define_method(rb_cArray, "detect", rb_ary_find, -1);
     rb_define_method(rb_cArray, "rfind", rb_ary_rfind, -1);
     rb_define_method(rb_cArray, "find_index", rb_ary_index, -1);
     rb_define_method(rb_cArray, "index", rb_ary_index, -1);

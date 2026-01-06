@@ -1842,7 +1842,7 @@ class TestProc < Test::Unit::TestCase
 
   def test_implicit_parameters_for_it_complex
     "foo".tap do
-      it = "bar"
+      it = it = "bar"
 
       assert_equal([], binding.implicit_parameters)
       assert_raise(NameError) { binding.implicit_parameter_get(:it) }
@@ -1867,7 +1867,7 @@ class TestProc < Test::Unit::TestCase
 
     "foo".tap do
       it or flunk
-      it = "bar"
+      it = it = "bar"
 
       assert_equal([:it], binding.implicit_parameters)
       assert_equal("foo", binding.implicit_parameter_get(:it))

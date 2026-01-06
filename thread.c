@@ -453,8 +453,8 @@ rb_threadptr_unlock_all_locking_mutexes(rb_thread_t *th)
         th->keeping_mutexes = mutex->next_mutex;
 
         // rb_warn("mutex #<%p> was not unlocked by thread #<%p>", (void *)mutex, (void*)th);
-        VM_ASSERT(mutex->fiber_serial);
-        const char *error_message = rb_mutex_unlock_th(mutex, th, NULL);
+        VM_ASSERT(mutex->ec_serial);
+        const char *error_message = rb_mutex_unlock_th(mutex, th, 0);
         if (error_message) rb_bug("invalid keeping_mutexes: %s", error_message);
     }
 }
@@ -860,6 +860,7 @@ thread_create_core(VALUE thval, struct thread_create_params *params)
 #endif
         th->invoke_type = thread_invoke_type_ractor_proc;
         th->ractor = params->g;
+        th->ec->ractor_id = rb_ractor_id(th->ractor);
         th->ractor->threads.main = th;
         th->invoke_arg.proc.proc = rb_proc_isolate_bang(params->proc, Qnil);
         th->invoke_arg.proc.args = INT2FIX(RARRAY_LENINT(params->args));
@@ -2907,12 +2908,11 @@ rb_thread_fd_close(int fd)
 
 /*
  *  call-seq:
- *     thr.raise
- *     thr.raise(string)
- *     thr.raise(exception [, string [, array]])
+ *    raise(exception, message = exception.to_s, backtrace = nil, cause: $!)
+ *    raise(message = nil, cause: $!)
  *
  *  Raises an exception from the given thread. The caller does not have to be
- *  +thr+. See Kernel#raise for more information.
+ *  +thr+. See Kernel#raise for more information on arguments.
  *
  *     Thread.abort_on_exception = true
  *     a = Thread.new { sleep(200) }
@@ -5283,7 +5283,7 @@ rb_thread_shield_owned(VALUE self)
 
     rb_mutex_t *m = mutex_ptr(mutex);
 
-    return m->fiber_serial == rb_fiber_serial(GET_EC()->fiber_ptr);
+    return m->ec_serial == rb_ec_serial(GET_EC());
 }
 
 /*
@@ -5302,7 +5302,7 @@ rb_thread_shield_wait(VALUE self)
 
     if (!mutex) return Qfalse;
     m = mutex_ptr(mutex);
-    if (m->fiber_serial == rb_fiber_serial(GET_EC()->fiber_ptr)) return Qnil;
+    if (m->ec_serial == rb_ec_serial(GET_EC())) return Qnil;
     rb_thread_shield_waiting_inc(self);
     rb_mutex_lock(mutex);
     rb_thread_shield_waiting_dec(self);
@@ -5820,7 +5820,7 @@ debug_deadlock_check(rb_ractor_t *r, VALUE msg)
         if (th->locking_mutex) {
             rb_mutex_t *mutex = mutex_ptr(th->locking_mutex);
             rb_str_catf(msg, " mutex:%llu cond:%"PRIuSIZE,
-                        (unsigned long long)mutex->fiber_serial, rb_mutex_num_waiting(mutex));
+                        (unsigned long long)mutex->ec_serial, rb_mutex_num_waiting(mutex));
         }
 
         {
@@ -5860,7 +5860,7 @@ rb_check_deadlock(rb_ractor_t *r)
         }
         else if (th->locking_mutex) {
             rb_mutex_t *mutex = mutex_ptr(th->locking_mutex);
-            if (mutex->fiber_serial == rb_fiber_serial(th->ec->fiber_ptr) || (!mutex->fiber_serial && !ccan_list_empty(&mutex->waitq))) {
+            if (mutex->ec_serial == rb_ec_serial(th->ec) || (!mutex->ec_serial && !ccan_list_empty(&mutex->waitq))) {
                 found = 1;
             }
         }

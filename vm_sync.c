@@ -314,6 +314,17 @@ rb_ec_vm_lock_rec_release(const rb_execution_context_t *ec,
     VM_ASSERT(recorded_lock_rec == rb_ec_vm_lock_rec(ec));
 }
 
+VALUE
+rb_vm_lock_with_barrier(VALUE (*func)(void *args), void *args)
+{
+    VALUE result = 0;
+    RB_VM_LOCKING() {
+        rb_vm_barrier();
+        result = func(args);
+    }
+    return result;
+}
+
 #if USE_MMTK
 void rb_mmtk_assert_not_acquiring_vm_lock_in_gc_worker()
 {

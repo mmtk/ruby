@@ -224,6 +224,7 @@ str_enc_fastpath(VALUE str)
         RUBY_ASSERT(RSTRING_PTR(str) <= RSTRING_PTR(shared_str) + RSTRING_LEN(shared_str)); \
         RB_OBJ_WRITE((str), &RSTRING(str)->as.heap.aux.shared, (shared_str)); \
         FL_SET((str), STR_SHARED); \
+        rb_gc_register_pinning_obj(str); \
         FL_SET((shared_str), STR_SHARED_ROOT); \
         if (RBASIC_CLASS((shared_str)) == 0) /* for CoW-friendliness */ \
             FL_SET_RAW((shared_str), STR_BORROWED); \
@@ -971,7 +972,7 @@ VALUE rb_fs;
 static inline const char *
 search_nonascii(const char *p, const char *e)
 {
-    const uintptr_t *s, *t;
+    const char *s, *t;
 
 #if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 199901L)
 # if SIZEOF_UINTPTR_T == 8
@@ -1015,17 +1016,19 @@ search_nonascii(const char *p, const char *e)
 #define aligned_ptr(value) \
         __builtin_assume_aligned((value), sizeof(uintptr_t))
 #else
-#define aligned_ptr(value) (uintptr_t *)(value)
+#define aligned_ptr(value) (value)
 #endif
         s = aligned_ptr(p);
-        t = (uintptr_t *)(e - (SIZEOF_VOIDP-1));
+        t = (e - (SIZEOF_VOIDP-1));
 #undef aligned_ptr
-        for (;s < t; s++) {
-            if (*s & NONASCII_MASK) {
+        for (;s < t; s += sizeof(uintptr_t)) {
+            uintptr_t word;
+            memcpy(&word, s, sizeof(word));
+            if (word & NONASCII_MASK) {
 #ifdef WORDS_BIGENDIAN
-                return (const char *)s + (nlz_intptr(*s&NONASCII_MASK)>>3);
+                return (const char *)s + (nlz_intptr(word&NONASCII_MASK)>>3);
 #else
-                return (const char *)s + (ntz_intptr(*s&NONASCII_MASK)>>3);
+                return (const char *)s + (ntz_intptr(word&NONASCII_MASK)>>3);
 #endif
             }
         }
@@ -2384,8 +2387,8 @@ str_duplicate_setup_heap(VALUE klass, VALUE str, VALUE dup)
     RUBY_ASSERT(RB_OBJ_FROZEN_RAW(root));
 
     RSTRING(dup)->as.heap.ptr = RSTRING_PTR(str);
-    FL_SET(root, STR_SHARED_ROOT);
-    RB_OBJ_WRITE(dup, &RSTRING(dup)->as.heap.aux.shared, root);
+    FL_SET_RAW(dup, RSTRING_NOEMBED);
+    STR_SET_SHARED(dup, root);
     WHEN_USING_MMTK({
         // The `dup` instance must be a newly allocated object.
         RUBY_ASSERT(RSTRING_EXT(dup)->strbuf == 0);
@@ -4778,23 +4781,29 @@ rb_str_eql(VALUE str1, VALUE str2)
 
 /*
  *  call-seq:
- *    self <=> other_string -> -1, 0, 1, or nil
+ *    self <=> other -> -1, 0, 1, or nil
  *
- *  Compares +self+ and +other_string+, returning:
+ *  Compares +self+ and +other+,
+ *  evaluating their _contents_, not their _lengths_.
  *
- *  - -1 if +other_string+ is larger.
- *  - 0 if the two are equal.
- *  - 1 if +other_string+ is smaller.
- *  - +nil+ if the two are incomparable.
+ *  Returns:
+ *
+ *  - +-1+, if +self+ is smaller.
+ *  - +0+, if the two are equal.
+ *  - +1+, if +self+ is larger.
+ *  - +nil+, if the two are incomparable.
  *
  *  Examples:
  *
- *    'foo' <=> 'foo'  # => 0
- *    'foo' <=> 'food' # => -1
- *    'food' <=> 'foo' # => 1
- *    'FOO' <=> 'foo'  # => -1
- *    'foo' <=> 'FOO'  # => 1
- *    'foo' <=> 1      # => nil
+ *    'a'  <=> 'b'  # => -1
+ *    'a'  <=> 'ab' # => -1
+ *    'a'  <=> 'a'  # => 0
+ *    'b'  <=> 'a'  # => 1
+ *    'ab' <=> 'a'  # => 1
+ *    'a'  <=> :a   # => nil
+ *
+ *  \Class \String includes module Comparable,
+ *  each of whose methods uses String#<=> for comparison.
  *
  *  Related: see {Comparing}[rdoc-ref:String@Comparing].
  */
@@ -12898,18 +12907,24 @@ sym_succ(VALUE sym)
 
 /*
  *  call-seq:
- *   symbol <=> object -> -1, 0, +1, or nil
+ *    self <=> other -> -1, 0, 1, or nil
  *
- *  If +object+ is a symbol,
- *  returns the equivalent of <tt>symbol.to_s <=> object.to_s</tt>:
+ *  Compares +self+ and +other+, using String#<=>.
  *
- *    :bar <=> :foo # => -1
- *    :foo <=> :foo # => 0
- *    :foo <=> :bar # => 1
+ *  Returns:
  *
- *  Otherwise, returns +nil+:
+ *  - <tt>self.to_s <=> other.to_s</tt>, if +other+ is a symbol.
+ *  - +nil+, otherwise.
  *
- *   :foo <=> 'bar' # => nil
+ *  Examples:
+ *
+ *    :bar <=> :foo  # => -1
+ *    :foo <=> :foo  # => 0
+ *    :foo <=> :bar  # => 1
+ *    :foo <=> 'bar' # => nil
+ *
+ *  \Class \Symbol includes module Comparable,
+ *  each of whose methods uses Symbol#<=> for comparison.
  *
  *  Related: String#<=>.
  */

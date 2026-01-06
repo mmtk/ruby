@@ -318,7 +318,7 @@ assert_equal 30.times.map { 'ok' }.to_s, %q{
 } unless (ENV.key?('TRAVIS') && ENV['TRAVIS_CPU_ARCH'] == 'arm64') # https://bugs.ruby-lang.org/issues/17878
 
 # Exception for empty select
-assert_match /specify at least one ractor/, %q{
+assert_match /specify at least one Ractor::Port or Ractor/, %q{
   begin
     Ractor.select
   rescue ArgumentError => e
@@ -848,7 +848,7 @@ assert_equal '99', %q{
 }
 
 # ivar in shareable-objects are not allowed to access from non-main Ractor
-assert_equal "can not get unshareable values from instance variables of classes/modules from non-main Ractors", <<~'RUBY', frozen_string_literal: false
+assert_equal "can not get unshareable values from instance variables of classes/modules from non-main Ractors (@iv from C)", <<~'RUBY', frozen_string_literal: false
   class C
     @iv = 'str'
   end
@@ -1024,7 +1024,7 @@ assert_equal '1234', %q{
 }
 
 # cvar in shareable-objects are not allowed to access from non-main Ractor
-assert_equal 'can not access class variables from non-main Ractors', %q{
+assert_equal 'can not access class variables from non-main Ractors (@@cv from C)', %q{
   class C
     @@cv = 'str'
   end
@@ -1043,7 +1043,7 @@ assert_equal 'can not access class variables from non-main Ractors', %q{
 }
 
 # also cached cvar in shareable-objects are not allowed to access from non-main Ractor
-assert_equal 'can not access class variables from non-main Ractors', %q{
+assert_equal 'can not access class variables from non-main Ractors (@@cv from C)', %q{
   class C
     @@cv = 'str'
     def self.cv
@@ -1086,6 +1086,20 @@ assert_equal "can not access non-shareable objects in constant Object::STR by no
   s = str() # fill const cache
   begin
     Ractor.new{ str() }.join
+  rescue Ractor::RemoteError => e
+    e.cause.message
+  end
+RUBY
+
+# The correct constant path shall be reported
+assert_equal "can not access non-shareable objects in constant Object::STR by non-main Ractor.", <<~'RUBY', frozen_string_literal: false
+  STR = "hello"
+  module M
+    def self.str; STR; end
+  end
+
+  begin
+    Ractor.new{ M.str }.join
   rescue Ractor::RemoteError => e
     e.cause.message
   end
