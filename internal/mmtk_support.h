@@ -108,6 +108,9 @@ void rb_mmtk_call_obj_free_on_exit(void);
 bool rb_gc_obj_free_on_exit_started(void);
 void rb_gc_set_obj_free_on_exit_started(void);
 
+// Weak reference processing
+void rb_mmtk_declare_weak_references(VALUE obj);
+
 // Weak table processing
 
 enum RbMmtkWeakTableValueKind {

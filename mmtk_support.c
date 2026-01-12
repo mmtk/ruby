@@ -640,7 +640,12 @@ rb_mmtk_scan_object_ruby_style(MMTk_ObjectReference object)
     }
 
     rb_mmtk_mark_children(obj);
-    rb_mmtk_update_object_references(obj);
+
+    if (!RB_FL_TEST(obj, RUBY_FL_WEAK_REFERENCE)) {
+        // If an object contains weak references,
+        // we postpone field forwarding until the weak reference processing stage.
+        rb_mmtk_update_object_references(obj);
+    }
 }
 
 // This is used to determine the pinning fields of potential pinning parents (PPPs).
@@ -970,6 +975,26 @@ rb_gc_obj_free_on_exit_started(void) {
 void
 rb_gc_set_obj_free_on_exit_started(void) {
     rb_mmtk_obj_free_on_exit_started = true;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Weak reference processing
+////////////////////////////////////////////////////////////////////////////////
+
+void
+rb_mmtk_declare_weak_references(VALUE obj)
+{
+    mmtk_declare_weak_references((MMTk_ObjectReference)obj);
+}
+
+static void
+rb_mmtk_handle_weak_references(MMTk_ObjectReference object, bool is_moving)
+{
+    rb_gc_handle_weak_references((VALUE)object);
+
+    if (is_moving) {
+        rb_gc_update_object_references(rb_gc_get_objspace(), (VALUE)object);
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -2023,6 +2048,8 @@ MMTk_RubyUpcalls ruby_upcalls = {
     // Memory protection for code memory
     rb_gc_before_updating_jit_code,
     rb_gc_after_updating_jit_code,
+    // Weak reference processing
+    rb_mmtk_handle_weak_references,
 };
 
 ////////////////////////////////////////////////////////////////////////////////

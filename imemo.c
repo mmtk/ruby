@@ -386,53 +386,51 @@ rb_imemo_mark_and_move(VALUE obj, bool reference_updating)
              * All fields should are considered invalid
              */
         }
-#if USE_MMTK
-        else if (rb_mmtk_enabled_p()) {
-            // When using MMTk, we just treat klass as a weak field.
-            rb_gc_mark_weak((VALUE*)&cc->klass);
-            // The cc->cme_ field is conditionally strong or weak.
-            // -   strong when (vm_cc_super_p(cc) || vm_cc_refinement_p(cc))
-            // -   weak otherwise
-            // If cc is cc_type_normal, klass can reach the cme via klass->cc_tbl->key,
-            // in which case cc->cme_ will be a weak field.
-            // Note: The default GC will always forward this field
-            // or invalidate the whole cc during the compaction phase,
-            // so the default GC won't even bother enqueuing this field to clear it.
-            // But MMTk's scavenging GCs don't have a compaction phase.
-            // They need to update this field during transitive closure if it is strong,
-            // or enqueue it to be forwarded or cleared later if it is weak.
-            // So we can't omit the rb_gc_mark_weak.
-            if ((vm_cc_super_p(cc) || vm_cc_refinement_p(cc))) {
-                rb_gc_mark_movable((VALUE)cc->cme_);
-            } else {
-                rb_gc_mark_weak((VALUE*)&cc->cme_);
-            }
-
-            // We never explicitly call vm_cc_invalidate(cc),
-            // but it will be implicitly invalidated if `cc->klass` is cleared during weak ref processing.
-            // I hope it is not a big problem.
-
-            // We also don't do assertions because they read the fields of children which are not
-            // traced, yet.
-        }
-#endif
         else if (reference_updating) {
+            // MMTk note: Because callcache contains weak fields, we mark and update its fields
+            // separately.  We reach here during weak reference processing.
+            //
+            // moved_or_living_object_strictly_p will always return true, so we always enter the
+            // "then" branch.  We hook rb_gc_location to mmtk_get_forwarded_object so that it
+            // updates fields but does not keep children alive.
             if (moved_or_living_object_strictly_p((VALUE)cc->cme_)) {
                 *((VALUE *)&cc->klass) = rb_gc_location(cc->klass);
                 *((struct rb_callable_method_entry_struct **)&cc->cme_) =
                     (struct rb_callable_method_entry_struct *)rb_gc_location((VALUE)cc->cme_);
 
+                WHEN_NOT_USING_MMTK({
+                // MMTk note: We do not visit its children because they may have been moved.
                 RUBY_ASSERT(RB_TYPE_P(cc->klass, T_CLASS) || RB_TYPE_P(cc->klass, T_ICLASS));
                 RUBY_ASSERT(IMEMO_TYPE_P((VALUE)cc->cme_, imemo_ment));
+                })
             }
             else {
+                WHEN_USING_MMTK({
+                    rb_bug("When using MMTk, we should never see dead objects.  This part is unreachable.");
+                })
                 vm_cc_invalidate(cc);
             }
         }
         else {
+            // MMTk note: Because callcache contains weak fields, we mark and update its fields
+            // separately.  We reach here during transitive closure.
+
+            WHEN_NOT_USING_MMTK({
+            // MMTk note: We do not visit its children because they may have been moved.
             RUBY_ASSERT(RB_TYPE_P(cc->klass, T_CLASS) || RB_TYPE_P(cc->klass, T_ICLASS));
             RUBY_ASSERT(IMEMO_TYPE_P((VALUE)cc->cme_, imemo_ment));
+            })
 
+            // MMTk notes:
+            //
+            // The `cc->klass` field is weak.  We don't visit it here.  In
+            // `rb_gc_handle_weak_references`, we will clear (invalidate) it when `cc->klass` is
+            // unreachable.
+            //
+            // The `cc->cme_` field is conditionally strong/weak.  If the if-condition below is
+            // false, the `cc->cme_` field will be weak.  But we don't seem to clear it anywhere.
+            // For this to be valid, `cc` must become unreachable whenever `cc->cme_` becomes
+            // unreachable.  Otherwise `cc->cme_` will be a dangling pointer.
             if ((vm_cc_super_p(cc) || vm_cc_refinement_p(cc))) {
                 rb_gc_mark_movable((VALUE)cc->cme_);
             }

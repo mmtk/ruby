@@ -130,6 +130,7 @@ typedef struct MMTk_RubyUpcalls {
                                                 struct MMTk_ConcurrentSetStats *stats);
     void (*before_updating_jit_code)(void);
     void (*after_updating_jit_code)(void);
+    void (*handle_weak_references)(MMTk_ObjectReference object, bool is_moving);
 } MMTk_RubyUpcalls;
 
 typedef struct MMTk_RawVecOfObjRef {
@@ -298,6 +299,6 @@ bool mmtk_current_gc_may_move_object(void);
 
 bool mmtk_current_gc_is_nursery(void);
 
-void mmtk_discover_weak_field(VALUE *field);
+void mmtk_declare_weak_references(MMTk_ObjectReference obj);
 
 #endif  /* MMTK_H */

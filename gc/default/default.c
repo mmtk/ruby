@@ -1650,6 +1650,11 @@ minimum_slots_for_heap(rb_objspace_t *objspace, rb_heap_t *heap)
 bool
 rb_gc_impl_garbage_object_p(void *objspace_ptr, VALUE ptr)
 {
+    WHEN_USING_MMTK({
+        // We never see garbage object when using in MMTk.
+        return false;
+    })
+
     rb_objspace_t *objspace = objspace_ptr;
 
     bool dead = false;
@@ -5897,11 +5902,22 @@ void
 rb_gc_impl_declare_weak_references(void *objspace_ptr, VALUE obj)
 {
     FL_SET_RAW(obj, RUBY_FL_WEAK_REFERENCE);
+
+    WHEN_USING_MMTK({
+        // `obj` contains weak references.
+        // We register it to MMTk so that it can be processed
+        // during the weak reference processing stage.
+        mmtk_declare_weak_references((MMTk_ObjectReference)obj);
+    })
 }
 
 bool
 rb_gc_impl_handle_weak_references_alive_p(void *objspace_ptr, VALUE obj)
 {
+    WHEN_USING_MMTK({
+        return mmtk_is_reachable((MMTk_ObjectReference)obj);
+    })
+
     rb_objspace_t *objspace = objspace_ptr;
 
     bool marked = RVALUE_MARKED(objspace, obj);
