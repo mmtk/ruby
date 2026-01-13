@@ -417,8 +417,8 @@ void rb_vm_update_references(void *ptr);
 #define TYPED_UPDATE_IF_MOVED(_objspace, _type, _thing) do { \
     if (rb_mmtk_enabled_p()) { \
         *(_type *)&(_thing) = (_type)rb_mmtk_maybe_forward((VALUE)(_thing)); \
-    } else if (rb_gc_impl_object_moved_p((_objspace), (VALUE)(_thing))) {    \
-        *(_type *)&(_thing) = (_type)rb_gc_impl_location(_objspace, (VALUE)_thing); \
+    } else if (gc_object_moved_p_internal((_objspace), (VALUE)(_thing))) {    \
+        *(_type *)&(_thing) = (_type)gc_location_internal(_objspace, (VALUE)_thing); \
     } \
 } while (0)
 #else

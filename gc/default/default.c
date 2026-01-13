@@ -7522,9 +7522,25 @@ rb_gc_impl_start(void *objspace_ptr, bool full_mark, bool immediate_mark, bool i
 #endif
 }
 
+#if USE_MMTK
+static void
+rb_mmtk_prepare_heap_i(MMTk_ObjectReference obj, void *d)
+{
+    rb_gc_prepare_heap_process_object((VALUE)obj);
+}
+#endif
+
 void
 rb_gc_impl_prepare_heap(void *objspace_ptr)
 {
+    WHEN_USING_MMTK({
+        // See mmtk.c
+        // MMTk currently doesn't have the equivalent of `prepare_heap` as the default GC.
+        // We only precompute string code ranges.
+        mmtk_enumerate_objects(rb_mmtk_prepare_heap_i, NULL);
+        return;
+    })
+
     rb_objspace_t *objspace = objspace_ptr;
 
     size_t orig_total_slots = objspace_available_slots(objspace);
