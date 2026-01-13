@@ -413,21 +413,11 @@ void rb_vm_update_references(void *ptr);
 
 #define RMOVED(obj) ((struct RMoved *)(obj))
 
-#if USE_MMTK
-#define TYPED_UPDATE_IF_MOVED(_objspace, _type, _thing) do { \
-    if (rb_mmtk_enabled_p()) { \
-        *(_type *)&(_thing) = (_type)rb_mmtk_maybe_forward((VALUE)(_thing)); \
-    } else if (gc_object_moved_p_internal((_objspace), (VALUE)(_thing))) {    \
-        *(_type *)&(_thing) = (_type)gc_location_internal(_objspace, (VALUE)_thing); \
-    } \
-} while (0)
-#else
 #define TYPED_UPDATE_IF_MOVED(_objspace, _type, _thing) do { \
     if (gc_object_moved_p_internal((_objspace), (VALUE)(_thing))) {    \
         *(_type *)&(_thing) = (_type)gc_location_internal(_objspace, (VALUE)_thing); \
     } \
 } while (0)
-#endif
 
 #define UPDATE_IF_MOVED(_objspace, _thing) TYPED_UPDATE_IF_MOVED(_objspace, VALUE, _thing)
 
