@@ -200,14 +200,18 @@ rb_eql(VALUE obj1, VALUE obj2)
 
 /**
  *  call-seq:
- *     obj == other        -> true or false
- *     obj.equal?(other)   -> true or false
- *     obj.eql?(other)     -> true or false
+ *     self == other -> true or false
+ *     equal?(other) -> true or false
+ *     eql?(other) -> true or false
  *
- *  Equality --- At the Object level, #== returns <code>true</code>
- *  only if +obj+ and +other+ are the same object.  Typically, this
- *  method is overridden in descendant classes to provide
- *  class-specific meaning.
+ *  Returns whether +self+ and +other+ are the same object:
+ *
+ *    object = Object.new
+ *    object == object     # => true
+ *    object == Object.new # => false
+ *
+ *  Here in class \Object, #==, #equal?, and #eql? are the same method.
+ *  A subclass may override #== to provide class-specific meaning.
  *
  *  Unlike #==, the #equal? method should never be overridden by
  *  subclasses as it is used to determine object identity (that is,
@@ -1911,11 +1915,24 @@ rb_mod_eqq(VALUE mod, VALUE arg)
  * call-seq:
  *   mod <= other   ->  true, false, or nil
  *
- * Returns true if <i>mod</i> is a subclass of <i>other</i> or
- * is the same as <i>other</i>. Returns
- * <code>nil</code> if there's no relationship between the two.
- * (Think of the relationship in terms of the class definition:
- * "class A < B" implies "A < B".)
+ * Returns +true+ if +self+ is a descendant of +other+
+ * (+self+ is a subclass of +other+ or +self+ includes +other+) or
+ * if +self+ is the same as +other+:
+ *
+ *   Float <= Numeric    # => true
+ *   Array <= Enumerable # => true
+ *   Float <= Float      # => true
+ *
+ * Returns +false+ if +self+ is an ancestor of +other+
+ * (+self+ is a superclass of +other+ or +self+ is included in +other+):
+ *
+ *   Numeric <= Float    # => false
+ *   Enumerable <= Array # => false
+ *
+ * Returns +nil+ if there is no relationship between the two:
+ *
+ *   Float <= Hash        # => nil
+ *   Enumerable <= String # => nil
  */
 
 VALUE
@@ -1963,13 +1980,24 @@ rb_class_inherited_p(VALUE mod, VALUE arg)
  * call-seq:
  *   self < other -> true, false, or nil
  *
- * Returns whether +self+ is a subclass of +other+,
- * or +nil+ if there is no relationship between the two:
+ * Returns +true+ if +self+ is a descendant of +other+
+ * (+self+ is a subclass of +other+ or +self+ includes +other+):
  *
- *   Float < Numeric # => true
- *   Numeric < Float # => false
- *   Float < Float   # => false
- *   Float < Hash    # => nil
+ *   Float < Numeric    # => true
+ *   Array < Enumerable # => true
+ *
+ * Returns +false+ if +self+ is an ancestor of +other+
+ * (+self+ is a superclass of +other+ or +self+ is included in +other+) or
+ * if +self+ is the same as +other+:
+ *
+ *   Numeric < Float    # => false
+ *   Enumerable < Array # => false
+ *   Float < Float      # => false
+ *
+ * Returns +nil+ if there is no relationship between the two:
+ *
+ *   Float < Hash        # => nil
+ *   Enumerable < String # => nil
  *
  */
 
@@ -1985,11 +2013,24 @@ rb_mod_lt(VALUE mod, VALUE arg)
  * call-seq:
  *   mod >= other   ->  true, false, or nil
  *
- * Returns true if <i>mod</i> is an ancestor of <i>other</i>, or the
- * two modules are the same. Returns
- * <code>nil</code> if there's no relationship between the two.
- * (Think of the relationship in terms of the class definition:
- * "class A < B" implies "B > A".)
+ * Returns +true+ if +self+ is an ancestor of +other+
+ * (+self+ is a superclass of +other+ or +self+ is included in +other+) or
+ * if +self+ is the same as +other+:
+ *
+ *   Numeric >= Float    # => true
+ *   Enumerable >= Array # => true
+ *   Float >= Float      # => true
+ *
+ * Returns +false+ if +self+ is a descendant of +other+
+ * (+self+ is a subclass of +other+ or +self+ includes +other+):
+ *
+ *   Float >= Numeric    # => false
+ *   Array >= Enumerable # => false
+ *
+ * Returns +nil+ if there is no relationship between the two:
+ *
+ *   Float >= Hash        # => nil
+ *   Enumerable >= String # => nil
  *
  */
 
@@ -2005,14 +2046,26 @@ rb_mod_ge(VALUE mod, VALUE arg)
 
 /*
  * call-seq:
- *   mod > other   ->  true, false, or nil
+ *   self > other -> true, false, or nil
  *
- * Returns true if <i>mod</i> is an ancestor of <i>other</i>. Returns
- * <code>false</code> if <i>mod</i> is the same as <i>other</i>
- * or <i>mod</i> is a descendant of <i>other</i>.
- * Returns <code>nil</code> if there's no relationship between the two.
- * (Think of the relationship in terms of the class definition:
- * "class A < B" implies "B > A".)
+ * Returns +true+ if +self+ is an ancestor of +other+
+ * (+self+ is a superclass of +other+ or +self+ is included in +other+):
+ *
+ *   Numeric > Float    # => true
+ *   Enumerable > Array # => true
+ *
+ * Returns +false+ if +self+ is a descendant of +other+
+ * (+self+ is a subclass of +other+ or +self+ includes +other+) or
+ * if +self+ is the same as +other+:
+ *
+ *   Float > Numeric    # => false
+ *   Array > Enumerable # => false
+ *   Float > Float      # => false
+ *
+ * Returns +nil+ if there is no relationship between the two:
+ *
+ *   Float > Hash        # => nil
+ *   Enumerable > String # => nil
  *
  */
 
@@ -4304,8 +4357,8 @@ rb_f_loop_size(VALUE self, VALUE args, VALUE eobj)
  *
  *  First, what's elsewhere. Class \Object:
  *
- *  - Inherits from {class BasicObject}[rdoc-ref:BasicObject@What-27s+Here].
- *  - Includes {module Kernel}[rdoc-ref:Kernel@What-27s+Here].
+ *  - Inherits from {class BasicObject}[rdoc-ref:BasicObject@Whats+Here].
+ *  - Includes {module Kernel}[rdoc-ref:Kernel@Whats+Here].
  *
  *  Here, class \Object provides methods for:
  *

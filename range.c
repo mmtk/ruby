@@ -154,14 +154,14 @@ recursive_equal(VALUE range, VALUE obj, int recur)
  *  call-seq:
  *    self == other -> true or false
  *
- *  Returns +true+ if and only if:
+ *  Returns whether all of the following are true:
  *
  *  - +other+ is a range.
  *  - <tt>other.begin == self.begin</tt>.
  *  - <tt>other.end == self.end</tt>.
  *  - <tt>other.exclude_end? == self.exclude_end?</tt>.
  *
- *  Otherwise returns +false+.
+ *  Examples:
  *
  *    r = (1..5)
  *    r == (1..5)                # => true
@@ -2768,8 +2768,8 @@ range_overlap(VALUE range, VALUE other)
  *
  * First, what's elsewhere. Class \Range:
  *
- * - Inherits from {class Object}[rdoc-ref:Object@What-27s+Here].
- * - Includes {module Enumerable}[rdoc-ref:Enumerable@What-27s+Here],
+ * - Inherits from {class Object}[rdoc-ref:Object@Whats+Here].
+ * - Includes {module Enumerable}[rdoc-ref:Enumerable@Whats+Here],
  *   which provides dozens of additional methods.
  *
  * Here, class \Range provides methods that are useful for:

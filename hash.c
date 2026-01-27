@@ -1565,9 +1565,8 @@ rb_hash_dup(VALUE hash)
     const VALUE flags = RBASIC(hash)->flags;
     VALUE ret = hash_dup(hash, rb_obj_class(hash), flags & RHASH_PROC_DEFAULT);
 
-    if (rb_obj_gen_fields_p(hash)) {
-        rb_copy_generic_ivar(ret, hash);
-    }
+    rb_copy_generic_ivar(ret, hash);
+
     return ret;
 }
 
@@ -2652,9 +2651,9 @@ rb_hash_slice(int argc, VALUE *argv, VALUE hash)
  *  Returns a copy of +self+ that excludes entries for the given +keys+;
  *  any +keys+ that are not found are ignored:
  *
- *    h = {foo:0, bar: 1, baz: 2} # => {:foo=>0, :bar=>1, :baz=>2}
- *    h.except(:baz, :foo)        # => {:bar=>1}
- *    h.except(:bar, :nosuch)     # => {:foo=>0, :baz=>2}
+ *    h = {foo:0, bar: 1, baz: 2} # => {foo: 0, bar: 1, baz: 2}
+ *    h.except(:baz, :foo)        # => {bar: 1}
+ *    h.except(:bar, :nosuch)     # => {foo: 0, baz: 2}
  *
  *  Related: see {Methods for Deleting}[rdoc-ref:Hash@Methods+for+Deleting].
  */
@@ -2931,7 +2930,7 @@ NOINSERT_UPDATE_CALLBACK(hash_aset_str)
  *    h = {foo: 0, bar: 1}
  *    h[:baz] = 2 # => 2
  *    h[:baz]     # => 2
- *    h           # => {:foo=>0, :bar=>1, :baz=>2}
+ *    h           # => {foo: 0, bar: 1, baz: 2}
  *
  *  Related: #[]; see also {Methods for Assigning}[rdoc-ref:Hash@Methods+for+Assigning].
  */
@@ -3999,17 +3998,13 @@ hash_equal(VALUE hash1, VALUE hash2, int eql)
 
 /*
  *  call-seq:
- *    self == object -> true or false
+ *    self == other -> true or false
  *
- *  Returns whether +self+ and +object+ are equal.
+ *  Returns whether all of the following are true:
  *
- *  Returns +true+ if all of the following are true:
- *
- *  - +object+ is a +Hash+ object (or can be converted to one).
- *  - +self+ and +object+ have the same keys (regardless of order).
- *  - For each key +key+, <tt>self[key] == object[key]</tt>.
- *
- *  Otherwise, returns +false+.
+ *  - +other+ is a +Hash+ object (or can be converted to one).
+ *  - +self+ and +other+ have the same keys (regardless of order).
+ *  - For each key +key+, <tt>self[key] == other[key]</tt>.
  *
  *  Examples:
  *
@@ -4995,10 +4990,9 @@ rb_hash_ge(VALUE hash, VALUE other)
 
 /*
  *  call-seq:
- *    self > other_hash -> true or false
+ *    self > other -> true or false
  *
- *  Returns +true+ if the entries of +self+ are a proper superset of the entries of +other_hash+,
- *  +false+ otherwise:
+ *  Returns whether the entries of +self+ are a proper superset of the entries of +other+:
  *
  *    h = {foo: 0, bar: 1, baz: 2}
  *    h > {foo: 0, bar: 1}         # => true   # Proper superset.
@@ -7241,8 +7235,8 @@ static const rb_data_type_t env_data_type = {
  *
  *  First, what's elsewhere. Class +Hash+:
  *
- *  - Inherits from {class Object}[rdoc-ref:Object@What-27s+Here].
- *  - Includes {module Enumerable}[rdoc-ref:Enumerable@What-27s+Here],
+ *  - Inherits from {class Object}[rdoc-ref:Object@Whats+Here].
+ *  - Includes {module Enumerable}[rdoc-ref:Enumerable@Whats+Here],
  *    which provides dozens of additional methods.
  *
  *  Here, class +Hash+ provides methods that are useful for:
@@ -7553,8 +7547,8 @@ Init_Hash(void)
      *
      * First, what's elsewhere. Class +ENV+:
      *
-     * - Inherits from {class Object}[rdoc-ref:Object@What-27s+Here].
-     * - Extends {module Enumerable}[rdoc-ref:Enumerable@What-27s+Here],
+     * - Inherits from {class Object}[rdoc-ref:Object@Whats+Here].
+     * - Extends {module Enumerable}[rdoc-ref:Enumerable@Whats+Here],
      *
      * Here, class +ENV+ provides methods that are useful for:
      *
