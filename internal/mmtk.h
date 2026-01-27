@@ -89,6 +89,7 @@ typedef struct MMTk_RubyUpcalls {
     bool (*is_no_longer_ppp)(MMTk_ObjectReference);
     void (*scan_object_ruby_style)(MMTk_ObjectReference object);
     void (*call_gc_mark_children)(MMTk_ObjectReference object);
+    bool (*obj_needs_cleanup_p)(MMTk_ObjectReference object);
     void (*call_obj_free)(MMTk_ObjectReference object);
     size_t (*vm_live_bytes)(void);
     bool (*has_exivar)(MMTk_ObjectReference object);

@@ -1728,6 +1728,12 @@ rb_mmtk_xmalloc_increase_body(size_t new_size, size_t old_size)
     }
 }
 
+static bool
+rb_mmtk_obj_need_cleanup_p(MMTk_ObjectReference object)
+{
+    return rb_gc_obj_needs_cleanup_p((VALUE)object);
+}
+
 static size_t
 rb_mmtk_vm_live_bytes(void)
 {
@@ -2014,6 +2020,7 @@ MMTk_RubyUpcalls ruby_upcalls = {
     rb_mmtk_is_no_longer_ppp,
     rb_mmtk_scan_object_ruby_style,
     rb_mmtk_call_gc_mark_children,
+    rb_mmtk_obj_need_cleanup_p,
     rb_mmtk_call_obj_free,
     rb_mmtk_vm_live_bytes,
     rb_mmtk_has_exivar,
