@@ -1137,7 +1137,8 @@ typed_data_alloc(VALUE klass, VALUE typed_flag, void *datap, const rb_data_type_
         // TODO: Remove the limit and make all embeddable RTypedData embedded.
         bool is_embedded = typed_flag & TYPED_DATA_EMBEDDED;
         bool using_default_free = type->function.dfree == RUBY_TYPED_DEFAULT_FREE;
-        if (!(is_embedded && using_default_free)) {
+        bool never_free = type->function.dfree == RUBY_TYPED_NEVER_FREE;
+        if (!(is_embedded && (using_default_free || never_free))) {
             // Embedded objects using default free do not need obj_free.
             rb_mmtk_register_obj_free_candidate(rb_mmtk_get_mutator_local(), obj);
         }
