@@ -76,13 +76,13 @@ module Prism
       source.byteslice(byte_offset, length) or raise
     end
 
-    # Converts the line number to a byte offset corresponding to the start of that line
-    def line_to_byte_offset(line)
-      l = line - @start_line
-      if l < 0 || l >= offsets.size
-        raise ArgumentError, "line #{line} is out of range"
-      end
-      offsets[l]
+    # Converts the line number and column in bytes to a byte offset.
+    def byte_offset(line, column)
+      normal = line - @start_line
+      raise IndexError if normal < 0
+      offsets.fetch(normal) + column
+    rescue IndexError
+      raise ArgumentError, "line #{line} is out of range"
     end
 
     # Binary search through the offsets to find the line number for the given
@@ -103,7 +103,7 @@ module Prism
       offsets[find_line(byte_offset) + 1] || source.bytesize
     end
 
-    # Return the column number for the given byte offset.
+    # Return the column in bytes for the given byte offset.
     def column(byte_offset)
       byte_offset - line_start(byte_offset)
     end
@@ -113,7 +113,7 @@ module Prism
       (source.byteslice(0, byte_offset) or raise).length
     end
 
-    # Return the column number in characters for the given byte offset.
+    # Return the column in characters for the given byte offset.
     def character_column(byte_offset)
       character_offset(byte_offset) - character_offset(line_start(byte_offset))
     end
@@ -146,7 +146,7 @@ module Prism
       CodeUnitsCache.new(source, encoding)
     end
 
-    # Returns the column number in code units for the given encoding for the
+    # Returns the column in code units for the given encoding for the
     # given byte offset.
     def code_units_column(byte_offset, encoding)
       code_units_offset(byte_offset, encoding) - code_units_offset(line_start(byte_offset), encoding)
@@ -163,7 +163,7 @@ module Prism
 
     # Binary search through the offsets to find the line number for the given
     # byte offset.
-    def find_line(byte_offset)
+    def find_line(byte_offset) # :nodoc:
       index = offsets.bsearch_index { |offset| offset > byte_offset } || offsets.length
       index - 1
     end
@@ -253,7 +253,7 @@ module Prism
       byte_offset
     end
 
-    # Return the column number in characters for the given byte offset.
+    # Return the column in characters for the given byte offset.
     def character_column(byte_offset)
       byte_offset - line_start(byte_offset)
     end
@@ -350,7 +350,7 @@ module Prism
     end
 
     # Returns a string representation of this location.
-    def inspect
+    def inspect # :nodoc:
       "#<Prism::Location @start_offset=#{@start_offset} @length=#{@length} start_line=#{start_line}>"
     end
 
@@ -428,19 +428,19 @@ module Prism
       source.line(end_offset)
     end
 
-    # The column number in bytes where this location starts from the start of
+    # The column in bytes where this location starts from the start of
     # the line.
     def start_column
       source.column(start_offset)
     end
 
-    # The column number in characters where this location ends from the start of
+    # The column in characters where this location ends from the start of
     # the line.
     def start_character_column
       source.character_column(start_offset)
     end
 
-    # The column number in code units of the given encoding where this location
+    # The column in code units of the given encoding where this location
     # starts from the start of the line.
     def start_code_units_column(encoding = Encoding::UTF_16LE)
       source.code_units_column(start_offset, encoding)
@@ -452,19 +452,19 @@ module Prism
       cache[start_offset] - cache[source.line_start(start_offset)]
     end
 
-    # The column number in bytes where this location ends from the start of the
+    # The column in bytes where this location ends from the start of the
     # line.
     def end_column
       source.column(end_offset)
     end
 
-    # The column number in characters where this location ends from the start of
+    # The column in characters where this location ends from the start of
     # the line.
     def end_character_column
       source.character_column(end_offset)
     end
 
-    # The column number in code units of the given encoding where this location
+    # The column in code units of the given encoding where this location
     # ends from the start of the line.
     def end_code_units_column(encoding = Encoding::UTF_16LE)
       source.code_units_column(end_offset, encoding)
@@ -477,12 +477,12 @@ module Prism
     end
 
     # Implement the hash pattern matching interface for Location.
-    def deconstruct_keys(keys)
+    def deconstruct_keys(keys) # :nodoc:
       { start_offset: start_offset, end_offset: end_offset }
     end
 
     # Implement the pretty print interface for Location.
-    def pretty_print(q)
+    def pretty_print(q) # :nodoc:
       q.text("(#{start_line},#{start_column})-(#{end_line},#{end_column})")
     end
 
@@ -519,7 +519,7 @@ module Prism
   # This represents a comment that was encountered during parsing. It is the
   # base class for all comment types.
   class Comment
-    # The location of this comment in the source.
+    # The Location of this comment in the source.
     attr_reader :location
 
     # Create a new comment object with the given location.
@@ -528,7 +528,7 @@ module Prism
     end
 
     # Implement the hash pattern matching interface for Comment.
-    def deconstruct_keys(keys)
+    def deconstruct_keys(keys) # :nodoc:
       { location: location }
     end
 
@@ -548,7 +548,7 @@ module Prism
     end
 
     # Returns a string representation of this comment.
-    def inspect
+    def inspect # :nodoc:
       "#<Prism::InlineComment @location=#{location.inspect}>"
     end
   end
@@ -556,13 +556,13 @@ module Prism
   # EmbDocComment objects correspond to comments that are surrounded by =begin
   # and =end.
   class EmbDocComment < Comment
-    # This can only be true for inline comments.
+    # Returns false. This can only be true for inline comments.
     def trailing?
       false
     end
 
     # Returns a string representation of this comment.
-    def inspect
+    def inspect # :nodoc:
       "#<Prism::EmbDocComment @location=#{location.inspect}>"
     end
   end
@@ -592,12 +592,12 @@ module Prism
     end
 
     # Implement the hash pattern matching interface for MagicComment.
-    def deconstruct_keys(keys)
+    def deconstruct_keys(keys) # :nodoc:
       { key_loc: key_loc, value_loc: value_loc }
     end
 
     # Returns a string representation of this magic comment.
-    def inspect
+    def inspect # :nodoc:
       "#<Prism::MagicComment @key=#{key.inspect} @value=#{value.inspect}>"
     end
   end
@@ -626,12 +626,12 @@ module Prism
     end
 
     # Implement the hash pattern matching interface for ParseError.
-    def deconstruct_keys(keys)
+    def deconstruct_keys(keys) # :nodoc:
       { type: type, message: message, location: location, level: level }
     end
 
     # Returns a string representation of this error.
-    def inspect
+    def inspect # :nodoc:
       "#<Prism::ParseError @type=#{@type.inspect} @message=#{@message.inspect} @location=#{@location.inspect} @level=#{@level.inspect}>"
     end
   end
@@ -660,19 +660,19 @@ module Prism
     end
 
     # Implement the hash pattern matching interface for ParseWarning.
-    def deconstruct_keys(keys)
+    def deconstruct_keys(keys) # :nodoc:
       { type: type, message: message, location: location, level: level }
     end
 
     # Returns a string representation of this warning.
-    def inspect
+    def inspect # :nodoc:
       "#<Prism::ParseWarning @type=#{@type.inspect} @message=#{@message.inspect} @location=#{@location.inspect} @level=#{@level.inspect}>"
     end
   end
 
-  # This represents the result of a call to ::parse or ::parse_file. It contains
-  # the requested structure, any comments that were encounters, and any errors
-  # that were encountered.
+  # This represents the result of a call to Prism.parse or Prism.parse_file.
+  # It contains the requested structure, any comments that were encounters,
+  # and any errors that were encountered.
   class Result
     # The list of comments that were encountered during parsing.
     attr_reader :comments
@@ -705,7 +705,7 @@ module Prism
     end
 
     # Implement the hash pattern matching interface for Result.
-    def deconstruct_keys(keys)
+    def deconstruct_keys(keys) # :nodoc:
       { comments: comments, magic_comments: magic_comments, data_loc: data_loc, errors: errors, warnings: warnings }
     end
 
@@ -752,7 +752,7 @@ module Prism
     end
 
     # Implement the hash pattern matching interface for ParseResult.
-    def deconstruct_keys(keys)
+    def deconstruct_keys(keys) # :nodoc:
       super.merge!(value: value)
     end
 
@@ -786,7 +786,7 @@ module Prism
     end
 
     # Implement the hash pattern matching interface for LexResult.
-    def deconstruct_keys(keys)
+    def deconstruct_keys(keys) # :nodoc:
       super.merge!(value: value)
     end
   end
@@ -804,7 +804,7 @@ module Prism
     end
 
     # Implement the hash pattern matching interface for ParseLexResult.
-    def deconstruct_keys(keys)
+    def deconstruct_keys(keys) # :nodoc:
       super.merge!(value: value)
     end
   end
@@ -830,7 +830,7 @@ module Prism
     end
 
     # Implement the hash pattern matching interface for Token.
-    def deconstruct_keys(keys)
+    def deconstruct_keys(keys) # :nodoc:
       { type: type, value: value, location: location }
     end
 
@@ -842,7 +842,7 @@ module Prism
     end
 
     # Implement the pretty print interface for Token.
-    def pretty_print(q)
+    def pretty_print(q) # :nodoc:
       q.group do
         q.text(type.to_s)
         self.location.pretty_print(q)
@@ -864,7 +864,7 @@ module Prism
     end
 
     # Returns a string representation of this token.
-    def inspect
+    def inspect # :nodoc:
       location
       super
     end

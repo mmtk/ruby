@@ -35,6 +35,9 @@
 #include "internal/mmtk_support.h"
 #endif
 
+// Conditional compilation macros for MMTk.
+#include "internal/mmtk_macros.h"
+
 VALUE rb_eRegexpError, rb_eRegexpTimeoutError;
 
 typedef char onig_errmsg_buffer[ONIG_MAX_ERROR_MESSAGE_LEN];
@@ -1041,15 +1044,12 @@ update_char_offset(VALUE match)
     num_regs = rm->regs.num_regs;
 
     if (rm->char_offset_num_allocated < num_regs) {
-#if USE_MMTK
-        if (!rb_mmtk_enabled_p()) {
-#endif
-        REALLOC_N(rm->char_offset, struct rmatch_offset, num_regs);
-#if USE_MMTK
-        } else {
+        WHEN_USING_MMTK2({
             rb_mmtk_char_offset_realloc(&rm->char_offset, num_regs);
-        }
-#endif
+        }, {
+        SIZED_REALLOC_N(rm->char_offset, struct rmatch_offset, num_regs, rm->char_offset_num_allocated);
+        });
+
         rm->char_offset_num_allocated = num_regs;
     }
 
@@ -1137,15 +1137,11 @@ match_init_copy(VALUE obj, VALUE orig)
 
     if (RMATCH_EXT(orig)->char_offset_num_allocated) {
         if (rm->char_offset_num_allocated < rm->regs.num_regs) {
-#if USE_MMTK
-            if (!rb_mmtk_enabled_p()) {
-#endif
-            REALLOC_N(rm->char_offset, struct rmatch_offset, rm->regs.num_regs);
-#if USE_MMTK
-            } else {
+            WHEN_USING_MMTK2({
                 rb_mmtk_char_offset_realloc(&rm->char_offset, rm->regs.num_regs);
-            }
-#endif
+            }, {
+            SIZED_REALLOC_N(rm->char_offset, struct rmatch_offset, rm->regs.num_regs, rm->char_offset_num_allocated);
+            });
             rm->char_offset_num_allocated = rm->regs.num_regs;
         }
         MEMCPY(rm->char_offset, RMATCH_EXT(orig)->char_offset,

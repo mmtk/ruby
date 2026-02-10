@@ -1096,16 +1096,68 @@ class TestZJIT < Test::Unit::TestCase
     }, call_threshold: 2
   end
 
-  def test_invokesuper_to_cfunc
-    assert_compiles '["MyArray", 3]', %q{
-      class MyArray < Array
+  def test_invokesuper_to_cfunc_no_args
+    assert_compiles '["MyString", 3]', %q{
+      class MyString < String
         def length
-          ["MyArray", super]
+          ["MyString", super]
         end
       end
 
       def test
-        MyArray.new([1, 2, 3]).length
+        MyString.new("abc").length
+      end
+
+      test  # profile invokesuper
+      test  # compile + run compiled code
+    }, call_threshold: 2
+  end
+
+  def test_invokesuper_to_cfunc_simple_args
+    assert_compiles '["MyString", true]', %q{
+      class MyString < String
+        def include?(other)
+          ["MyString", super(other)]
+        end
+      end
+
+      def test
+        MyString.new("abc").include?("bc")
+      end
+
+      test  # profile invokesuper
+      test  # compile + run compiled code
+    }, call_threshold: 2
+  end
+
+
+  def test_invokesuper_to_cfunc_with_optional_arg
+    assert_compiles '["MyString", 6]', %q{
+      class MyString < String
+        def byteindex(needle, offset = 0)
+          ["MyString", super(needle, offset)]
+        end
+      end
+
+      def test
+        MyString.new("hello world").byteindex("world")
+      end
+
+      test  # profile invokesuper
+      test  # compile + run compiled code
+    }, call_threshold: 2
+  end
+
+  def test_invokesuper_to_cfunc_varargs
+    assert_compiles '["MyString", true]', %q{
+      class MyString < String
+        def end_with?(str)
+          ["MyString", super(str)]
+        end
+      end
+
+      def test
+        MyString.new("abc").end_with?("bc")
       end
 
       test  # profile invokesuper
@@ -1490,6 +1542,46 @@ class TestZJIT < Test::Unit::TestCase
       end
 
       def test = Child.new.foo(1)
+
+      test
+      test
+    }, call_threshold: 2
+  end
+
+  def test_invokesuperforward
+    assert_compiles '[1, 2, 3]', %q{
+      class A
+        def foo(a,b,c) = [a,b,c]
+      end
+
+      class B < A
+        def foo(...) = super
+      end
+
+      def test
+        B.new.foo(1, 2, 3)
+      end
+
+      test
+      test
+    }, call_threshold: 2
+  end
+
+  def test_invokesuperforward_with_args_kwargs_and_block
+    assert_compiles '[[1, 2], {x: 3}, 4]', %q{
+      class A
+        def foo(*args, **kwargs, &block)
+          [args, kwargs, block&.call]
+        end
+      end
+
+      class B < A
+        def foo(...) = super
+      end
+
+      def test
+        B.new.foo(1, 2, x: 3) { 4 }
+      end
 
       test
       test
@@ -3286,6 +3378,21 @@ class TestZJIT < Test::Unit::TestCase
       def test = RUBY_COPYRIGHT
       test
     }, call_threshold: 1, insns: [:opt_getconstant_path]
+  end
+
+  def test_getconstant
+    assert_compiles '1', %q{
+      class Foo
+        CONST = 1
+      end
+
+      def test(klass)
+        klass::CONST
+      end
+
+      test(Foo)
+      test(Foo)
+    }, call_threshold: 2, insns: [:getconstant]
   end
 
   def test_expandarray_no_splat

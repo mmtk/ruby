@@ -201,9 +201,18 @@ build_options_i(VALUE key, VALUE value, VALUE argument) {
             const char *version = check_string(value);
 
             if (RSTRING_LEN(value) == 7 && strncmp(version, "current", 7) == 0) {
-                const char *current_version = RSTRING_PTR(rb_const_get(rb_cObject, rb_intern("RUBY_VERSION")));
-                if (!pm_options_version_set(options, current_version, 3)) {
-                    rb_exc_raise(rb_exc_new_cstr(rb_cPrismCurrentVersionError, current_version));
+                if (!pm_options_version_set(options, ruby_version, 3)) {
+                    rb_exc_raise(rb_exc_new_cstr(rb_cPrismCurrentVersionError, ruby_version));
+                }
+            } else if (RSTRING_LEN(value) == 7 && strncmp(version, "nearest", 7) == 0) {
+                if (!pm_options_version_set(options, ruby_version, 3)) {
+                    // Prism doesn't know this specific version. Is it lower?
+                    if (ruby_version[0] < '3' || (ruby_version[0] == '3' && ruby_version[2] < '3')) {
+                        options->version == PM_OPTIONS_VERSION_CRUBY_3_3;
+                    } else {
+                        // Must be higher.
+                        options->version == PM_OPTIONS_VERSION_LATEST;
+                    }
                 }
             } else if (!pm_options_version_set(options, version, RSTRING_LEN(value))) {
                 rb_raise(rb_eArgError, "invalid version: %" PRIsVALUE, value);
@@ -381,10 +390,10 @@ dump_input(pm_string_t *input, const pm_options_t *options) {
 
 /**
  * call-seq:
- *   Prism::dump(source, **options) -> String
+ *   dump(source, **options) -> String
  *
  * Dump the AST corresponding to the given string to a string. For supported
- * options, see Prism::parse.
+ * options, see Prism.parse.
  */
 static VALUE
 dump(int argc, VALUE *argv, VALUE self) {
@@ -414,10 +423,10 @@ dump(int argc, VALUE *argv, VALUE self) {
 
 /**
  * call-seq:
- *   Prism::dump_file(filepath, **options) -> String
+ *   dump_file(filepath, **options) -> String
  *
  * Dump the AST corresponding to the given file to a string. For supported
- * options, see Prism::parse.
+ * options, see Prism.parse.
  */
 static VALUE
 dump_file(int argc, VALUE *argv, VALUE self) {
@@ -455,23 +464,23 @@ rb_class_new_instance_freeze(int argc, const VALUE *argv, VALUE klass, bool free
  * Create a new Location instance from the given parser and bounds.
  */
 static inline VALUE
-parser_location(const pm_parser_t *parser, VALUE source, bool freeze, const uint8_t *start, size_t length) {
-    VALUE argv[] = { source, LONG2FIX(start - parser->start), LONG2FIX(length) };
+parser_location(VALUE source, bool freeze, uint32_t start, uint32_t length) {
+    VALUE argv[] = { source, LONG2FIX(start), LONG2FIX(length) };
     return rb_class_new_instance_freeze(3, argv, rb_cPrismLocation, freeze);
 }
 
 /**
  * Create a new Location instance from the given parser and location.
  */
-#define PARSER_LOCATION_LOC(parser, source, freeze, loc) \
-    parser_location(parser, source, freeze, loc.start, (size_t) (loc.end - loc.start))
+#define PARSER_LOCATION(source, freeze, location) \
+    parser_location(source, freeze, location.start, location.length)
 
 /**
  * Build a new Comment instance from the given parser and comment.
  */
 static inline VALUE
-parser_comment(const pm_parser_t *parser, VALUE source, bool freeze, const pm_comment_t *comment) {
-    VALUE argv[] = { PARSER_LOCATION_LOC(parser, source, freeze, comment->location) };
+parser_comment(VALUE source, bool freeze, const pm_comment_t *comment) {
+    VALUE argv[] = { PARSER_LOCATION(source, freeze, comment->location) };
     VALUE type = (comment->type == PM_COMMENT_EMBDOC) ? rb_cPrismEmbDocComment : rb_cPrismInlineComment;
     return rb_class_new_instance_freeze(1, argv, type, freeze);
 }
@@ -488,7 +497,7 @@ parser_comments(const pm_parser_t *parser, VALUE source, bool freeze) {
         comment != NULL;
         comment = (const pm_comment_t *) comment->node.next
     ) {
-        VALUE value = parser_comment(parser, source, freeze, comment);
+        VALUE value = parser_comment(source, freeze, comment);
         rb_ary_push(comments, value);
     }
 
@@ -500,9 +509,9 @@ parser_comments(const pm_parser_t *parser, VALUE source, bool freeze) {
  * Build a new MagicComment instance from the given parser and magic comment.
  */
 static inline VALUE
-parser_magic_comment(const pm_parser_t *parser, VALUE source, bool freeze, const pm_magic_comment_t *magic_comment) {
-    VALUE key_loc = parser_location(parser, source, freeze, magic_comment->key_start, magic_comment->key_length);
-    VALUE value_loc = parser_location(parser, source, freeze, magic_comment->value_start, magic_comment->value_length);
+parser_magic_comment(VALUE source, bool freeze, const pm_magic_comment_t *magic_comment) {
+    VALUE key_loc = parser_location(source, freeze, magic_comment->key.start, magic_comment->key.length);
+    VALUE value_loc = parser_location(source, freeze, magic_comment->value.start, magic_comment->value.length);
     VALUE argv[] = { key_loc, value_loc };
     return rb_class_new_instance_freeze(2, argv, rb_cPrismMagicComment, freeze);
 }
@@ -519,7 +528,7 @@ parser_magic_comments(const pm_parser_t *parser, VALUE source, bool freeze) {
         magic_comment != NULL;
         magic_comment = (const pm_magic_comment_t *) magic_comment->node.next
     ) {
-        VALUE value = parser_magic_comment(parser, source, freeze, magic_comment);
+        VALUE value = parser_magic_comment(source, freeze, magic_comment);
         rb_ary_push(magic_comments, value);
     }
 
@@ -533,10 +542,10 @@ parser_magic_comments(const pm_parser_t *parser, VALUE source, bool freeze) {
  */
 static VALUE
 parser_data_loc(const pm_parser_t *parser, VALUE source, bool freeze) {
-    if (parser->data_loc.end == NULL) {
+    if (parser->data_loc.length == 0) {
         return Qnil;
     } else {
-        return PARSER_LOCATION_LOC(parser, source, freeze, parser->data_loc);
+        return parser_location(source, freeze, parser->data_loc.start, parser->data_loc.length);
     }
 }
 
@@ -554,7 +563,7 @@ parser_errors(const pm_parser_t *parser, rb_encoding *encoding, VALUE source, bo
     ) {
         VALUE type = ID2SYM(rb_intern(pm_diagnostic_id_human(error->diag_id)));
         VALUE message = rb_obj_freeze(rb_enc_str_new_cstr(error->message, encoding));
-        VALUE location = PARSER_LOCATION_LOC(parser, source, freeze, error->location);
+        VALUE location = PARSER_LOCATION(source, freeze, error->location);
 
         VALUE level = Qnil;
         switch (error->level) {
@@ -594,7 +603,7 @@ parser_warnings(const pm_parser_t *parser, rb_encoding *encoding, VALUE source, 
     ) {
         VALUE type = ID2SYM(rb_intern(pm_diagnostic_id_human(warning->diag_id)));
         VALUE message = rb_obj_freeze(rb_enc_str_new_cstr(warning->message, encoding));
-        VALUE location = PARSER_LOCATION_LOC(parser, source, freeze, warning->location);
+        VALUE location = PARSER_LOCATION(source, freeze, warning->location);
 
         VALUE level = Qnil;
         switch (warning->level) {
@@ -786,10 +795,10 @@ parse_lex_input(pm_string_t *input, const pm_options_t *options, bool return_nod
 
 /**
  * call-seq:
- *   Prism::lex(source, **options) -> LexResult
+ *   lex(source, **options) -> LexResult
  *
  * Return a LexResult instance that contains an array of Token instances
- * corresponding to the given string. For supported options, see Prism::parse.
+ * corresponding to the given string. For supported options, see Prism.parse.
  */
 static VALUE
 lex(int argc, VALUE *argv, VALUE self) {
@@ -806,10 +815,10 @@ lex(int argc, VALUE *argv, VALUE self) {
 
 /**
  * call-seq:
- *   Prism::lex_file(filepath, **options) -> LexResult
+ *   lex_file(filepath, **options) -> LexResult
  *
  * Return a LexResult instance that contains an array of Token instances
- * corresponding to the given file. For supported options, see Prism::parse.
+ * corresponding to the given file. For supported options, see Prism.parse.
  */
 static VALUE
 lex_file(int argc, VALUE *argv, VALUE self) {
@@ -857,7 +866,7 @@ parse_input(pm_string_t *input, const pm_options_t *options) {
 
 /**
  * call-seq:
- *   Prism::parse(source, **options) -> ParseResult
+ *   parse(source, **options) -> ParseResult
  *
  * Parse the given string and return a ParseResult instance. The options that
  * are supported are:
@@ -894,8 +903,10 @@ parse_input(pm_string_t *input, const pm_options_t *options) {
  *       version of Ruby syntax (which you can trigger with `nil` or
  *       `"latest"`). You may also restrict the syntax to a specific version of
  *       Ruby, e.g., with `"3.3.0"`. To parse with the same syntax version that
- *       the current Ruby is running use `version: "current"`. Raises
- *       ArgumentError if the version is not currently supported by Prism.
+ *       the current Ruby is running use `version: "current"`. To parse with the
+ *       nearest version to the current Ruby that is running, use
+ *       `version: "nearest"`. Raises ArgumentError if the version is not
+ *       currently supported by Prism.
  */
 static VALUE
 parse(int argc, VALUE *argv, VALUE self) {
@@ -923,10 +934,10 @@ parse(int argc, VALUE *argv, VALUE self) {
 
 /**
  * call-seq:
- *   Prism::parse_file(filepath, **options) -> ParseResult
+ *   parse_file(filepath, **options) -> ParseResult
  *
  * Parse the given file and return a ParseResult instance. For supported
- * options, see Prism::parse.
+ * options, see Prism.parse.
  */
 static VALUE
 parse_file(int argc, VALUE *argv, VALUE self) {
@@ -958,11 +969,11 @@ profile_input(pm_string_t *input, const pm_options_t *options) {
 
 /**
  * call-seq:
- *   Prism::profile(source, **options) -> nil
+ *   profile(source, **options) -> nil
  *
  * Parse the given string and return nothing. This method is meant to allow
  * profilers to avoid the overhead of reifying the AST to Ruby. For supported
- * options, see Prism::parse.
+ * options, see Prism.parse.
  */
 static VALUE
 profile(int argc, VALUE *argv, VALUE self) {
@@ -979,11 +990,11 @@ profile(int argc, VALUE *argv, VALUE self) {
 
 /**
  * call-seq:
- *   Prism::profile_file(filepath, **options) -> nil
+ *   profile_file(filepath, **options) -> nil
  *
  * Parse the given file and return nothing. This method is meant to allow
  * profilers to avoid the overhead of reifying the AST to Ruby. For supported
- * options, see Prism::parse.
+ * options, see Prism.parse.
  */
 static VALUE
 profile_file(int argc, VALUE *argv, VALUE self) {
@@ -1031,10 +1042,10 @@ parse_stream_fgets(char *string, int size, void *stream) {
 
 /**
  * call-seq:
- *   Prism::parse_stream(stream, **options) -> ParseResult
+ *   parse_stream(stream, **options) -> ParseResult
  *
  * Parse the given object that responds to `gets` and return a ParseResult
- * instance. The options that are supported are the same as Prism::parse.
+ * instance. The options that are supported are the same as Prism.parse.
  */
 static VALUE
 parse_stream(int argc, VALUE *argv, VALUE self) {
@@ -1084,10 +1095,10 @@ parse_input_comments(pm_string_t *input, const pm_options_t *options) {
 
 /**
  * call-seq:
- *   Prism::parse_comments(source, **options) -> Array
+ *   parse_comments(source, **options) -> Array
  *
  * Parse the given string and return an array of Comment objects. For supported
- * options, see Prism::parse.
+ * options, see Prism.parse.
  */
 static VALUE
 parse_comments(int argc, VALUE *argv, VALUE self) {
@@ -1104,10 +1115,10 @@ parse_comments(int argc, VALUE *argv, VALUE self) {
 
 /**
  * call-seq:
- *   Prism::parse_file_comments(filepath, **options) -> Array
+ *   parse_file_comments(filepath, **options) -> Array
  *
  * Parse the given file and return an array of Comment objects. For supported
- * options, see Prism::parse.
+ * options, see Prism.parse.
  */
 static VALUE
 parse_file_comments(int argc, VALUE *argv, VALUE self) {
@@ -1126,17 +1137,17 @@ parse_file_comments(int argc, VALUE *argv, VALUE self) {
 
 /**
  * call-seq:
- *   Prism::parse_lex(source, **options) -> ParseLexResult
+ *   parse_lex(source, **options) -> ParseLexResult
  *
  * Parse the given string and return a ParseLexResult instance that contains a
  * 2-element array, where the first element is the AST and the second element is
  * an array of Token instances.
  *
  * This API is only meant to be used in the case where you need both the AST and
- * the tokens. If you only need one or the other, use either Prism::parse or
- * Prism::lex.
+ * the tokens. If you only need one or the other, use either Prism.parse or
+ * Prism.lex.
  *
- * For supported options, see Prism::parse.
+ * For supported options, see Prism.parse.
  */
 static VALUE
 parse_lex(int argc, VALUE *argv, VALUE self) {
@@ -1153,17 +1164,17 @@ parse_lex(int argc, VALUE *argv, VALUE self) {
 
 /**
  * call-seq:
- *   Prism::parse_lex_file(filepath, **options) -> ParseLexResult
+ *   parse_lex_file(filepath, **options) -> ParseLexResult
  *
  * Parse the given file and return a ParseLexResult instance that contains a
  * 2-element array, where the first element is the AST and the second element is
  * an array of Token instances.
  *
  * This API is only meant to be used in the case where you need both the AST and
- * the tokens. If you only need one or the other, use either Prism::parse_file
- * or Prism::lex_file.
+ * the tokens. If you only need one or the other, use either Prism.parse_file
+ * or Prism.lex_file.
  *
- * For supported options, see Prism::parse.
+ * For supported options, see Prism.parse.
  */
 static VALUE
 parse_lex_file(int argc, VALUE *argv, VALUE self) {
@@ -1199,10 +1210,10 @@ parse_input_success_p(pm_string_t *input, const pm_options_t *options) {
 
 /**
  * call-seq:
- *   Prism::parse_success?(source, **options) -> bool
+ *   parse_success?(source, **options) -> bool
  *
  * Parse the given string and return true if it parses without errors. For
- * supported options, see Prism::parse.
+ * supported options, see Prism.parse.
  */
 static VALUE
 parse_success_p(int argc, VALUE *argv, VALUE self) {
@@ -1219,10 +1230,10 @@ parse_success_p(int argc, VALUE *argv, VALUE self) {
 
 /**
  * call-seq:
- *   Prism::parse_failure?(source, **options) -> bool
+ *   parse_failure?(source, **options) -> bool
  *
  * Parse the given string and return true if it parses with errors. For
- * supported options, see Prism::parse.
+ * supported options, see Prism.parse.
  */
 static VALUE
 parse_failure_p(int argc, VALUE *argv, VALUE self) {
@@ -1231,10 +1242,10 @@ parse_failure_p(int argc, VALUE *argv, VALUE self) {
 
 /**
  * call-seq:
- *   Prism::parse_file_success?(filepath, **options) -> bool
+ *   parse_file_success?(filepath, **options) -> bool
  *
  * Parse the given file and return true if it parses without errors. For
- * supported options, see Prism::parse.
+ * supported options, see Prism.parse.
  */
 static VALUE
 parse_file_success_p(int argc, VALUE *argv, VALUE self) {
@@ -1253,10 +1264,10 @@ parse_file_success_p(int argc, VALUE *argv, VALUE self) {
 
 /**
  * call-seq:
- *   Prism::parse_file_failure?(filepath, **options) -> bool
+ *   parse_file_failure?(filepath, **options) -> bool
  *
  * Parse the given file and return true if it parses with errors. For
- * supported options, see Prism::parse.
+ * supported options, see Prism.parse.
  */
 static VALUE
 parse_file_failure_p(int argc, VALUE *argv, VALUE self) {
@@ -1287,7 +1298,7 @@ string_query(pm_string_query_t result) {
 
 /**
  * call-seq:
- *   Prism::StringQuery::local?(string) -> bool
+ *   local?(string) -> bool
  *
  * Returns true if the string constitutes a valid local variable name. Note that
  * this means the names that can be set through Binding#local_variable_set, not
@@ -1301,7 +1312,7 @@ string_query_local_p(VALUE self, VALUE string) {
 
 /**
  * call-seq:
- *   Prism::StringQuery::constant?(string) -> bool
+ *   constant?(string) -> bool
  *
  * Returns true if the string constitutes a valid constant name. Note that this
  * means the names that can be set through Module#const_set, not necessarily the
@@ -1315,7 +1326,7 @@ string_query_constant_p(VALUE self, VALUE string) {
 
 /**
  * call-seq:
- *   Prism::StringQuery::method_name?(string) -> bool
+ *   method_name?(string) -> bool
  *
  * Returns true if the string constitutes a valid method name.
  */

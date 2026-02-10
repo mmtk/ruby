@@ -1021,9 +1021,7 @@ newobj_of(rb_ractor_t *cr, VALUE klass, VALUE flags, shape_id_t shape_id, bool w
         int lev = RB_GC_VM_LOCK_NO_BARRIER();
         {
             size_t slot_size = rb_gc_obj_slot_size(obj);
-            if (slot_size > RVALUE_SIZE) {
-                memset((char *)obj + RVALUE_SIZE, 0, slot_size - RVALUE_SIZE);
-            }
+            memset((char *)obj + sizeof(struct RBasic), 0, slot_size - sizeof(struct RBasic));
 
             /* We must disable GC here because the callback could call xmalloc
              * which could potentially trigger a GC, and a lot of code is unsafe
@@ -1184,17 +1182,19 @@ rb_objspace_data_type_memsize(VALUE obj)
 {
     size_t size = 0;
     if (RTYPEDDATA_P(obj)) {
-        const rb_data_type_t *type = RTYPEDDATA_TYPE(obj);
         const void *ptr = RTYPEDDATA_GET_DATA(obj);
 
-        if (RTYPEDDATA_EMBEDDABLE_P(obj) && !RTYPEDDATA_EMBEDDED_P(obj)) {
+        if (ptr) {
+            const rb_data_type_t *type = RTYPEDDATA_TYPE(obj);
+            if (RTYPEDDATA_EMBEDDABLE_P(obj) && !RTYPEDDATA_EMBEDDED_P(obj)) {
 #ifdef HAVE_MALLOC_USABLE_SIZE
-            size += malloc_usable_size((void *)ptr);
+                size += malloc_usable_size((void *)ptr);
 #endif
-        }
+            }
 
-        if (ptr && type->function.dsize) {
-            size += type->function.dsize(ptr);
+            if (type->function.dsize) {
+                size += type->function.dsize(ptr);
+            }
         }
     }
 
@@ -1299,15 +1299,6 @@ rb_gc_obj_needs_cleanup_p(VALUE obj)
         }
 
       case T_DATA:
-        if (flags & RUBY_TYPED_FL_IS_TYPED_DATA) {
-            uintptr_t type = (uintptr_t)RTYPEDDATA(obj)->type;
-            if (type & TYPED_DATA_EMBEDDED) {
-                RUBY_DATA_FUNC dfree = ((const rb_data_type_t *)(type & TYPED_DATA_PTR_MASK))->function.dfree;
-                return (dfree == RUBY_NEVER_FREE || dfree == RUBY_TYPED_DEFAULT_FREE);
-            }
-        }
-        return true;
-
       case T_OBJECT:
       case T_STRING:
       case T_ARRAY:
@@ -1319,7 +1310,13 @@ rb_gc_obj_needs_cleanup_p(VALUE obj)
       case T_COMPLEX:
         break;
 
-      default:
+      case T_FILE:
+      case T_SYMBOL:
+      case T_CLASS:
+      case T_ICLASS:
+      case T_MODULE:
+      case T_REGEXP:
+      case T_MATCH:
         return true;
     }
 
@@ -1330,6 +1327,18 @@ rb_gc_obj_needs_cleanup_p(VALUE obj)
       case T_OBJECT:
         if (flags & ROBJECT_HEAP) return true;
         return false;
+
+      case T_DATA:
+        if (flags & RUBY_TYPED_FL_IS_TYPED_DATA) {
+            uintptr_t type = (uintptr_t)RTYPEDDATA(obj)->type;
+            if (type & TYPED_DATA_EMBEDDED) {
+                RUBY_DATA_FUNC dfree = ((const rb_data_type_t *)(type & TYPED_DATA_PTR_MASK))->function.dfree;
+                if (dfree == RUBY_NEVER_FREE || dfree == RUBY_TYPED_DEFAULT_FREE) {
+                    return false;
+                }
+            }
+        }
+        return true;
 
       case T_STRING:
         if (flags & (RSTRING_NOEMBED | RSTRING_FSTR)) return true;
@@ -1345,7 +1354,7 @@ rb_gc_obj_needs_cleanup_p(VALUE obj)
 
       case T_BIGNUM:
         if (!(flags & BIGNUM_EMBED_FLAG)) return true;
-        return false;
+        return rb_shape_has_fields(shape_id);
 
       case T_STRUCT:
         if (!(flags & RSTRUCT_EMBED_LEN_MASK)) return true;
@@ -1467,7 +1476,7 @@ rb_gc_obj_free(void *objspace, VALUE obj)
                 st_free_table(ROBJECT_FIELDS_HASH(obj));
             }
             else {
-                xfree(ROBJECT(obj)->as.heap.fields);
+                SIZED_FREE_N(ROBJECT(obj)->as.heap.fields, ROBJECT_FIELDS_CAPACITY(obj));
                 RB_DEBUG_COUNTER_INC(obj_obj_ptr);
             }
         }
@@ -1568,7 +1577,7 @@ rb_gc_obj_free(void *objspace, VALUE obj)
             }
 #endif
             onig_region_free(&rm->regs, 0);
-            xfree(rm->char_offset);
+            SIZED_FREE_N(rm->char_offset, rm->char_offset_num_allocated);
 
             RB_DEBUG_COUNTER_INC(obj_match_ptr);
         }
@@ -1605,7 +1614,7 @@ rb_gc_obj_free(void *objspace, VALUE obj)
 
       case T_BIGNUM:
         if (!BIGNUM_EMBED_P(obj) && BIGNUM_DIGITS(obj)) {
-            xfree(BIGNUM_DIGITS(obj));
+            SIZED_FREE_N(BIGNUM_DIGITS(obj), BIGNUM_LEN(obj));
             RB_DEBUG_COUNTER_INC(obj_bignum_ptr);
         }
         else {
@@ -1623,7 +1632,7 @@ rb_gc_obj_free(void *objspace, VALUE obj)
             RB_DEBUG_COUNTER_INC(obj_struct_embed);
         }
         else {
-            xfree((void *)RSTRUCT(obj)->as.heap.ptr);
+            SIZED_FREE_N(RSTRUCT(obj)->as.heap.ptr, RSTRUCT(obj)->as.heap.len);
             RB_DEBUG_COUNTER_INC(obj_struct_ptr);
         }
         break;
@@ -3750,9 +3759,11 @@ rb_gc_register_address(VALUE *addr)
     VALUE obj = *addr;
 
     struct global_object_list *tmp = ALLOC(struct global_object_list);
-    tmp->next = vm->global_object_list;
-    tmp->varptr = addr;
-    vm->global_object_list = tmp;
+    RB_VM_LOCKING() {
+        tmp->next = vm->global_object_list;
+        tmp->varptr = addr;
+        vm->global_object_list = tmp;
+    }
 
     /*
      * Because some C extensions have assignment-then-register bugs,
@@ -3770,22 +3781,25 @@ void
 rb_gc_unregister_address(VALUE *addr)
 {
     rb_vm_t *vm = GET_VM();
-    struct global_object_list *tmp = vm->global_object_list;
-
-    if (tmp->varptr == addr) {
-        vm->global_object_list = tmp->next;
-        xfree(tmp);
-        return;
-    }
-    while (tmp->next) {
-        if (tmp->next->varptr == addr) {
-            struct global_object_list *t = tmp->next;
-
-            tmp->next = tmp->next->next;
-            xfree(t);
-            break;
+    struct global_object_list *tmp;
+    RB_VM_LOCKING() {
+        tmp = vm->global_object_list;
+        if (tmp->varptr == addr) {
+            vm->global_object_list = tmp->next;
+            SIZED_FREE(tmp);
         }
-        tmp = tmp->next;
+        else {
+            while (tmp->next) {
+                if (tmp->next->varptr == addr) {
+                    struct global_object_list *t = tmp->next;
+
+                    tmp->next = tmp->next->next;
+                    SIZED_FREE(t);
+                    break;
+                }
+                tmp = tmp->next;
+            }
+        }
     }
 }
 
@@ -3923,8 +3937,8 @@ gc_ref_update_object(void *objspace, VALUE v)
         if (slot_size >= embed_size) {
             // Object can be re-embedded
             memcpy(ROBJECT(v)->as.ary, ptr, sizeof(VALUE) * ROBJECT_FIELDS_COUNT(v));
+            SIZED_FREE_N(ptr, ROBJECT_FIELDS_CAPACITY(v));
             FL_UNSET_RAW(v, ROBJECT_HEAP);
-            xfree(ptr);
             ptr = ROBJECT(v)->as.ary;
         }
     }

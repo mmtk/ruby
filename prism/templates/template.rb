@@ -49,6 +49,14 @@ module Prism
       end
     end
 
+    # This module contains methods for escaping characters in Doxygen comments.
+    module Doxygen
+      # Similar to /verbatim ... /endverbatim but doesn't wrap the result in a code block.
+      def self.verbatim(value)
+        value.gsub(/[\.*%!`#<>_+-]/, '\\\\\0')
+      end
+    end
+
     # A comment attached to a field or node.
     class ConfigComment
       attr_reader :value
@@ -148,6 +156,16 @@ module Prism
         end
       end
 
+      def call_seq_type
+        if specific_kind
+          specific_kind
+        elsif union_kind
+          union_kind.join(" | ")
+        else
+          "Node"
+        end
+      end
+
       def rbi_class
         if specific_kind
           "Prism::#{specific_kind}"
@@ -177,6 +195,16 @@ module Prism
           [*union_kind, "nil"].join(" | ")
         else
           "Prism::node?"
+        end
+      end
+
+      def call_seq_type
+        if specific_kind
+          "#{specific_kind} | nil"
+        elsif union_kind
+          [*union_kind, "nil"].join(" | ")
+        else
+          "Node | nil"
         end
       end
 
@@ -212,6 +240,16 @@ module Prism
         end
       end
 
+      def call_seq_type
+        if specific_kind
+          "Array[#{specific_kind}]"
+        elsif union_kind
+          "Array[#{union_kind.join(" | ")}]"
+        else
+          "Array[Node]"
+        end
+      end
+
       def rbi_class
         if specific_kind
           "T::Array[Prism::#{specific_kind}]"
@@ -242,6 +280,10 @@ module Prism
         "Symbol"
       end
 
+      def call_seq_type
+        "Symbol"
+      end
+
       def rbi_class
         "Symbol"
       end
@@ -256,6 +298,10 @@ module Prism
     class OptionalConstantField < Field
       def rbs_class
         "Symbol?"
+      end
+
+      def call_seq_type
+        "Symbol | nil"
       end
 
       def rbi_class
@@ -274,6 +320,10 @@ module Prism
         "Array[Symbol]"
       end
 
+      def call_seq_type
+        "Array[Symbol]"
+      end
+
       def rbi_class
         "T::Array[Symbol]"
       end
@@ -286,6 +336,10 @@ module Prism
     # This represents a field on a node that is a string.
     class StringField < Field
       def rbs_class
+        "String"
+      end
+
+      def call_seq_type
         "String"
       end
 
@@ -308,6 +362,10 @@ module Prism
         "Location"
       end
 
+      def call_seq_type
+        "Location"
+      end
+
       def rbi_class
         "Prism::Location"
       end
@@ -327,6 +385,10 @@ module Prism
         "Location?"
       end
 
+      def call_seq_type
+        "Location | nil"
+      end
+
       def rbi_class
         "T.nilable(Prism::Location)"
       end
@@ -342,6 +404,10 @@ module Prism
         "Integer"
       end
 
+      def call_seq_type
+        "Integer"
+      end
+
       def rbi_class
         "Integer"
       end
@@ -354,6 +420,10 @@ module Prism
     # This represents an integer field.
     class UInt32Field < Field
       def rbs_class
+        "Integer"
+      end
+
+      def call_seq_type
         "Integer"
       end
 
@@ -373,6 +443,10 @@ module Prism
         "Integer"
       end
 
+      def call_seq_type
+        "Integer"
+      end
+
       def rbi_class
         "Integer"
       end
@@ -386,6 +460,10 @@ module Prism
     # Ruby it will be a Float.
     class DoubleField < Field
       def rbs_class
+        "Float"
+      end
+
+      def call_seq_type
         "Float"
       end
 

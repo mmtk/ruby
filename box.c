@@ -217,7 +217,7 @@ static int
 free_loaded_feature_index_i(st_data_t key, st_data_t value, st_data_t arg)
 {
     if (!FIXNUM_P(value)) {
-        rb_darray_free((void *)value);
+        rb_darray_free_sized((void *)value, long);
     }
     return ST_CONTINUE;
 }
@@ -271,7 +271,7 @@ box_entry_free(void *ptr)
     cleanup_all_local_extensions(box->ruby_dln_libmap);
 
     box_root_free(ptr);
-    xfree(ptr);
+    SIZED_FREE(box);
 }
 
 static size_t

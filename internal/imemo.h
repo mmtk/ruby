@@ -59,7 +59,6 @@ struct vm_svar {
 /*! THROW_DATA */
 struct vm_throw_data {
     VALUE flags;
-    VALUE reserved;
     const VALUE throw_obj;
     const struct rb_control_frame_struct *catch_frame;
     int throw_state;
@@ -96,7 +95,7 @@ struct vm_ifunc {
 struct rb_imemo_tmpbuf_struct {
     VALUE flags;
     VALUE *ptr; /* malloc'ed buffer */
-    size_t cnt; /* buffer size in VALUE */
+    size_t size; /* buffer size in bytes */
 };
 
 /*! MEMO
@@ -105,7 +104,6 @@ struct rb_imemo_tmpbuf_struct {
  * */
 struct MEMO {
     VALUE flags;
-    VALUE reserved;
     const VALUE v1;
     const VALUE v2;
     union {

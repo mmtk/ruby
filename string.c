@@ -531,7 +531,9 @@ rb_str_make_embedded(VALUE str)
     RUBY_ASSERT(rb_str_reembeddable_p(str));
     RUBY_ASSERT(!STR_EMBED_P(str));
 
+    int termlen = TERM_LEN(str);
     char *buf = RSTRING(str)->as.heap.ptr;
+    long old_capa = RSTRING(str)->as.heap.aux.capa + termlen;
     long len = RSTRING(str)->len;
 
     STR_SET_EMBED(str);
@@ -539,10 +541,10 @@ rb_str_make_embedded(VALUE str)
 
     if (len > 0) {
         memcpy(RSTRING_PTR(str), buf, len);
-        ruby_xfree(buf);
+        SIZED_FREE_N(buf, old_capa);
     }
 
-    TERM_FILL(RSTRING(str)->as.embed.ary + len, TERM_LEN(str));
+    TERM_FILL(RSTRING(str)->as.embed.ary + len, termlen);
 }
 
 void
@@ -1764,7 +1766,7 @@ str_replace_shared_without_enc(VALUE str2, VALUE str)
             char *ptr2 = STR_HEAP_PTR(str2);
             if (ptr2 != ptr) {
                 WHEN_NOT_USING_MMTK({
-                ruby_sized_xfree(ptr2, STR_HEAP_SIZE(str2));
+                SIZED_FREE_N(ptr2, STR_HEAP_SIZE(str2));
                 })
             }
         }
@@ -1891,7 +1893,7 @@ rb_str_tmp_frozen_no_embed_acquire(VALUE orig)
     }
 
     RSTRING(str)->len = RSTRING(orig)->len;
-    RSTRING(str)->as.heap.aux.capa = capa;
+    RSTRING(str)->as.heap.aux.capa = capa + (TERM_LEN(orig) - TERM_LEN(str));
 
     return str;
 }
@@ -2127,7 +2129,7 @@ rb_str_free(VALUE str)
     }
     else {
         RB_DEBUG_COUNTER_INC(obj_str_ptr);
-        ruby_sized_xfree(STR_HEAP_PTR(str), STR_HEAP_SIZE(str));
+        SIZED_FREE_N(STR_HEAP_PTR(str), STR_HEAP_SIZE(str));
     }
 }
 
@@ -3171,7 +3173,7 @@ str_make_independent_expand(VALUE str, long len, long expand, const int termlen)
         memcpy(ptr, oldptr, len);
     }
     if (FL_TEST_RAW(str, STR_NOEMBED|STR_NOFREE|STR_SHARED) == STR_NOEMBED) {
-        xfree(oldptr);
+        SIZED_FREE_N(oldptr, STR_HEAP_SIZE(str));
     }
     RSTRING(str)->as.heap.ptr = ptr;
     })
@@ -3236,7 +3238,7 @@ str_discard(VALUE str)
             // GC can collect unused objects.  We should not need to explicitly clear it.
             rb_mmtk_str_set_strbuf(str, 0);
         }, {
-        ruby_sized_xfree(STR_HEAP_PTR(str), STR_HEAP_SIZE(str));
+        SIZED_FREE_N(STR_HEAP_PTR(str), STR_HEAP_SIZE(str));
         })
 
         RSTRING(str)->as.heap.ptr = 0;
@@ -3612,7 +3614,7 @@ str_subseq(VALUE str, long beg, long len)
 
     const int termlen = TERM_LEN(str);
     if (!SHARABLE_SUBSTRING_P(beg, len, RSTRING_LEN(str))) {
-        str2 = rb_str_new(RSTRING_PTR(str) + beg, len);
+        str2 = rb_enc_str_new(RSTRING_PTR(str) + beg, len, rb_str_enc_get(str));
         RB_GC_GUARD(str);
         return str2;
     }
@@ -3786,7 +3788,7 @@ rb_str_freeze(VALUE str)
  *
  * Otherwise returns <tt>self.dup</tt>, which is not frozen.
  *
- * Related: see {Freezing/Unfreezing}[rdoc-ref:String@Freezing-2FUnfreezing].
+ * Related: see {Freezing/Unfreezing}[rdoc-ref:String@FreezingUnfreezing].
  */
 static VALUE
 str_uplus(VALUE str)
@@ -3831,7 +3833,7 @@ str_uplus(VALUE str)
  *
  *   'foo'.dedup.gsub!('o')
  *
- * Related: see {Freezing/Unfreezing}[rdoc-ref:String@Freezing-2FUnfreezing].
+ * Related: see {Freezing/Unfreezing}[rdoc-ref:String@FreezingUnfreezing].
  */
 static VALUE
 str_uminus(VALUE str)
@@ -3951,6 +3953,7 @@ rb_str_resize(VALUE str, long len)
             str_make_independent_expand(str, slen, len - slen, termlen);
         }
         else if (str_embed_capa(str) >= len + termlen) {
+            capa = RSTRING(str)->as.heap.aux.capa;
             char *ptr = STR_HEAP_PTR(str);
             STR_SET_EMBED(str);
             if (slen > len) slen = len;
@@ -3959,7 +3962,9 @@ rb_str_resize(VALUE str, long len)
             STR_SET_LEN(str, len);
 
             WHEN_NOT_USING_MMTK({
-            if (independent) ruby_xfree(ptr);
+            if (independent) {
+                SIZED_FREE_N(ptr, capa + termlen);
+            }
             })
 
             return str;
@@ -6251,13 +6256,16 @@ rb_str_drop_bytes(VALUE str, long len)
     nlen = olen - len;
     if (str_embed_capa(str) >= nlen + TERM_LEN(str)) {
         char *oldptr = ptr;
+        size_t old_capa = RSTRING(str)->as.heap.aux.capa + TERM_LEN(str);
         int fl = (int)(RBASIC(str)->flags & (STR_NOEMBED|STR_SHARED|STR_NOFREE));
         STR_SET_EMBED(str);
         ptr = RSTRING(str)->as.embed.ary;
         memmove(ptr, oldptr + len, nlen);
 
         WHEN_NOT_USING_MMTK({
-        if (fl == STR_NOEMBED) xfree(oldptr);
+        if (fl == STR_NOEMBED) {
+            SIZED_FREE_N(oldptr, old_capa);
+        }
         })
     }
     else {
@@ -7543,7 +7551,7 @@ rb_str_include(VALUE str, VALUE arg)
  *    'abcdef'.to_i # => 0
  *    '2'.to_i(2)   # => 0
  *
- *  Related: see {Converting to Non-String}[rdoc-ref:String@Converting+to+Non--5CString].
+ *  Related: see {Converting to Non-String}[rdoc-ref:String@Converting+to+Non-String].
  */
 
 static VALUE
@@ -7575,7 +7583,7 @@ rb_str_to_i(int argc, VALUE *argv, VALUE str)
  *
  *    'abcdef'.to_f # => 0.0
  *
- * See {Converting to Non-String}[rdoc-ref:String@Converting+to+Non--5CString].
+ * See {Converting to Non-String}[rdoc-ref:String@Converting+to+Non-String].
  */
 
 static VALUE
@@ -8305,7 +8313,7 @@ mapping_buffer_free(void *p)
     while (current_buffer) {
         previous_buffer = current_buffer;
         current_buffer  = current_buffer->next;
-        ruby_sized_xfree(previous_buffer, previous_buffer->capa);
+        ruby_sized_xfree(previous_buffer, offsetof(mapping_buffer, space) + previous_buffer->capa);
     }
 }
 
@@ -8895,7 +8903,7 @@ tr_trans(VALUE str, VALUE src, VALUE repl, int sflag)
 
             int r = rb_enc_precise_mbclen((char *)s, (char *)send, e1);
             if (!MBCLEN_CHARFOUND_P(r)) {
-                xfree(buf);
+                SIZED_FREE_N(buf, max + termlen);
                 rb_raise(rb_eArgError, "invalid byte sequence in %s", rb_enc_name(e1));
             }
             clen = MBCLEN_CHARFOUND_LEN(r);
@@ -8947,7 +8955,7 @@ tr_trans(VALUE str, VALUE src, VALUE repl, int sflag)
             t += tlen;
         }
         if (!STR_EMBED_P(str)) {
-            ruby_sized_xfree(STR_HEAP_PTR(str), STR_HEAP_SIZE(str));
+            SIZED_FREE_N(STR_HEAP_PTR(str), STR_HEAP_SIZE(str));
         }
         TERM_FILL((char *)t, termlen);
 
@@ -8997,7 +9005,7 @@ tr_trans(VALUE str, VALUE src, VALUE repl, int sflag)
 
             int r = rb_enc_precise_mbclen((char *)s, (char *)send, e1);
             if (!MBCLEN_CHARFOUND_P(r)) {
-                xfree(buf);
+                SIZED_FREE_N(buf, max + termlen);
                 rb_raise(rb_eArgError, "invalid byte sequence in %s", rb_enc_name(e1));
             }
             clen = MBCLEN_CHARFOUND_LEN(r);
@@ -9045,7 +9053,7 @@ tr_trans(VALUE str, VALUE src, VALUE repl, int sflag)
             t += tlen;
         }
         if (!STR_EMBED_P(str)) {
-            ruby_sized_xfree(STR_HEAP_PTR(str), STR_HEAP_SIZE(str));
+            SIZED_FREE_N(STR_HEAP_PTR(str), STR_HEAP_SIZE(str));
         }
         TERM_FILL((char *)t, termlen);
 
@@ -10140,7 +10148,7 @@ rb_str_each_line(int argc, VALUE *argv, VALUE str)
  *     "This is line four.",
  *     "This is line five."]
  *
- *  Related: see {Converting to Non-String}[rdoc-ref:String@Converting+to+Non--5CString].
+ *  Related: see {Converting to Non-String}[rdoc-ref:String@Converting+to+Non-String].
  */
 
 static VALUE
@@ -11283,7 +11291,7 @@ rb_str_scan(VALUE str, VALUE pat)
  *    '0o777'.hex   # => 0
  *    '0d999'.hex   # => 55705
  *
- *  Related: See {Converting to Non-String}[rdoc-ref:String@Converting+to+Non--5CString].
+ *  Related: See {Converting to Non-String}[rdoc-ref:String@Converting+to+Non-String].
  */
 
 static VALUE
@@ -11369,7 +11377,7 @@ rb_str_hex(VALUE str)
  *    'foo'.oct      # => 0
  *    ''.oct         # => 0
  *
- *  Related: see {Converting to Non-String}[rdoc-ref:String@Converting+to+Non--5CString].
+ *  Related: see {Converting to Non-String}[rdoc-ref:String@Converting+to+Non-String].
  */
 
 static VALUE

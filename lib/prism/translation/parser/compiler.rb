@@ -6,9 +6,9 @@ module Prism
     class Parser
       # A visitor that knows how to convert a prism syntax tree into the
       # whitequark/parser gem's syntax tree.
-      class Compiler < ::Prism::Compiler
+      class Compiler < ::Prism::Compiler # :nodoc:
         # Raised when the tree is malformed or there is a bug in the compiler.
-        class CompilationError < StandardError
+        class CompilationError < StandardError # :nodoc:
         end
 
         # The Parser::Base instance that is being used to build the AST.
@@ -1767,7 +1767,7 @@ module Prism
             end
           else
             parts =
-              if node.value == ""
+              if node.value_loc.nil?
                 []
               elsif node.value.include?("\n")
                 string_nodes_from_line_continuations(node.unescaped, node.value, node.value_loc.start_offset, node.opening)

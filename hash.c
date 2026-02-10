@@ -1180,17 +1180,13 @@ hash_st_free(VALUE hash)
 {
     HASH_ASSERT(RHASH_ST_TABLE_P(hash));
 
-    st_table *tab = RHASH_ST_TABLE(hash);
-
-    xfree(tab->bins);
-    xfree(tab->entries);
+    rb_st_free_embedded_table(RHASH_ST_TABLE(hash));
 }
 
 static void
 hash_st_free_and_clear_table(VALUE hash)
 {
     hash_st_free(hash);
-
     RHASH_ST_CLEAR(hash);
 }
 
@@ -4511,21 +4507,21 @@ flatten_i(VALUE key, VALUE val, VALUE ary)
  *  Examples; note that entry <tt>foo: {bar: 1, baz: 2}</tt> is never flattened.
  *
  *   h = {foo: {bar: 1, baz: 2}, bat: [:bam, [:bap, [:bah]]]}
- *   h.flatten(1) # => [:foo, {:bar=>1, :baz=>2}, :bat, [:bam, [:bap, [:bah]]]]
- *   h.flatten(2) # => [:foo, {:bar=>1, :baz=>2}, :bat, :bam, [:bap, [:bah]]]
- *   h.flatten(3) # => [:foo, {:bar=>1, :baz=>2}, :bat, :bam, :bap, [:bah]]
- *   h.flatten(4) # => [:foo, {:bar=>1, :baz=>2}, :bat, :bam, :bap, :bah]
- *   h.flatten(5) # => [:foo, {:bar=>1, :baz=>2}, :bat, :bam, :bap, :bah]
+ *   h.flatten(1) # => [:foo, {bar: 1, baz: 2}, :bat, [:bam, [:bap, [:bah]]]]
+ *   h.flatten(2) # => [:foo, {bar: 1, baz: 2}, :bat, :bam, [:bap, [:bah]]]
+ *   h.flatten(3) # => [:foo, {bar: 1, baz: 2}, :bat, :bam, :bap, [:bah]]
+ *   h.flatten(4) # => [:foo, {bar: 1, baz: 2}, :bat, :bam, :bap, :bah]
+ *   h.flatten(5) # => [:foo, {bar: 1, baz: 2}, :bat, :bam, :bap, :bah]
  *
  *  With negative integer +depth+,
  *  flattens all levels:
  *
- *    h.flatten(-1) # => [:foo, {:bar=>1, :baz=>2}, :bat, :bam, :bap, :bah]
+ *    h.flatten(-1) # => [:foo, {bar: 1, baz: 2}, :bat, :bam, :bap, :bah]
  *
  *  With +depth+ zero,
  *  returns the equivalent of #to_a:
  *
- *    h.flatten(0) # => [[:foo, {:bar=>1, :baz=>2}], [:bat, [:bam, [:bap, [:bah]]]]]
+ *    h.flatten(0) # => [[:foo, {bar: 1, baz: 2}], [:bat, [:bam, [:bap, [:bah]]]]]
  *
  *  Related: see {Methods for Converting}[rdoc-ref:Hash@Methods+for+Converting].
  */
@@ -4873,7 +4869,7 @@ rb_hash_any_p(int argc, VALUE *argv, VALUE hash)
  *    h.dig(:hello) # => nil
  *    h.default_proc = -> (hash, _key) { hash }
  *    h.dig(:hello, :world)
- *    # => {:foo=>{:bar=>[:a, :b, :c]}}
+ *    # => {foo: {bar: [:a, :b, :c]}}
  *
  *  Related: {Methods for Fetching}[rdoc-ref:Hash@Methods+for+Fetching].
  */

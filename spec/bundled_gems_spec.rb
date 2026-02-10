@@ -57,11 +57,12 @@ end
 
 RSpec.describe "bundled_gems.rb" do
   let(:stub_code) {
+    source_lib_dir = File.realpath(Spec::Path.source_lib_dir.to_s)
     <<~STUB
       Gem::BUNDLED_GEMS.send(:remove_const, :LIBDIR)
       Gem::BUNDLED_GEMS.send(:remove_const, :ARCHDIR)
       Gem::BUNDLED_GEMS.send(:remove_const, :SINCE)
-      Gem::BUNDLED_GEMS.const_set(:LIBDIR, File.expand_path(File.join(__dir__, "../../..", "lib")) + "/")
+      Gem::BUNDLED_GEMS.const_set(:LIBDIR, "#{source_lib_dir}/")
       Gem::BUNDLED_GEMS.const_set(:ARCHDIR, File.expand_path($LOAD_PATH.find{|path| path.include?(".ext/common") }) + "/")
       Gem::BUNDLED_GEMS.const_set(:SINCE, { "openssl" => RUBY_VERSION, "fileutils" => RUBY_VERSION, "csv" => "3.4.0", "net-smtp" => "3.1.0" })
     STUB
@@ -280,7 +281,7 @@ RSpec.describe "bundled_gems.rb" do
     # Original issue is childprocess 5.0.0 and logger.
     build_lib "fileutils2", "5.0.0" do |s|
       # bootsnap expand required feature to full path
-      rubylibpath = File.expand_path(File.join(__dir__, "..", "lib"))
+      rubylibpath = File.realpath(File.join(__dir__, "..", "lib"))
       s.write "lib/fileutils2.rb", "require '#{rubylibpath}/fileutils'"
     end
 
