@@ -3033,7 +3033,8 @@ rb_mmtk_each_object_safe(void (*func)(VALUE, void *), void *data)
     // We must not trigger GC while running `mmtk_enumerate_objects`,
     // so we use `malloc` directly.
     // It will be realloced as we add more objects.
-    VALUE *array = (VALUE*)malloc(sizeof(VALUE) * initial_capacity);
+    size_t array_bytes = sizeof(VALUE) * initial_capacity;
+    VALUE *array = (VALUE*)malloc(array_bytes);
     struct rb_mmtk_build_obj_array_data build_array_data = {
         .array_ptr = &array,
         .len = 0,
@@ -3045,7 +3046,7 @@ rb_mmtk_each_object_safe(void (*func)(VALUE, void *), void *data)
 
     // Root the array.
     rb_imemo_tmpbuf_set_ptr(tmpbuf, array);
-    ((rb_imemo_tmpbuf_t*)tmpbuf)->cnt = build_array_data.len;
+    ((rb_imemo_tmpbuf_t*)tmpbuf)->size = array_bytes;
     // GC is OK from now on.
 
     // Inform the VM about malloc memory usage.
@@ -3076,7 +3077,7 @@ rb_mmtk_each_object_safe(void (*func)(VALUE, void *), void *data)
     // Don't wait for GC to free it because `free()` is a bottleneck during GC.
     // Adjust memory usage accordingly.
     rb_imemo_tmpbuf_set_ptr(tmpbuf, NULL);
-    ((rb_imemo_tmpbuf_t*)tmpbuf)->cnt = 0;
+    ((rb_imemo_tmpbuf_t*)tmpbuf)->size = 0;
     free(array);
     rb_gc_adjust_memory_usage(-(ssize_t)(sizeof(VALUE) * build_array_data.capa));
 
