@@ -39,6 +39,8 @@ module Prism
 
     # https://bugs.ruby-lang.org/issues/21669
     incorrect << "4.1/void_value.txt"
+    # https://bugs.ruby-lang.org/issues/19107
+    incorrect << "4.1/trailing_comma_after_method_arguments.txt"
 
     # Skip these tests that we haven't implemented yet.
     omitted_sexp_raw = [
@@ -79,6 +81,16 @@ module Prism
 
     Fixture.each_for_current_ruby(except: incorrect | omitted_lex) do |fixture|
       define_method("#{fixture.test_name}_lex") { assert_ripper_lex(fixture.read) }
+    end
+
+    def test_lex_ignored_missing_heredoc_end
+      ["", "-", "~"].each do |type|
+        source = "<<#{type}FOO\n"
+        assert_ripper_lex(source)
+
+        source = "<<#{type}'FOO'\n"
+        assert_ripper_lex(source)
+      end
     end
 
     module Events

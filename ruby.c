@@ -1856,6 +1856,16 @@ ruby_opt_init(ruby_cmdline_options_t *opt)
     GET_VM()->running = 1;
     memset(ruby_vm_redefined_flag, 0, sizeof(ruby_vm_redefined_flag));
 
+    // Register JIT-optimized builtin CMEs before the prelude, which may
+    // redefine core methods (e.g. Kernel.prepend via bundler/setup).
+#if USE_YJIT
+    rb_yjit_init_builtin_cmes();
+#endif
+#if USE_ZJIT
+    extern void rb_zjit_init_builtin_cmes(void);
+    rb_zjit_init_builtin_cmes();
+#endif
+
     ruby_init_prelude();
 
     /* Initialize the main box after loading libraries (including rubygems)
@@ -1864,7 +1874,7 @@ ruby_opt_init(ruby_cmdline_options_t *opt)
         rb_initialize_main_box();
     rb_box_init_done();
 
-    // Initialize JITs after ruby_init_prelude() because JITing prelude is typically not optimal.
+    // Enable JITs after ruby_init_prelude() to avoid JITing prelude code.
 #if USE_YJIT
     rb_yjit_init(opt->yjit);
 #endif
@@ -2338,6 +2348,16 @@ process_options_global_setup(const ruby_cmdline_options_t *opt, const rb_iseq_t 
     rb_exec_event_hook_script_compiled(ec, iseq, script);
 }
 
+static bool
+has_dir_sep(const char *path)
+{
+    if (strchr(path, '/')) return true;
+#ifdef _WIN32
+    if (strchr(path, '\\')) return true;
+#endif
+    return false;
+}
+
 static VALUE
 process_options(int argc, char **argv, ruby_cmdline_options_t *opt)
 {
@@ -2447,7 +2467,7 @@ process_options(int argc, char **argv, ruby_cmdline_options_t *opt)
             if (!opt->script || opt->script[0] == '\0') {
                 opt->script = "-";
             }
-            else if (opt->do_search) {
+            else if (opt->do_search && !has_dir_sep(opt->script)) {
                 const char *path = getenv("RUBYPATH");
 
                 opt->script = 0;

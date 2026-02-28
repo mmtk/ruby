@@ -461,6 +461,7 @@ struct rb_iseq_constant_body {
             unsigned int anon_kwrest: 1;
             unsigned int use_block: 1;
             unsigned int forwardable: 1;
+            unsigned int accepts_no_block: 1;
         } flags;
 
         unsigned int size;
@@ -820,7 +821,7 @@ typedef struct rb_vm_struct {
     struct rb_id_table *negative_cme_table;
     st_table *overloaded_cme_table; // cme -> overloaded_cme
     set_table *unused_block_warning_table;
-    set_table *cc_refinement_table;
+    VALUE cc_refinement_set;
 
     // This id table contains a mapping from ID to ICs. It does this with ID
     // keys and nested st_tables as values. The nested tables have ICs as keys

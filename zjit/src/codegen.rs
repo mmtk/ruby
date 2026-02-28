@@ -133,9 +133,9 @@ fn gen_iseq_entry_point(cb: &mut CodeBlock, iseq: IseqPtr, jit_exception: bool) 
     }
 
     // Compile ISEQ into High-level IR
-    let function = compile_iseq(iseq).inspect_err(|_| {
+    let function = crate::stats::with_time_stat(Counter::compile_hir_time_ns, || compile_iseq(iseq).inspect_err(|_| {
         incr_counter!(failed_iseq_count);
-    })?;
+    }))?;
 
     // Compile the High-level IR
     let IseqCodePtrs { start_ptr, .. } = gen_iseq(cb, iseq, Some(&function)).inspect_err(|err| {
@@ -247,11 +247,12 @@ fn gen_iseq_body(cb: &mut CodeBlock, iseq: IseqPtr, mut version: IseqVersionRef,
     // Convert ISEQ into optimized High-level IR if not given
     let function = match function {
         Some(function) => function,
-        None => &compile_iseq(iseq)?,
+        None => &crate::stats::with_time_stat(Counter::compile_hir_time_ns, || compile_iseq(iseq))?,
     };
 
     // Compile the High-level IR
-    let (iseq_code_ptrs, gc_offsets, iseq_calls) = gen_function(cb, iseq, version, function)?;
+    let (iseq_code_ptrs, gc_offsets, iseq_calls) =
+        crate::stats::with_time_stat(Counter::compile_lir_time_ns, || gen_function(cb, iseq, version, function))?;
 
     // Stub callee ISEQs for JIT-to-JIT calls
     for iseq_call in iseq_calls.iter() {
@@ -279,12 +280,16 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, func
 
     // Create all LIR basic blocks corresponding to HIR basic blocks
     for (rpo_idx, &block_id) in reverse_post_order.iter().enumerate() {
+        // Skip the entries superblock — it's an internal CFG artifact
+        if block_id == function.entries_block { continue; }
         let lir_block_id = asm.new_block(block_id, function.is_entry_block(block_id), rpo_idx);
         hir_to_lir[block_id.0] = Some(lir_block_id);
     }
 
     // Compile each basic block
     for (rpo_idx, &block_id) in reverse_post_order.iter().enumerate() {
+        // Skip the entries superblock — it's an internal CFG artifact
+        if block_id == function.entries_block { continue; }
         // Set the current block to the LIR block that corresponds to this
         // HIR block.
         let lir_block_id = hir_to_lir[block_id.0].unwrap();
@@ -308,6 +313,16 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, version: IseqVersionRef, func
                     jit.opnds[insn_id.0] = Some(gen_param(&mut asm, idx));
                 },
                 insn => unreachable!("Non-param insn found in block.params: {insn:?}"),
+            }
+        }
+
+        // In JIT entry blocks, compile LoadArg instructions before other instructions
+        // so that calling convention registers are reserved early, like Param.
+        if function.is_entry_block(block_id) {
+            for &insn_id in block.insns() {
+                if let Insn::LoadArg { idx, .. } = function.find(insn_id) {
+                    jit.opnds[insn_id.0] = Some(gen_param(&mut asm, idx as usize));
+                }
             }
         }
 
@@ -481,11 +496,12 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         Insn::StringIntern { val, state } => gen_intern(asm, opnd!(val), &function.frame_state(*state)),
         Insn::ToRegexp { opt, values, state } => gen_toregexp(jit, asm, *opt, opnds!(values), &function.frame_state(*state)),
         Insn::Param => unreachable!("block.insns should not have Insn::Param"),
+        Insn::LoadArg { .. } => return Ok(()), // compiled in the LoadArg pre-pass above
         Insn::Snapshot { .. } => return Ok(()), // we don't need to do anything for this instruction at the moment
-        &Insn::Send { cd, blockiseq, state, reason, .. } => gen_send(jit, asm, cd, blockiseq, &function.frame_state(state), reason),
+        &Insn::Send { cd, blockiseq: None, state, reason, .. } => gen_send_without_block(jit, asm, cd, &function.frame_state(state), reason),
+        &Insn::Send { cd, blockiseq: Some(blockiseq), state, reason, .. } => gen_send(jit, asm, cd, blockiseq, &function.frame_state(state), reason),
         &Insn::SendForward { cd, blockiseq, state, reason, .. } => gen_send_forward(jit, asm, cd, blockiseq, &function.frame_state(state), reason),
         Insn::SendDirect { cme, iseq, recv, args, kw_bits, blockiseq, state, .. } => gen_send_iseq_direct(cb, jit, asm, *cme, *iseq, opnd!(recv), opnds!(args), *kw_bits, &function.frame_state(*state), *blockiseq),
-        &Insn::SendWithoutBlock { cd, state, reason, .. } => gen_send_without_block(jit, asm, cd, &function.frame_state(state), reason),
         &Insn::InvokeSuper { cd, blockiseq, state, reason, .. } => gen_invokesuper(jit, asm, cd, blockiseq, &function.frame_state(state), reason),
         &Insn::InvokeSuperForward { cd, blockiseq, state, reason, .. } => gen_invokesuperforward(jit, asm, cd, blockiseq, &function.frame_state(state), reason),
         &Insn::InvokeBlock { cd, state, reason, .. } => gen_invokeblock(jit, asm, cd, &function.frame_state(state), reason),
@@ -555,7 +571,7 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         Insn::SetGlobal { id, val, state } => no_output!(gen_setglobal(jit, asm, *id, opnd!(val), &function.frame_state(*state))),
         Insn::GetGlobal { id, state } => gen_getglobal(jit, asm, *id, &function.frame_state(*state)),
         &Insn::GetLocal { ep_offset, level, use_sp, .. } => gen_getlocal(asm, ep_offset, level, use_sp),
-        &Insn::IsBlockParamModified { level } => gen_is_block_param_modified(asm, level),
+        &Insn::IsBlockParamModified { ep } => gen_is_block_param_modified(asm, opnd!(ep)),
         &Insn::GetBlockParam { ep_offset, level, state } => gen_getblockparam(jit, asm, ep_offset, level, &function.frame_state(state)),
         &Insn::SetLocal { val, ep_offset, level } => no_output!(gen_setlocal(asm, opnd!(val), function.type_of(val), ep_offset, level)),
         Insn::GetConstant { klass, id, allow_nil, state } => gen_getconstant(jit, asm, opnd!(klass), *id, opnd!(allow_nil), &function.frame_state(*state)),
@@ -600,7 +616,7 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         | &Insn::Throw { state, .. }
         => return Err(state),
         &Insn::IfFalse { .. } | Insn::IfTrue { .. }
-        | &Insn::Jump { .. } => unreachable!(),
+        | &Insn::Jump { .. } | Insn::Entries { .. } => unreachable!(),
     };
 
     assert!(insn.has_output(), "Cannot write LIR output of HIR instruction with no output: {insn}");
@@ -750,8 +766,7 @@ fn gen_setlocal(asm: &mut Assembler, val: Opnd, val_type: Type, local_ep_offset:
 }
 
 /// Returns 1 (as CBool) when VM_FRAME_FLAG_MODIFIED_BLOCK_PARAM is set; returns 0 otherwise.
-fn gen_is_block_param_modified(asm: &mut Assembler, level: u32) -> Opnd {
-    let ep = gen_get_ep(asm, level);
+fn gen_is_block_param_modified(asm: &mut Assembler, ep: Opnd) -> Opnd {
     let flags = asm.load(Opnd::mem(VALUE_BITS, ep, SIZEOF_VALUE_I32 * (VM_ENV_DATA_INDEX_FLAGS as i32)));
     asm.test(flags, VM_FRAME_FLAG_MODIFIED_BLOCK_PARAM.into());
     asm.csel_nz(Opnd::Imm(1), Opnd::Imm(0))
@@ -2630,7 +2645,8 @@ fn compile_iseq(iseq: IseqPtr) -> Result<Function, CompileError> {
         return Err(CompileError::IseqStackTooLarge);
     }
 
-    let mut function = match iseq_to_hir(iseq) {
+    let hir = crate::stats::with_time_stat(Counter::compile_hir_build_time_ns, || iseq_to_hir(iseq));
+    let mut function = match hir {
         Ok(function) => function,
         Err(err) => {
             debug!("ZJIT: iseq_to_hir: {err:?}: {}", iseq_get_location(iseq, 0));
@@ -2799,6 +2815,7 @@ fn gen_function_stub(cb: &mut CodeBlock, iseq_call: IseqCallRef) -> Result<CodeP
     // Call function_stub_hit using the shared trampoline. See `gen_function_stub_hit_trampoline`.
     // Use load_into instead of mov, which is split on arm64, to avoid clobbering ALLOC_REGS.
     asm.load_into(scratch_reg, Opnd::const_ptr(Rc::into_raw(iseq_call)));
+    asm.cpush(scratch_reg);
     asm.jmp(ZJITState::get_function_stub_hit_trampoline().into());
 
     asm.compile(cb).map(|(code_ptr, gc_offsets)| {
@@ -2813,6 +2830,8 @@ pub fn gen_function_stub_hit_trampoline(cb: &mut CodeBlock) -> Result<CodePtr, C
     let (mut asm, scratch_reg) = Assembler::new_with_scratch_reg();
     asm.new_block_without_id();
     asm_comment!(asm, "function_stub_hit trampoline");
+
+    asm.cpop_into(scratch_reg);
 
     // Maintain alignment for x86_64, and set up a frame for arm64 properly
     asm.frame_setup(&[]);
@@ -2834,8 +2853,15 @@ pub fn gen_function_stub_hit_trampoline(cb: &mut CodeBlock) -> Result<CodePtr, C
         asm.cpush(Opnd::Reg(ALLOC_REGS[0])); // maintain alignment for x86_64
     }
 
+    // We can't directly pass the scratch register in to the ccall because
+    // we're going to have parallel move automatically handle coping registers
+    // in to the C calling convention and the parallel move algorithm needs
+    // a scratch register to break any cycles.  If we use the scratch register
+    // as a C call parameter, then parallel move wouldn't be able to break
+    // cycles without clobbering something
+    asm.mov(C_ARG_OPNDS[0], scratch_reg);
     // Compile the stubbed ISEQ
-    let jump_addr = asm_ccall!(asm, function_stub_hit, scratch_reg, CFP, SP);
+    let jump_addr = asm_ccall!(asm, function_stub_hit, C_ARG_OPNDS[0], CFP, SP);
     asm.mov(scratch_reg, jump_addr);
 
     asm_comment!(asm, "restore argument registers");
@@ -3104,35 +3130,5 @@ impl IseqCall {
 }
 
 #[cfg(test)]
-mod tests {
-    use crate::codegen::MAX_ISEQ_VERSIONS;
-    use crate::cruby::test_utils::*;
-    use crate::payload::*;
-
-    #[test]
-    fn test_max_iseq_versions() {
-        eval(&format!("
-            TEST = -1
-            def test = TEST
-
-            # compile and invalidate MAX+1 times
-            i = 0
-            while i < {MAX_ISEQ_VERSIONS} + 1
-              test; test # compile a version
-
-              Object.send(:remove_const, :TEST)
-              TEST = i
-
-              i += 1
-            end
-        "));
-
-        // It should not exceed MAX_ISEQ_VERSIONS
-        let iseq = get_method_iseq("self", "test");
-        let payload = get_or_create_iseq_payload(iseq);
-        assert_eq!(payload.versions.len(), MAX_ISEQ_VERSIONS);
-
-        // The last call should not discard the JIT code
-        assert!(matches!(unsafe { payload.versions.last().unwrap().as_ref() }.status, IseqStatus::Compiled(_)));
-    }
-}
+#[path = "codegen_tests.rs"]
+mod tests;

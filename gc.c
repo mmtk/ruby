@@ -721,7 +721,7 @@ ruby_modular_gc_init(void)
                 break;
               default:
                 fprintf(stderr, "Only alphanumeric, dash, and underscore is allowed in "RUBY_GC_LIBRARY"\n");
-                exit(1);
+                exit(EXIT_FAILURE);
             }
         }
 
@@ -768,11 +768,13 @@ ruby_modular_gc_init(void)
         handle = dlopen(gc_so_path, RTLD_LAZY | RTLD_GLOBAL);
         if (!handle) {
             fprintf(stderr, "ruby_modular_gc_init: Shared library %s cannot be opened: %s\n", gc_so_path, dlerror());
-            exit(1);
+            exit(EXIT_FAILURE);
         }
 
         gc_functions.modular_gc_loaded_p = true;
     }
+
+    unsigned int err_count = 0;
 
 # define load_modular_gc_func(name) do { \
     if (handle) { \
@@ -780,7 +782,7 @@ ruby_modular_gc_init(void)
         gc_functions.name = dlsym(handle, func_name); \
         if (!gc_functions.name) { \
             fprintf(stderr, "ruby_modular_gc_init: %s function not exported by library %s\n", func_name, gc_so_path); \
-            exit(1); \
+            err_count++; \
         } \
     } \
     else { \
@@ -864,6 +866,11 @@ ruby_modular_gc_init(void)
     load_modular_gc_func(garbage_object_p);
     load_modular_gc_func(set_event_hook);
     load_modular_gc_func(copy_attributes);
+
+    if (err_count > 0) {
+        fprintf(stderr, "ruby_modular_gc_init: found %u missing exports in library %s\n", err_count, gc_so_path);
+        exit(EXIT_FAILURE);
+    }
 
 # undef load_modular_gc_func
 
@@ -1293,6 +1300,7 @@ rb_gc_obj_needs_cleanup_p(VALUE obj)
           case imemo_ifunc:
           case imemo_memo:
           case imemo_svar:
+          case imemo_callcache:
           case imemo_throw_data:
             return false;
           default:
@@ -2297,15 +2305,6 @@ rb_gc_obj_free_vm_weak_references(VALUE obj)
         break;
       case T_IMEMO:
         switch (imemo_type(obj)) {
-          case imemo_callcache: {
-            const struct rb_callcache *cc = (const struct rb_callcache *)obj;
-
-            if (vm_cc_refinement_p(cc)) {
-                rb_vm_delete_cc_refinement(cc);
-            }
-
-            break;
-          }
           case imemo_callinfo:
             rb_vm_ci_free((const struct rb_callinfo *)obj);
             break;
@@ -4209,23 +4208,6 @@ vm_weak_table_foreach_update_weak_key(st_data_t *key, st_data_t *value, st_data_
 }
 
 static int
-vm_weak_table_cc_refinement_foreach(st_data_t key, st_data_t data, int error)
-{
-    struct global_vm_table_foreach_data *iter_data = (struct global_vm_table_foreach_data *)data;
-
-    return iter_data->callback((VALUE)key, iter_data->data);
-}
-
-static int
-vm_weak_table_cc_refinement_foreach_update_update(st_data_t *key, st_data_t data, int existing)
-{
-    struct global_vm_table_foreach_data *iter_data = (struct global_vm_table_foreach_data *)data;
-
-    return iter_data->update_callback((VALUE *)key, iter_data->data);
-}
-
-
-static int
 vm_weak_table_sym_set_foreach(VALUE *sym_ptr, void *data)
 {
     VALUE sym = *sym_ptr;
@@ -4419,17 +4401,6 @@ rb_gc_vm_weak_table_foreach(vm_table_foreach_callback_func callback,
             vm_weak_table_frozen_strings_foreach,
             &foreach_data
         );
-        break;
-      }
-      case RB_GC_VM_CC_REFINEMENT_TABLE: {
-        if (vm->cc_refinement_table) {
-            set_foreach_with_replace(
-              vm->cc_refinement_table,
-              vm_weak_table_cc_refinement_foreach,
-              vm_weak_table_cc_refinement_foreach_update_update,
-              (st_data_t)&foreach_data
-            );
-        }
         break;
       }
       case RB_GC_VM_WEAK_TABLE_COUNT:
@@ -5280,12 +5251,6 @@ rb_raw_obj_info_buitin_type(char *const buff, const size_t buff_size, const VALU
                 rb_ractor_t *r = (void *)DATA_PTR(obj);
                 if (r) {
                     APPEND_F("r:%d", r->pub.id);
-                }
-            }
-            else {
-                const char * const type_name = rb_objspace_data_type_name(obj);
-                if (type_name) {
-                    APPEND_F("%s", type_name);
                 }
             }
             break;
