@@ -3048,8 +3048,10 @@ rb_mmtk_each_object_safe(void (*func)(VALUE, void *), void *data)
     mmtk_enumerate_objects(rb_mmtk_build_obj_array_i, &build_array_data);
 
     // Root the array.
-    rb_imemo_tmpbuf_set_ptr(tmpbuf, array);
-    ((rb_imemo_tmpbuf_t*)tmpbuf)->size = array_bytes;
+    // We are abusing the tmpbuf to root the malloc buffer.
+    ((rb_imemo_tmpbuf_t*)tmpbuf)->ptr = array;
+    // The object scanner uses the size field to determine how many elements to scan.
+    ((rb_imemo_tmpbuf_t*)tmpbuf)->size = build_array_data.len * sizeof(VALUE);
     // GC is OK from now on.
 
     // Inform the VM about malloc memory usage.
@@ -3079,7 +3081,7 @@ rb_mmtk_each_object_safe(void (*func)(VALUE, void *), void *data)
     // Explicitly free `array` because we know it is no longer used.
     // Don't wait for GC to free it because `free()` is a bottleneck during GC.
     // Adjust memory usage accordingly.
-    rb_imemo_tmpbuf_set_ptr(tmpbuf, NULL);
+    ((rb_imemo_tmpbuf_t*)tmpbuf)->ptr = NULL;
     ((rb_imemo_tmpbuf_t*)tmpbuf)->size = 0;
     free(array);
     rb_gc_adjust_memory_usage(-(ssize_t)(sizeof(VALUE) * build_array_data.capa));
