@@ -106,8 +106,6 @@ typedef struct MMTk_RubyUpcalls {
     void (*update_generic_fields_table)(void);
     size_t (*get_frozen_strings_table_size)(void);
     void (*update_frozen_strings_table)(void);
-    size_t (*get_cc_refinement_table_size)(void);
-    void (*update_cc_refinement_table)(void);
     MMTk_NullableObjectReference (*get_fstring_table_obj)(void);
     MMTk_NullableObjectReference (*get_global_symbols_table_obj)(void);
     size_t (*st_get_num_entries)(const struct st_table *table);

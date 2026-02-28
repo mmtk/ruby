@@ -1328,23 +1328,6 @@ rb_mmtk_update_frozen_strings_table(void)
     rb_gc_vm_weak_table_foreach(rb_mmtk_update_table_i, rb_mmtk_update_table_replace_i, NULL, true, RB_GC_VM_FROZEN_STRINGS_TABLE);
 }
 
-//////// CC refinement table
-
-size_t
-rb_mmtk_get_cc_refinement_table_size(void)
-{
-    return GET_VM()->cc_refinement_table->num_entries;
-}
-
-void
-rb_mmtk_update_cc_refinement_table(void)
-{
-    // We just use the default implementation to clean it up.
-
-    rb_gc_vm_weak_table_foreach(rb_mmtk_update_table_i, rb_mmtk_update_table_replace_i, NULL, true, RB_GC_VM_CC_REFINEMENT_TABLE);
-}
-
-
 /////////////// END: Concrete global weak tables ////////////////
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -2038,8 +2021,6 @@ MMTk_RubyUpcalls ruby_upcalls = {
     rb_mmtk_update_generic_fields_table,
     rb_mmtk_get_frozen_strings_table_size,
     rb_mmtk_update_frozen_strings_table,
-    rb_mmtk_get_cc_refinement_table_size,
-    rb_mmtk_update_cc_refinement_table,
     // Get tables for specialized processing
     rb_mmtk_get_fstring_table_obj_wrapper,
     rb_mmtk_get_global_symbols_table_obj,
