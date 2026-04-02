@@ -1222,7 +1222,7 @@ rb_mmtk_update_table_replace_i(VALUE *value, void *data)
 size_t
 rb_mmtk_get_ci_table_size(void)
 {
-    return GET_VM()->ci_table->num_entries;
+    return GET_VM()->ci_table.num_entries;
 }
 
 void
@@ -1231,7 +1231,7 @@ rb_mmtk_update_ci_table(void)
     // The CI table is a deduplicating table for callinfo.
     // Used as a HashSet (key always equals value).
     // Compared and hashed by callinfo fields.  Two CIs are equal if all fields are equal.
-    rb_mmtk_st_update_dedup_table(GET_VM()->ci_table);
+    rb_mmtk_st_update_dedup_table(&GET_VM()->ci_table);
 }
 
 //////// Overloaded CME table
@@ -1239,7 +1239,7 @@ rb_mmtk_update_ci_table(void)
 size_t
 rb_mmtk_get_overloaded_cme_table_size(void)
 {
-    return GET_VM()->overloaded_cme_table->num_entries;
+    return GET_VM()->overloaded_cme_table.num_entries;
 }
 
 static void
@@ -1254,7 +1254,7 @@ void
 rb_mmtk_update_overloaded_cme_table(void)
 {
     // The overloaded CME table.  It has both weak keys and weak values.
-    rb_mmtk_update_weak_table(GET_VM()->overloaded_cme_table,
+    rb_mmtk_update_weak_table(&GET_VM()->overloaded_cme_table,
                               true,
                               true, // Currently values are pinned.
                               rb_mmtk_on_overloaded_cme_delete,
