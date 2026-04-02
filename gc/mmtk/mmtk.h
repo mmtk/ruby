@@ -60,7 +60,7 @@ typedef struct MMTk_RubyUpcalls {
     void (*init_gc_worker_thread)(struct MMTk_GCThreadTLS *gc_worker_tls);
     bool (*is_mutator)(void);
     void (*stop_the_world)(void);
-    void (*resume_mutators)(void);
+    void (*resume_mutators)(bool gc_may_move);
     void (*block_for_gc)(MMTk_VMMutatorThread tls);
     void (*before_updating_jit_code)(void);
     void (*after_updating_jit_code)(void);
@@ -123,7 +123,9 @@ void mmtk_post_alloc(MMTk_Mutator *mutator,
                      size_t bytes,
                      MMTk_AllocationSemantics semantics);
 
-void mmtk_add_obj_free_candidate(MMTk_ObjectReference object, bool can_parallel_free);
+void mmtk_add_obj_free_candidates(const MMTk_ObjectReference *objects,
+                                  size_t count,
+                                  bool can_parallel_free);
 
 void mmtk_declare_weak_references(MMTk_ObjectReference object);
 

@@ -3080,7 +3080,9 @@ rb_str_format_m(VALUE str, VALUE arg)
     VALUE tmp = rb_check_array_type(arg);
 
     if (!NIL_P(tmp)) {
-        return rb_str_format(RARRAY_LENINT(tmp), RARRAY_CONST_PTR(tmp), str);
+        VALUE result = rb_str_format(RARRAY_LENINT(tmp), RARRAY_CONST_PTR(tmp), str);
+        RB_GC_GUARD(tmp);
+        return result;
     }
     return rb_str_format(1, &arg, str);
 }
@@ -8317,7 +8319,7 @@ mapping_buffer_free(void *p)
     while (current_buffer) {
         previous_buffer = current_buffer;
         current_buffer  = current_buffer->next;
-        ruby_sized_xfree(previous_buffer, offsetof(mapping_buffer, space) + previous_buffer->capa);
+        ruby_xfree_sized(previous_buffer, offsetof(mapping_buffer, space) + previous_buffer->capa);
     }
 }
 

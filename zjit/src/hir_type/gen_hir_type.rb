@@ -63,6 +63,11 @@ $exact_c_names = {
   "BasicObjectExact" => "rb_cBasicObject",
 }
 
+$subclass_c_names = {
+  "ObjectSubclass" => "rb_cObject",
+  "BasicObjectSubclass" => "rb_cBasicObject",
+}
+
 $inexact_c_names = {
   "Object" => "rb_cObject",
   "BasicObject" => "rb_cBasicObject",
@@ -76,7 +81,8 @@ def base_type name, c_name: nil
   subclass = type.subtype(name+"Subclass")
   if c_name
     $exact_c_names[exact.name] = c_name
-    $inexact_c_names[subclass.name] = c_name
+    $subclass_c_names[subclass.name] = c_name
+    $inexact_c_names[type.name] = c_name
   end
   $builtin_exact << exact.name
   $subclass << subclass.name
@@ -88,6 +94,8 @@ end
 def final_type name, base: $object, c_name: nil
   if c_name
     $exact_c_names[name] = c_name
+    $subclass_c_names[name] = c_name
+    $inexact_c_names[name] = c_name
   end
   type = base.subtype name
   $builtin_exact << type.name
@@ -123,6 +131,11 @@ symbol_exact.subtype "DynamicSymbol"
 nil_exact = final_type "NilClass", c_name: "rb_cNilClass"
 true_exact = final_type "TrueClass", c_name: "rb_cTrueClass"
 false_exact = final_type "FalseClass", c_name: "rb_cFalseClass"
+
+# Typed T_DATA objects (RTYPEDDATA_P). These have a distinct memory layout
+# for field access (fields_obj at a fixed offset in RTypedData). These
+# don't have a common class ancestor below BasicObject.
+basic_object.subtype "TypedTData"
 
 # Build the cvalue object universe. This is for C-level types that may be
 # passed around when calling into the Ruby VM or after some strength reduction
@@ -217,7 +230,13 @@ $exact_c_names.each {|type_name, c_name|
   puts "    (bits::#{type_name}, &raw const crate::cruby::#{c_name}),"
 }
 puts "  ];"
-$inexact_c_names = $inexact_c_names.to_a.sort_by {|name, _| $bits[name]}.to_h
+$subclass_c_names = $subclass_c_names.to_a.sort_by {|name, _| $numeric_bits[name.sub("Subclass", "")]}.to_h
+puts "  pub const SubclassBitsAndClass: [(u64, *const VALUE); #{$subclass_c_names.size}] = ["
+$subclass_c_names.each {|type_name, c_name|
+  puts "    (bits::#{type_name}, &raw const crate::cruby::#{c_name}),"
+}
+puts "  ];"
+$inexact_c_names = $inexact_c_names.to_a.sort_by {|name, _| $numeric_bits[name]}.to_h
 puts "  pub const InexactBitsAndClass: [(u64, *const VALUE); #{$inexact_c_names.size}] = ["
 $inexact_c_names.each {|type_name, c_name|
   puts "    (bits::#{type_name}, &raw const crate::cruby::#{c_name}),"

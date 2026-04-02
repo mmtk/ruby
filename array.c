@@ -466,7 +466,7 @@ ary_heap_free_ptr(VALUE ary, const VALUE *ptr, long size)
     }
 #endif
 
-    ruby_sized_xfree((void *)ptr, size);
+    ruby_xfree_sized((void *)ptr, size);
 }
 
 static void
@@ -2726,14 +2726,10 @@ rb_ary_resize(VALUE ary, long len)
         MEMCPY((VALUE *)ARY_EMBED_PTR(ary), ptr, VALUE, len); /* WB: no new reference */
         ARY_SET_EMBED_LEN(ary, len);
 
-#if USE_MMTK
         // No need to free when using MMTk because the buffer is an imemo:objbuf in the GC heap.
-        if (!rb_mmtk_enabled_p()) {
-#endif
-        if (is_malloc_ptr) ruby_sized_xfree((void *)ptr, ptr_capa);
-#if USE_MMTK
-        }
-#endif
+        WHEN_NOT_USING_MMTK({
+        if (is_malloc_ptr) ruby_xfree_sized((void *)ptr, ptr_capa);
+        })
     }
     else {
         if (olen > len + ARY_DEFAULT_SIZE) {
@@ -6876,7 +6872,7 @@ rb_ary_uniq(VALUE ary)
  *  see also {Methods for Deleting}[rdoc-ref:Array@Methods+for+Deleting].
  */
 
-static VALUE
+VALUE
 rb_ary_compact_bang(VALUE ary)
 {
     VALUE *p, *t, *end;

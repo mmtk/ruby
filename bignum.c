@@ -2943,11 +2943,6 @@ bary_divmod(BDIGIT *qds, size_t qn, BDIGIT *rds, size_t rn, const BDIGIT *xds, s
     }
 }
 
-
-#ifndef BIGNUM_DEBUG
-# define BIGNUM_DEBUG (0+RUBY_DEBUG)
-#endif
-
 static int
 bigzero_p(VALUE x)
 {
@@ -2964,7 +2959,7 @@ int
 rb_cmpint(VALUE val, VALUE a, VALUE b)
 {
     if (NIL_P(val)) {
-        rb_cmperr(a, b);
+        rb_cmperr_reason(a, b, "comparator returned nil");
     }
     if (FIXNUM_P(val)) {
         long l = FIX2LONG(val);

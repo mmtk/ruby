@@ -12,15 +12,30 @@
 #include "insns.inc"
 #include "insns_info.inc"
 #include "iseq.h"
+#include "internal/compile.h"
 #include "internal/gc.h"
 #include "vm_sync.h"
 #include "internal/fixnum.h"
 #include "internal/string.h"
+#include "internal/class.h"
+#include "internal/imemo.h"
+#include "ruby/internal/core/rtypeddata.h"
+#include "zjit.h"
+
+#ifndef _WIN32
+#include <sys/mman.h>
+#endif
 
 enum jit_bindgen_constants {
     // Field offsets for the RObject struct
     ROBJECT_OFFSET_AS_HEAP_FIELDS = offsetof(struct RObject, as.heap.fields),
     ROBJECT_OFFSET_AS_ARY = offsetof(struct RObject, as.ary),
+
+    // Field offset for prime classext's fields_obj from a class pointer
+    RCLASS_OFFSET_PRIME_FIELDS_OBJ = offsetof(struct RClass_and_rb_classext_t, classext.fields_obj),
+
+    // Field offset for fields_obj in RTypedData
+    RTYPEDDATA_OFFSET_FIELDS_OBJ = offsetof(struct RTypedData, fields_obj),
 
     // Field offsets for the RString struct
     RUBY_OFFSET_RSTRING_LEN = offsetof(struct RString, len),
@@ -67,6 +82,19 @@ rb_iseq_opcode_at_pc(const rb_iseq_t *iseq, const VALUE *pc)
 
     const VALUE at_pc = *pc;
     return rb_vm_insn_addr2opcode((const void *)at_pc);
+}
+
+// Get the bare opcode given a program counter. Always returns the base
+// instruction, stripping trace/zjit variants.
+int
+rb_iseq_bare_opcode_at_pc(const rb_iseq_t *iseq, const VALUE *pc)
+{
+    if (OPT_DIRECT_THREADED_CODE || OPT_CALL_THREADED_CODE) {
+        RUBY_ASSERT_ALWAYS(FL_TEST_RAW((VALUE)iseq, ISEQ_TRANSLATED));
+    }
+
+    const VALUE at_pc = *pc;
+    return rb_vm_insn_addr2insn((const void *)at_pc);
 }
 
 unsigned long
@@ -375,7 +403,7 @@ rb_get_ec_cfp(const rb_execution_context_t *ec)
 const rb_iseq_t *
 rb_get_cfp_iseq(struct rb_control_frame_struct *cfp)
 {
-    return cfp->iseq;
+    return CFP_ISEQ(cfp);
 }
 
 VALUE *
@@ -527,6 +555,20 @@ bool
 rb_jit_multi_ractor_p(void)
 {
     return rb_multi_ractor_p();
+}
+
+bool
+rb_jit_class_fields_embedded_p(VALUE klass)
+{
+    VALUE fields_obj = RCLASS_EXT_PRIME(klass)->fields_obj;
+    return !fields_obj || !FL_TEST_RAW(fields_obj, OBJ_FIELD_HEAP);
+}
+
+bool
+rb_jit_typed_data_fields_embedded_p(VALUE obj)
+{
+    VALUE fields_obj = RTYPEDDATA(obj)->fields_obj;
+    return !fields_obj || !FL_TEST_RAW(fields_obj, OBJ_FIELD_HEAP);
 }
 
 // Acquire the VM lock and then signal all other Ruby threads (ractors) to

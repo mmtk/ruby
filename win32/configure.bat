@@ -133,7 +133,8 @@ goto :unknown_opt
 goto :loopend ;
 :dir
   if "%eq%" == "" call :take_arg
-  echo>> %config_make% %opt:~2% = %arg:\=/%
+  if defined arg set "arg=%arg:\=/%"
+  echo>> %config_make% %opt:~2% = %arg%
 goto :loopend ;
 :enable
   if %enable% == yes (
@@ -182,6 +183,7 @@ goto :loop ;
   if "%opt%" == "--with-gmp-dir" goto :opt-dir
   if "%opt%" == "--with-gmp" goto :gmp
   if "%opt%" == "--with-destdir" goto :destdir
+  if "%opt%" == "--with-dump-ast" goto :dump-ast
 goto :loop ;
 :ntver
   ::- For version constants, see
@@ -230,6 +232,9 @@ goto :loop ;
 goto :loop ;
 :destdir
   echo>> %config_make% DESTDIR = %arg%
+goto :loop ;
+:dump-ast
+  echo>> %config_make% DUMP_AST = %arg%
 goto :loop ;
 :opt-dir
   if "%arg%" == "" (

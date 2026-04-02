@@ -44,7 +44,7 @@ jobs:
       || contains(github.event.head_commit.message, '[DOC]')
       || contains(github.event.pull_request.title, '[DOC]')
       || contains(github.event.pull_request.labels.*.name, 'Documentation')
-      || (github.event_name == 'push' && github.event.pull_request.user.login == 'dependabot[bot]')
+      || (github.event.pull_request.user.login == 'dependabot[bot]')
       )}}
 
     steps:
@@ -52,6 +52,7 @@ jobs:
         with:
           sparse-checkout-cone-mode: false
           sparse-checkout: /.github
+          persist-credentials: false
 
       - name: Install libraries (macOS)
         uses: ./.github/actions/setup/macos
@@ -61,7 +62,7 @@ jobs:
         uses: ./.github/actions/setup/ubuntu
         if: ${{ contains(matrix.os, 'ubuntu') }}
 
-      - uses: ruby/setup-ruby@90be1154f987f4dc0fe0dd0feedac9e473aa4ba8 # v1.286.0
+      - uses: ruby/setup-ruby@3ff19f5e2baf30647122352b96108b1fbe250c64 # v1.299.0
         with:
           ruby-version: '3.1'
           bundler: none
@@ -100,18 +101,18 @@ jobs:
       - name: Run configure
         env:
           arch: ${{ matrix.arch }}
-        run: >-
-          $SETARCH ../src/configure -C --disable-install-doc --with-modular-gc=${{ env.MODULAR_GC_DIR }}
+        run: |
+          ${SETARCH} ../src/configure -C --disable-install-doc --with-modular-gc="${MODULAR_GC_DIR}" \
           ${arch:+--target=$arch-$OSTYPE --host=$arch-$OSTYPE}
 
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606 # v1.15.4
       - name: Set MMTk environment variables
         run: |
           echo 'EXCLUDES=../src/test/.excludes-mmtk' >> $GITHUB_ENV
           echo 'MSPECOPT=-B../src/spec/mmtk.mspec' >> $GITHUB_ENV
         if: ${{ matrix.gc.name == 'mmtk' }}
 
-      - run: $SETARCH make
+      - run: ${SETARCH} make
 
       - name: Build Modular  GC
         run: |
@@ -119,7 +120,7 @@ jobs:
           make install-modular-gc MODULAR_GC=${{ matrix.gc.name }} MMTK_BUILD=${{ matrix.gc.mmtk_build }}
           make distclean-modular-gc MODULAR_GC=${{ matrix.gc.name }}
 
-      - run: $SETARCH make hello
+      - run: ${SETARCH} make hello
 
       - name: Set test options for skipped tests
         run: |
@@ -145,7 +146,7 @@ jobs:
           test -n "${LAUNCHABLE_STDOUT}" && exec 1> >(tee "${LAUNCHABLE_STDOUT}")
           test -n "${LAUNCHABLE_STDERR}" && exec 2> >(tee "${LAUNCHABLE_STDERR}")
 
-          $SETARCH make -s ${{ matrix.test_task }} \
+          ${SETARCH} make -s ${{ matrix.test_task }} \
             ${TESTS:+TESTS="$TESTS"} \
             ${{ !contains(matrix.test_task, 'bundle') && 'RUBYOPT=-w' || '' }}
         timeout-minutes: ${{ matrix.gc.timeout || 40 }}
@@ -158,7 +159,7 @@ jobs:
 
       - name: make skipped tests
         run: |
-          $SETARCH make -s test-all TESTS="${TESTS//-n!\//-n/}"
+          ${SETARCH} make -s test-all TESTS="${TESTS//-n!\//-n/}"
         env:
           GNUMAKEFLAGS: ''
           RUBY_TESTOPTS: '-v --tty=no'

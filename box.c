@@ -18,9 +18,13 @@
 #include "ruby/util.h"
 #include "vm_core.h"
 #include "darray.h"
+#include "zjit.h"
 
 #include <stdio.h>
 
+#ifdef HAVE_FCNTL_H
+#include <fcntl.h>
+#endif
 #ifdef HAVE_SYS_SENDFILE_H
 # include <sys/sendfile.h>
 #endif
@@ -389,6 +393,9 @@ box_initialize(VALUE box_value)
     RCLASS_SET_CONST_TBL(box_value, RCLASSEXT_CONST_TBL(object_classext), true);
 
     rb_ivar_set(box_value, id_box_entry, entry);
+
+    // Invalidate ZJIT code that assumes only the root box is active
+    rb_zjit_invalidate_root_box();
 
     return box_value;
 }

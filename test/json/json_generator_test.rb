@@ -82,6 +82,26 @@ class JSONGeneratorTest < Test::Unit::TestCase
     assert_equal '"hello"', dump(:hello, strict: true)
     assert_equal '"hello"', :hello.to_json(strict: true)
     assert_equal '"World"', "World".to_json(strict: true)
+    assert_equal '["hello"]', dump([:hello], strict: true)
+    assert_equal '{"hello":"world"}', dump({ hello: :world }, strict: true)
+  end
+
+  def test_not_frozen
+    [
+      [[], '[]'],
+      [{}, '{}'],
+      ["string", '"string"'],
+      [:sym, '"sym"'],
+      [1, '1'],
+      [1.0, '1.0'],
+      [true, 'true'],
+      [false, 'false'],
+      [nil, 'null'],
+    ].each do |(obj, exp)|
+      dumped = dump(obj, strict: true)
+      assert_equal exp, dumped
+      refute_predicate dumped, :frozen?
+    end
   end
 
   def test_state_depth_to_json
@@ -475,25 +495,31 @@ class JSONGeneratorTest < Test::Unit::TestCase
     assert_equal '2', state.indent
   end
 
-  def test_broken_bignum # [ruby-core:38867]
-    pid = fork do
-      x = 1 << 64
-      x.class.class_eval do
-        def to_s
-        end
+  def test_broken_bignum # [Bug #5173]
+    bignum = 1 << 64
+    bignum_to_s = bignum.to_s
+
+    original_to_s = bignum.class.instance_method(:to_s)
+    bignum.class.class_eval do
+      def to_s
+        nil
       end
-      begin
-        JSON::Ext::Generator::State.new.generate(x)
-        exit 1
-      rescue TypeError
-        exit 0
+      alias_method :to_s, :to_s
+    end
+    case RUBY_ENGINE
+    when "jruby"
+      assert_equal bignum_to_s, JSON.generate(bignum)
+    when "truffleruby"
+      assert_raise(NoMethodError) do
+        JSON.generate(bignum)
+      end
+    when "ruby"
+      assert_raise(TypeError) do
+        JSON.generate(bignum)
       end
     end
-    _, status = Process.waitpid2(pid)
-    assert status.success?
-  rescue NotImplementedError
-    # forking to avoid modifying core class of a parent process and
-    # introducing race conditions of tests are run in parallel
+  ensure
+    bignum.class.define_method(:to_s, original_to_s) if original_to_s
   end
 
   def test_hash_likeness_set_symbol
@@ -921,29 +947,6 @@ class JSONGeneratorTest < Test::Unit::TestCase
         assert_equal JSON.dump(utf8_string), JSON.dump(wrong_encoding_string)
       end
     end
-
-    def test_string_ext_included_calls_super
-      included = false
-
-      Module.send(:alias_method, :included_orig, :included)
-      Module.send(:remove_method, :included)
-      Module.send(:define_method, :included) do |base|
-        included_orig(base)
-        included = true
-      end
-
-      Class.new(String) do
-        include JSON::Ext::Generator::GeneratorMethods::String
-      end
-
-      assert included
-    ensure
-      if Module.private_method_defined?(:included_orig)
-        Module.send(:remove_method, :included) if Module.method_defined?(:included)
-        Module.send(:alias_method, :included, :included_orig)
-        Module.send(:remove_method, :included_orig)
-      end
-    end
   end
 
   def test_nonutf8_encoding
@@ -1068,4 +1071,14 @@ class JSONGeneratorTest < Test::Unit::TestCase
     assert_equal 0, state.depth
     assert_equal '{"a":1}', state.generate({ a: 1 })
   end
+
+  def test_negative_depth_raises
+    assert_raise(ArgumentError) do
+      JSON.generate({"a" => 1}, depth: -1)
+    end
+    assert_raise(ArgumentError) do
+      JSON.state.new(depth: -1)
+    end
+  end
+
 end

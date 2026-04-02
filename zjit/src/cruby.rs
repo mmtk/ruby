@@ -94,6 +94,8 @@ use std::fmt::{Debug, Display, Formatter};
 use std::os::raw::{c_char, c_int, c_uint};
 use std::panic::{catch_unwind, UnwindSafe};
 
+use crate::cast::IntoUsize as _;
+
 // We check that we can do this with the configure script and a couple of
 // static asserts. u64 and not usize to play nice with lowering to x86.
 pub type size_t = u64;
@@ -133,6 +135,7 @@ unsafe extern "C" {
     pub fn rb_str_setbyte(str: VALUE, index: VALUE, value: VALUE) -> VALUE;
     pub fn rb_str_getbyte(str: VALUE, index: VALUE) -> VALUE;
     pub fn rb_vm_splat_array(flag: VALUE, ary: VALUE) -> VALUE;
+    pub fn rb_jit_fix_div_fix(x: VALUE, y: VALUE) -> VALUE;
     pub fn rb_jit_fix_mod_fix(x: VALUE, y: VALUE) -> VALUE;
     pub fn rb_vm_concat_array(ary1: VALUE, ary2st: VALUE) -> VALUE;
     pub fn rb_vm_get_special_object(reg_ep: *const VALUE, value_type: vm_special_object_type) -> VALUE;
@@ -162,7 +165,7 @@ unsafe extern "C" {
     pub fn rb_vm_stack_canary() -> VALUE;
     pub fn rb_vm_push_cfunc_frame(cme: *const rb_callable_method_entry_t, recv_idx: c_int);
     pub fn rb_obj_class(klass: VALUE) -> VALUE;
-    pub fn rb_vm_objtostring(iseq: IseqPtr, recv: VALUE, cd: *const rb_call_data) -> VALUE;
+    pub fn rb_vm_objtostring(reg_cfp: CfpPtr, recv: VALUE, cd: *const rb_call_data) -> VALUE;
 }
 
 // Renames
@@ -205,6 +208,7 @@ pub use rb_vm_ci_kwarg as vm_ci_kwarg;
 pub use rb_METHOD_ENTRY_VISI as METHOD_ENTRY_VISI;
 pub use rb_RCLASS_ORIGIN as RCLASS_ORIGIN;
 pub use rb_vm_get_special_object as vm_get_special_object;
+pub use rb_jit_fix_div_fix as rb_fix_div_fix;
 pub use rb_jit_fix_mod_fix as rb_fix_mod_fix;
 
 /// Helper so we can get a Rust string for insn_name()
@@ -369,13 +373,6 @@ pub struct rb_callcache {
     _marker: core::marker::PhantomData<(*mut u8, core::marker::PhantomPinned)>,
 }
 
-/// Opaque control_frame (CFP) struct from vm_core.h
-#[repr(C)]
-pub struct rb_control_frame_struct {
-    _data: [u8; 0],
-    _marker: core::marker::PhantomData<(*mut u8, core::marker::PhantomPinned)>,
-}
-
 /// Pointer to a control frame pointer (CFP)
 pub type CfpPtr = *mut rb_control_frame_struct;
 
@@ -475,6 +472,24 @@ impl VALUE {
         true
     }
 
+    /// A metaclass is the singleton class of an object that is a `Module`.
+    /// This is internal terminology from `class.c`.
+    pub fn is_metaclass(self) -> bool {
+        unsafe {
+            if RB_TYPE_P(self, RUBY_T_CLASS) && rb_zjit_singleton_class_p(self) {
+                let attached = rb_class_attached_object(self);
+                RB_TYPE_P(attached, RUBY_T_CLASS) || RB_TYPE_P(attached, RUBY_T_MODULE)
+            } else {
+                false
+            }
+        }
+    }
+
+    pub fn is_singleton_class(self) -> bool {
+        // TODO(alan): clean up one of double check on T_CLASS
+        unsafe { RB_TYPE_P(self, RUBY_T_CLASS) && rb_zjit_singleton_class_p(self) }
+    }
+
     /// Return true for a static (non-heap) Ruby symbol (RB_STATIC_SYM_P)
     pub fn static_sym_p(self) -> bool {
         let VALUE(cval) = self;
@@ -565,7 +580,11 @@ impl VALUE {
     }
 
     pub fn shape_id_of(self) -> ShapeId {
-        ShapeId(unsafe { rb_obj_shape_id(self) })
+        if self.special_const_p() {
+            INVALID_SHAPE_ID
+        } else {
+            ShapeId(unsafe { rb_obj_shape_id(self) })
+        }
     }
 
     pub fn embedded_p(self) -> bool {
@@ -579,6 +598,21 @@ impl VALUE {
             RB_TYPE_P(self, RUBY_T_STRUCT) &&
             FL_TEST_RAW(self, VALUE(RSTRUCT_EMBED_LEN_MASK)) != VALUE(0)
         }
+    }
+
+    pub fn class_fields_embedded_p(self) -> bool {
+        unsafe { rb_jit_class_fields_embedded_p(self) }
+    }
+
+    /// Typed `T_DATA` made from `TypedData_Make_Struct()` (e.g. Thread, ARGF)
+    pub fn typed_data_p(self) -> bool {
+        !self.special_const_p() &&
+            self.builtin_type() == RUBY_T_DATA &&
+            0 != (self.builtin_flags() & RUBY_TYPED_FL_IS_TYPED_DATA.to_usize())
+    }
+
+    pub fn typed_data_fields_embedded_p(self) -> bool {
+        unsafe { rb_jit_typed_data_fields_embedded_p(self) }
     }
 
     pub fn as_fixnum(self) -> i64 {
@@ -702,6 +736,24 @@ impl IseqAccess for IseqPtr {
     unsafe fn params<'a>(self) -> &'a IseqParameters {
         use crate::cast::IntoUsize;
         unsafe { &*((*self).body.byte_add(ISEQ_BODY_OFFSET_PARAM.to_usize()) as *const IseqParameters) }
+    }
+}
+
+impl IseqParameters {
+    /// The `opt_table` is a mapping where `opt_table[number_of_optional_parameters_filled]`
+    /// gives the YARV entry point of ISeq as an index of the iseq_encoded array.
+    /// This method gives over the table that additionally works when `opt_num==0`,
+    /// when the table is stored as `NULL` and implicit.
+    /// The table stores the indexes as raw VALUE integers; they are not tagged as fixnum.
+    pub fn opt_table_slice(&self) -> &[VALUE] {
+        let opt_num: usize = self.opt_num.try_into().expect("ISeq opt_num should always >=0");
+        if opt_num > 0 {
+            // The table has size=opt_num+1 because opt_table[opt_num] is valid (all optionals filled)
+            unsafe { std::slice::from_raw_parts(self.opt_table, opt_num + 1) }
+        } else {
+            // The ISeq entry point is index 0 when there are no optional parameters
+            &[VALUE(0)]
+        }
     }
 }
 
@@ -831,6 +883,18 @@ pub fn iseq_name(iseq: IseqPtr) -> String {
     }
 }
 
+// Equivalent of get_lvar_level() in compile.c
+pub fn get_lvar_level(mut iseq: IseqPtr) -> u32 {
+    let local_iseq = unsafe { rb_get_iseq_body_local_iseq(iseq) };
+    let mut level = 0;
+    while iseq != local_iseq {
+        iseq = unsafe { rb_get_iseq_body_parent_iseq(iseq) };
+        level += 1;
+    }
+
+    level
+}
+
 // Location is the file defining the method, colon, method name.
 // Filenames are sometimes internal strings supplied to eval,
 // so be careful with them.
@@ -850,15 +914,18 @@ pub fn iseq_get_location(iseq: IseqPtr, pos: u32) -> String {
     s
 }
 
+pub fn ruby_str_to_rust_string_result(v: VALUE) -> Result<String, std::string::FromUtf8Error> {
+    let str_ptr = unsafe { rb_RSTRING_PTR(v) } as *mut u8;
+    let str_len: usize = unsafe { rb_RSTRING_LEN(v) }.try_into().unwrap();
+    let str_slice: &[u8] = unsafe { std::slice::from_raw_parts(str_ptr, str_len) };
+    String::from_utf8(str_slice.to_vec())
+}
 
 // Convert a CRuby UTF-8-encoded RSTRING into a Rust string.
 // This should work fine on ASCII strings and anything else
 // that is considered legal UTF-8, including embedded nulls.
-fn ruby_str_to_rust_string(v: VALUE) -> String {
-    let str_ptr = unsafe { rb_RSTRING_PTR(v) } as *mut u8;
-    let str_len: usize = unsafe { rb_RSTRING_LEN(v) }.try_into().unwrap();
-    let str_slice: &[u8] = unsafe { std::slice::from_raw_parts(str_ptr, str_len) };
-    String::from_utf8(str_slice.to_vec()).unwrap_or_default()
+pub fn ruby_str_to_rust_string(v: VALUE) -> String {
+    ruby_str_to_rust_string_result(v).unwrap_or_default()
 }
 
 pub fn ruby_sym_to_rust_string(v: VALUE) -> String {
@@ -1212,6 +1279,15 @@ pub mod test_utils {
         ruby_str_to_rust_string(eval(&inspect))
     }
 
+    /// Like inspect, but also asserts that all compilations triggered by this program succeed.
+    pub fn assert_compiles(program: &str) -> String {
+        use crate::state::ZJITState;
+        ZJITState::enable_assert_compiles();
+        let result = inspect(program);
+        ZJITState::disable_assert_compiles();
+        result
+    }
+
     /// Get IseqPtr for a specified method
     pub fn get_method_iseq(recv: &str, name: &str) -> *const rb_iseq_t {
         get_proc_iseq(&format!("{}.method(:{})", recv, name))
@@ -1479,6 +1555,7 @@ pub(crate) mod ids {
         name: aref               content: b"[]"
         name: len
         name: _as_heap
+        name: _fields_obj
         name: thread_ptr
         name: self_              content: b"self"
         name: rb_ivar_get_at_no_ractor_check
@@ -1491,6 +1568,11 @@ pub(crate) mod ids {
         name: RUBY_FL_FREEZE
         name: RUBY_ELTS_SHARED
         name: VM_FRAME_FLAG_MODIFIED_BLOCK_PARAM
+        name: RubyVM
+        name: ZJIT
+        name: induce_side_exit_bang       content: b"induce_side_exit!"
+        name: induce_compile_failure_bang content: b"induce_compile_failure!"
+        name: induce_breakpoint_bang      content: b"induce_breakpoint!"
     }
 
     /// Get an CRuby `ID` to an interned string, e.g. a particular method name.
@@ -1498,7 +1580,7 @@ pub(crate) mod ids {
         ($id_name:ident) => {{
             let id = $crate::cruby::ids::$id_name.load(std::sync::atomic::Ordering::Relaxed);
             debug_assert_ne!(0, id, "ids module should be initialized");
-            ID(id)
+            $crate::cruby::ID(id)
         }}
     }
     pub(crate) use ID;
