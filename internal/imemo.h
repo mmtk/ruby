@@ -40,7 +40,7 @@ enum imemo_type {
     imemo_callinfo       = 10,
     imemo_callcache      = 11,
     imemo_constcache     = 12,
-    imemo_fields   = 13,
+    imemo_fields         = 13,
     imemo_mmtk_strbuf    = 14,
     imemo_mmtk_objbuf    = 15,
 };

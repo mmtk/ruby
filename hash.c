@@ -478,23 +478,7 @@ ar_set_entry(VALUE hash, unsigned int index, st_data_t key, st_data_t val, st_ha
 #define RHASH_AR_TABLE_SIZE(h) (HASH_ASSERT(RHASH_AR_TABLE_P(h)), \
                                 RHASH_AR_TABLE_SIZE_RAW(h))
 
-#define RHASH_AR_TABLE_BOUND_RAW(h) \
-  ((unsigned int)((RBASIC(h)->flags >> RHASH_AR_TABLE_BOUND_SHIFT) & \
-                  (RHASH_AR_TABLE_BOUND_MASK >> RHASH_AR_TABLE_BOUND_SHIFT)))
-
-#define RHASH_ST_TABLE_SET(h, s)  rb_hash_st_table_set(h, s)
-#define RHASH_TYPE(hash) (RHASH_AR_TABLE_P(hash) ? &objhash : RHASH_ST_TABLE(hash)->type)
-
 #define HASH_ASSERT(expr) RUBY_ASSERT_MESG_WHEN(HASH_DEBUG, expr, #expr)
-
-static inline unsigned int
-RHASH_AR_TABLE_BOUND(VALUE h)
-{
-    HASH_ASSERT(RHASH_AR_TABLE_P(h));
-    const unsigned int bound = RHASH_AR_TABLE_BOUND_RAW(h);
-    HASH_ASSERT(bound <= RHASH_AR_TABLE_MAX_SIZE);
-    return bound;
-}
 
 #if HASH_DEBUG
 #define hash_verify(hash) hash_verify_(hash, __FILE__, __LINE__)
@@ -611,6 +595,7 @@ RHASH_AR_TABLE_SIZE_DEC(VALUE h)
 static inline void
 RHASH_AR_TABLE_CLEAR(VALUE h)
 {
+    RUBY_ASSERT(rb_gc_obj_slot_size(h) >= sizeof(struct RHash) + sizeof(ar_table));
     RBASIC(h)->flags &= ~RHASH_AR_TABLE_SIZE_MASK;
     RBASIC(h)->flags &= ~RHASH_AR_TABLE_BOUND_MASK;
 
@@ -725,6 +710,8 @@ ar_force_convert_table(VALUE hash, const char *file, int line)
         ar_table *ar = RHASH_AR_TABLE(hash);
         st_hash_t hashes[RHASH_AR_TABLE_MAX_SIZE];
         unsigned int bound, size;
+
+        RUBY_ASSERT(rb_gc_obj_slot_size(hash) >= sizeof(struct RHash) + sizeof(ar_table));
 
         // prepare hash values
         do {
@@ -1149,12 +1136,15 @@ ar_values(VALUE hash, st_data_t *values, st_index_t size)
 static ar_table*
 ar_copy(VALUE hash1, VALUE hash2)
 {
+    RUBY_ASSERT(rb_gc_obj_slot_size(hash1) >= sizeof(struct RHash) + sizeof(ar_table));
     ar_table *old_tab = RHASH_AR_TABLE(hash2);
     ar_table *new_tab = RHASH_AR_TABLE(hash1);
 
-    *new_tab = *old_tab;
+    unsigned int bound = RHASH_AR_TABLE_BOUND(hash2);
+    new_tab->ar_hint.word = old_tab->ar_hint.word;
+    MEMCPY(&new_tab->pairs, &old_tab->pairs, ar_table_pair, bound);
     RHASH_AR_TABLE(hash1)->ar_hint.word = RHASH_AR_TABLE(hash2)->ar_hint.word;
-    RHASH_AR_TABLE_BOUND_SET(hash1, RHASH_AR_TABLE_BOUND(hash2));
+    RHASH_AR_TABLE_BOUND_SET(hash1, bound);
     RHASH_AR_TABLE_SIZE_SET(hash1, RHASH_AR_TABLE_SIZE(hash2));
 
     rb_gc_writebarrier_remember(hash1);
@@ -1492,9 +1482,34 @@ rb_hash_new_with_size(st_index_t size)
 }
 
 VALUE
+rb_hash_new_with_size_and_type(VALUE klass, st_index_t size, const struct st_hash_type *type)
+{
+    VALUE ret = hash_alloc_flags(klass, 0, Qnil, true);
+    hash_st_table_init(ret, type, size);
+    return ret;
+}
+
+VALUE
 rb_hash_new_capa(long capa)
 {
     return rb_hash_new_with_size((st_index_t)capa);
+}
+
+VALUE
+rb_hash_alloc_fixed_size(VALUE klass, st_index_t size)
+{
+    VALUE ret;
+    if (size > RHASH_AR_TABLE_MAX_SIZE) {
+        ret = hash_alloc_flags(klass, 0, Qnil, true);
+        hash_st_table_init(ret, &objhash, size);
+    }
+    else {
+        size_t slot_size = sizeof(struct RHash) + offsetof(ar_table, pairs) + size * sizeof(ar_table_pair);
+        ret = rb_wb_protected_newobj_of(GET_EC(), klass, T_HASH, 0, slot_size);
+    }
+
+    RHASH_SET_IFNONE(ret, Qnil);
+    return ret;
 }
 
 static VALUE
@@ -5031,6 +5046,8 @@ hash_proc_call(RB_BLOCK_CALL_FUNC_ARGLIST(key, hash))
  *    proc.call(:foo) # => 0
  *    proc.call(:bar) # => 1
  *    proc.call(:nosuch) # => nil
+ *    h.default_proc = proc { |hash, key| "Missing key: #{key}" } # This affect the existing proc object
+ *    proc.call(:nosuch) # => "Missing key: #{nosuch}"
  *
  *  Related: see {Methods for Converting}[rdoc-ref:Hash@Methods+for+Converting].
  */
@@ -7492,7 +7509,7 @@ Init_Hash(void)
     rb_define_singleton_method(rb_cHash, "ruby2_keywords_hash?", rb_hash_s_ruby2_keywords_hash_p, 1);
     rb_define_singleton_method(rb_cHash, "ruby2_keywords_hash", rb_hash_s_ruby2_keywords_hash, 1);
 
-    rb_cHash_empty_frozen = rb_hash_freeze(rb_hash_new());
+    rb_cHash_empty_frozen = rb_hash_freeze(rb_hash_alloc_fixed_size(rb_cHash, 0));
     RB_OBJ_SET_SHAREABLE(rb_cHash_empty_frozen);
     rb_vm_register_global_object(rb_cHash_empty_frozen);
 

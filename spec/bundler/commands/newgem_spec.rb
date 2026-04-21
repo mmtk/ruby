@@ -650,6 +650,15 @@ RSpec.describe "bundle gem" do
       to match(/example\.com/)
   end
 
+  it "includes a commented-out rubygems_mfa_required metadata hint" do
+    bundle "gem #{gem_name}"
+
+    gemspec_contents = bundled_app("#{gem_name}/#{gem_name}.gemspec").read
+
+    expect(gemspec_contents).to include('# spec.metadata["rubygems_mfa_required"] = "true"')
+    expect(gemspec_contents).to include("https://guides.rubygems.org/mfa-requirement-opt-in/")
+  end
+
   it "sets a minimum ruby version" do
     bundle "gem #{gem_name}"
 
@@ -1741,8 +1750,9 @@ RSpec.describe "bundle gem" do
         expect(bundled_app("#{gem_name}/ext/#{gem_name}/build.rs")).to exist
       end
 
-      it "includes rake-compiler constraint" do
+      it "includes rake-compiler and rb_sys gems constraint" do
         expect(bundled_app("#{gem_name}/Gemfile").read).to include('gem "rake-compiler"')
+        expect(bundled_app("#{gem_name}/#{gem_name}.gemspec").read).to include('spec.add_dependency "rb_sys"')
       end
 
       it "depends on compile task for build" do

@@ -155,6 +155,37 @@ class TestBox < Test::Unit::TestCase
     assert_include Ruby::Box.current.inspect, "main"
   end
 
+  def test_class_variables
+    # [Bug #21952]
+    assert_separately([ENV_ENABLE_BOX], __FILE__, __LINE__, "here = '#{__dir__}'; #{<<~"begin;"}\n#{<<~'end;'}", ignore_stderr: true)
+    begin;
+      Ruby::Box.root.eval(<<~RUBY)
+        module M
+          @@x = 1
+        end
+
+        class A
+          include M
+        end
+
+        class B < A
+        end
+      RUBY
+
+      code = <<~REPRO
+        class ::B
+          @@x += 1
+        end
+      REPRO
+
+      b1 = Ruby::Box.new
+      assert_equal 2, b1.eval(code)
+
+      b2 = Ruby::Box.new
+      assert_equal 2, b2.eval(code)
+    end;
+  end
+
   def test_autoload_in_box
     setup_box
 
@@ -530,6 +561,26 @@ class TestBox < Test::Unit::TestCase
       $-0 = default_l
       $, = default_f
     end
+  end
+
+  def test_match_variables_are_not_cached_in_box
+    assert_separately([ENV_ENABLE_BOX], __FILE__, __LINE__, "#{<<~"begin;"}\n#{<<~'end;'}", ignore_stderr: true)
+    begin;
+      /(?<a>foo)/ =~ 'bar'
+      /(?<b>baz)/ =~ 'baz'
+      assert_equal "baz", b
+      assert_equal "baz", $~.to_s
+
+      /foo/ =~ 'bar'
+      assert_nil $~
+      /(?<word>foo)(bar)?/ =~ 'foo'
+      assert_equal "foo", word
+      assert_equal "foo", $~.to_s
+      assert_equal "foo", $&
+      assert_equal "", $`
+      assert_equal "", $'
+      assert_equal "foo", $+
+    end;
   end
 
   def test_load_path_and_loaded_features

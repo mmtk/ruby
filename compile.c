@@ -2734,7 +2734,6 @@ iseq_set_sequence(rb_iseq_t *iseq, LINK_ANCHOR *const anchor)
                             data.len = len;
                             rb_hash_foreach(map, cdhash_set_label_i, (VALUE)&data);
 
-                            rb_hash_rehash(map);
                             freeze_hide_obj(map);
                             rb_ractor_make_shareable(map);
                             generated_iseq[code_index + 1 + j] = map;
@@ -5376,10 +5375,10 @@ compile_hash(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *node, int meth
                     if (!RB_SPECIAL_CONST_P(elem[1])) RB_OBJ_SET_FROZEN_SHAREABLE(elem[1]);
                     rb_ary_cat(ary, elem, 2);
                 }
-                VALUE hash = rb_hash_new_with_size(RARRAY_LEN(ary) / 2);
+                VALUE hash = rb_hash_alloc_fixed_size(Qfalse, RARRAY_LEN(ary) / 2);
                 rb_hash_bulk_insert(RARRAY_LEN(ary), RARRAY_CONST_PTR(ary), hash);
                 RB_GC_GUARD(ary);
-                hash = RB_OBJ_SET_FROZEN_SHAREABLE(rb_obj_hide(hash));
+                hash = RB_OBJ_SET_FROZEN_SHAREABLE(hash);
 
                 /* Emit optimized code */
                 FLUSH_CHUNK();
@@ -6100,6 +6099,23 @@ compile_const_prefix(rb_iseq_t *iseq, const NODE *const node,
 }
 
 static int
+cpath_const_p(const NODE *node)
+{
+    switch (nd_type(node)) {
+      case NODE_CONST:
+      case NODE_COLON3:
+        return TRUE;
+      case NODE_COLON2:
+        if (RNODE_COLON2(node)->nd_head) {
+            return cpath_const_p(RNODE_COLON2(node)->nd_head);
+        }
+        return TRUE;
+      default:
+        return FALSE;
+    }
+}
+
+static int
 compile_cpath(LINK_ANCHOR *const ret, rb_iseq_t *iseq, const NODE *cpath)
 {
     if (nd_type_p(cpath, NODE_COLON3)) {
@@ -6108,9 +6124,13 @@ compile_cpath(LINK_ANCHOR *const ret, rb_iseq_t *iseq, const NODE *cpath)
         return VM_DEFINECLASS_FLAG_SCOPED;
     }
     else if (nd_type_p(cpath, NODE_COLON2) && RNODE_COLON2(cpath)->nd_head) {
-        /* Bar::Foo */
+        /* Bar::Foo or expr::Foo */
         NO_CHECK(COMPILE(ret, "nd_else->nd_head", RNODE_COLON2(cpath)->nd_head));
-        return VM_DEFINECLASS_FLAG_SCOPED;
+        int flags = VM_DEFINECLASS_FLAG_SCOPED;
+        if (!cpath_const_p(RNODE_COLON2(cpath)->nd_head)) {
+            flags |= VM_DEFINECLASS_FLAG_DYNAMIC_CREF;
+        }
+        return flags;
     }
     else {
         /* class at cbase Foo */
@@ -7056,7 +7076,7 @@ compile_case(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const orig_nod
     DECL_ANCHOR(body_seq);
     DECL_ANCHOR(cond_seq);
     int only_special_literals = 1;
-    VALUE literals = rb_hash_new();
+    VALUE literals = rb_hash_new_with_size_and_type(0, 0, &cdhash_type);
     int line;
     enum node_type type;
     const NODE *line_node;
@@ -7066,8 +7086,6 @@ compile_case(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const orig_nod
     INIT_ANCHOR(head);
     INIT_ANCHOR(body_seq);
     INIT_ANCHOR(cond_seq);
-
-    RHASH_TBL_RAW(literals)->type = &cdhash_type;
 
     CHECK(COMPILE(head, "case base", RNODE_CASE(node)->nd_head));
 
@@ -7154,7 +7172,6 @@ compile_case(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const orig_nod
 
     if (only_special_literals && ISEQ_COMPILE_DATA(iseq)->option->specialized_instruction) {
         ADD_INSN(ret, orig_node, dup);
-        rb_obj_hide(literals);
         ADD_INSN2(ret, orig_node, opt_case_dispatch, literals, elselabel);
         RB_OBJ_WRITTEN(iseq, Qundef, literals);
         LABEL_REF(elselabel);
@@ -11486,9 +11503,20 @@ iseq_compile_each0(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const no
         CHECK(COMPILE(ret, "sclass#recv", RNODE_SCLASS(node)->nd_recv));
         ADD_INSN (ret, node, putnil);
         CONST_ID(singletonclass, "singletonclass");
+
+        /* `class << self` in a class body and `class << Foo` (constant
+           receiver) are stable. All other forms are potentially dynamic. */
+        int sclass_flags = VM_DEFINECLASS_TYPE_SINGLETON_CLASS;
+        const NODE *recv = RNODE_SCLASS(node)->nd_recv;
+        if (!(nd_type_p(recv, NODE_SELF) &&
+              ISEQ_BODY(iseq)->type == ISEQ_TYPE_CLASS) &&
+            !cpath_const_p(recv)) {
+            sclass_flags |= VM_DEFINECLASS_FLAG_DYNAMIC_CREF;
+        }
+
         ADD_INSN3(ret, node, defineclass,
                   ID2SYM(singletonclass), singleton_class,
-                  INT2FIX(VM_DEFINECLASS_TYPE_SINGLETON_CLASS));
+                  INT2FIX(sclass_flags));
         RB_OBJ_WRITTEN(iseq, Qundef, (VALUE)singleton_class);
 
         if (popped) {
@@ -12145,9 +12173,8 @@ iseq_build_from_ary_body(rb_iseq_t *iseq, LINK_ANCHOR *const anchor,
                       case TS_CDHASH:
                         {
                             int i;
-                            VALUE map = rb_hash_new_with_size(RARRAY_LEN(op)/2);
+                            VALUE map = rb_hash_new_with_size_and_type(0, RARRAY_LEN(op)/2, &cdhash_type);
 
-                            RHASH_TBL_RAW(map)->type = &cdhash_type;
                             op = rb_to_array_type(op);
                             for (i=0; i<RARRAY_LEN(op); i+=2) {
                                 VALUE key = RARRAY_AREF(op, i);
@@ -12157,7 +12184,7 @@ iseq_build_from_ary_body(rb_iseq_t *iseq, LINK_ANCHOR *const anchor,
                                 rb_hash_aset(map, key, (VALUE)label | 1);
                             }
                             RB_GC_GUARD(op);
-                            RB_OBJ_SET_SHAREABLE(rb_obj_hide(map)); // allow mutation while compiling
+                            RB_OBJ_SET_SHAREABLE(map); // allow mutation while compiling
                             argv[j] = map;
                             RB_OBJ_WRITTEN(iseq, Qundef, map);
                         }
@@ -12902,7 +12929,8 @@ ibf_load_builtin(const struct ibf_load *load, ibf_offset_t *offset)
     const struct rb_builtin_function *table = GET_VM()->builtin_function_table;
     if (table == NULL) rb_raise(rb_eArgError, "builtin function table is not provided");
     if (strncmp(table[i].name, name, len) != 0) {
-        rb_raise(rb_eArgError, "builtin function index (%d) mismatch (expect %s but %s)", i, name, table[i].name);
+        rb_raise(rb_eArgError, "builtin function index (%d) mismatch (expect %.*s but %s)",
+                 i, len, name, table[i].name);
     }
     // fprintf(stderr, "load-builtin: name:%s(%d)\n", table[i].name, table[i].argc);
 
@@ -12982,6 +13010,20 @@ ibf_dump_code(struct ibf_dump *dump, const rb_iseq_t *iseq)
     return offset;
 }
 
+static int
+cdhash_copy_i(st_data_t key, st_data_t val, st_data_t arg)
+{
+    rb_hash_aset((VALUE)arg, (VALUE)key, (VALUE)val);
+    return ST_CONTINUE;
+}
+
+static VALUE
+cdhash_copy(VALUE dest, VALUE src)
+{
+    rb_hash_stlike_foreach(src, cdhash_copy_i, dest);
+    return dest;
+}
+
 static VALUE *
 ibf_load_code(const struct ibf_load *load, rb_iseq_t *iseq, ibf_offset_t bytecode_offset, ibf_offset_t bytecode_size, unsigned int iseq_size)
 {
@@ -13036,11 +13078,10 @@ ibf_load_code(const struct ibf_load *load, rb_iseq_t *iseq, ibf_offset_t bytecod
               case TS_CDHASH:
                 {
                     VALUE op = ibf_load_small_value(load, &reading_pos);
-                    VALUE v = ibf_load_object(load, op);
-                    v = rb_hash_dup(v); // hash dumped as frozen
-                    RHASH_TBL_RAW(v)->type = &cdhash_type;
-                    rb_hash_rehash(v); // hash function changed
-                    RB_OBJ_SET_SHAREABLE(freeze_hide_obj(v));
+                    VALUE src = ibf_load_object(load, op);
+                    VALUE v = rb_hash_new_with_size_and_type(0, RHASH_SIZE(src), &cdhash_type);
+                    rb_hash_rehash(cdhash_copy(v, src));
+                    RB_OBJ_SET_SHAREABLE(v);
 
                     // Overwrite the existing hash in the object list.  This
                     // is to keep the object alive during load time.
@@ -14312,7 +14353,7 @@ static VALUE
 ibf_load_object_hash(const struct ibf_load *load, const struct ibf_object_header *header, ibf_offset_t offset)
 {
     long len = (long)ibf_load_small_value(load, &offset);
-    VALUE obj = rb_hash_new_with_size(len);
+    VALUE obj = header->frozen ? rb_hash_alloc_fixed_size(rb_cHash, len) : rb_hash_new_with_size(len);
     int i;
 
     for (i = 0; i < len; i++) {
@@ -14323,7 +14364,6 @@ ibf_load_object_hash(const struct ibf_load *load, const struct ibf_object_header
         VALUE val = ibf_load_object(load, val_index);
         rb_hash_aset(obj, key, val);
     }
-    rb_hash_rehash(obj);
 
     if (header->internal) rb_obj_hide(obj);
     if (header->frozen) {

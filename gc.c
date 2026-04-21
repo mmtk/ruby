@@ -1313,6 +1313,34 @@ rb_gc_handle_weak_references(VALUE obj)
     }
 }
 
+static inline bool
+rb_gc_imemo_needs_cleanup_p(VALUE obj)
+{
+    switch (imemo_type(obj)) {
+      case imemo_constcache:
+      case imemo_cref:
+      case imemo_ifunc:
+      case imemo_memo:
+      case imemo_svar:
+      case imemo_callcache:
+      case imemo_throw_data:
+        return false;
+
+      case imemo_env:
+      case imemo_ment:
+      case imemo_iseq:
+      case imemo_callinfo:
+        return true;
+
+      case imemo_tmpbuf:
+        return ((rb_imemo_tmpbuf_t *)obj)->ptr != NULL;
+
+      case imemo_fields:
+        return FL_TEST_RAW(obj, OBJ_FIELD_HEAP) || (id2ref_tbl && rb_shape_obj_has_id(obj));
+    }
+    UNREACHABLE_RETURN(true);
+}
+
 /*
  * Returns true if the object requires a full rb_gc_obj_free() call during sweep,
  * false if it can be freed quickly without calling destructors or cleanup.
@@ -1335,18 +1363,7 @@ rb_gc_obj_needs_cleanup_p(VALUE obj)
 
     switch (flags & RUBY_T_MASK) {
       case T_IMEMO:
-        switch (imemo_type(obj)) {
-          case imemo_constcache:
-          case imemo_cref:
-          case imemo_ifunc:
-          case imemo_memo:
-          case imemo_svar:
-          case imemo_callcache:
-          case imemo_throw_data:
-            return false;
-          default:
-            return true;
-        }
+        return rb_gc_imemo_needs_cleanup_p(obj);
 
       case T_DATA:
       case T_OBJECT:
@@ -3711,7 +3728,12 @@ rb_gc_obj_optimal_size(VALUE obj)
         }
 
       case T_HASH:
-        return sizeof(struct RHash) + (RHASH_ST_TABLE_P(obj) ? sizeof(st_table) : sizeof(ar_table));
+        {
+            if (RB_OBJ_FROZEN(obj) && RHASH_AR_TABLE_P(obj)) {
+                return sizeof(struct RHash) + offsetof(ar_table, pairs) + RHASH_AR_TABLE_BOUND(obj) * sizeof(ar_table_pair);
+            }
+            return sizeof(struct RHash) + (RHASH_ST_TABLE_P(obj) ? sizeof(st_table) : sizeof(ar_table));
+        }
 
       default:
         return 0;
@@ -5056,7 +5078,7 @@ rb_method_type_name(rb_method_type_t type)
 {
     switch (type) {
       case VM_METHOD_TYPE_ISEQ:           return "iseq";
-      case VM_METHOD_TYPE_ATTRSET:        return "attrest";
+      case VM_METHOD_TYPE_ATTRSET:        return "attrset";
       case VM_METHOD_TYPE_IVAR:           return "ivar";
       case VM_METHOD_TYPE_BMETHOD:        return "bmethod";
       case VM_METHOD_TYPE_ALIAS:          return "alias";
