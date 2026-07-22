@@ -1659,7 +1659,15 @@ void
 rb_gc_impl_gc_disable(void *objspace_ptr, bool finish_current_gc)
 {
     WHEN_USING_MMTK({
-        mmtk_disable_collection();
+        // mmtk_disable_collection() can transiently fail (e.g. a GC is in progress), so retry
+        // until it succeeds. Call rb_thread_check_ints() on each spin: a GC pause elsewhere may
+        // be waiting on this very thread to acknowledge a ractor-barrier/interrupt before it can
+        // finish, so busy-spinning without it risks deadlock.
+        if (mmtk_is_collection_enabled()) {
+            while (!mmtk_disable_collection()) {
+                rb_thread_check_ints();
+            }
+        }
         return;
     })
 
@@ -3554,7 +3562,12 @@ rb_gc_impl_shutdown_call_finalizer(void *objspace_ptr)
         rb_gc_set_obj_free_on_exit_started();
 
         // Disable GC like the default GC does.
-        mmtk_disable_collection();
+        // mmtk_disable_collection() can transiently fail (e.g. a GC is in progress), so retry
+        // until it succeeds. See the comment in rb_gc_impl_gc_disable() about why
+        // rb_thread_check_ints() is needed here.
+        while (!mmtk_disable_collection()) {
+            rb_thread_check_ints();
+        }
 
         // Running data/file finalizers on exit, the MMTk style.
         // When using MMTk, we maintain a list of obj_free candidates in the Rust code,
