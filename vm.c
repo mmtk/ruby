@@ -4612,7 +4612,27 @@ Init_VM(void)
 #if USE_MMTK
         if (rb_mmtk_enabled_p()) {
             // Now that the VM says it's time to enable GC, we enable GC for MMTk, too.
+
+            // We don't use rb_bug just to be safe.  See Init_BareVM.
+
+            // Assert MMTk-level raw state.
+            if (mmtk_is_collection_enabled()) {
+                fprintf(stderr, "ERROR: GC is enabled at the MMTk level, but should still be disabled.\n");
+                abort();
+            }
+
+            // We enable GC at the MMTk level.
             mmtk_enable_collection();
+
+            // Assert both MMTk-level raw state and binding-level wrapped state.
+            if (!mmtk_is_collection_enabled()) {
+                fprintf(stderr, "ERROR: GC is disabled at the MMTk level, but should be enabled now.\n");
+                abort();
+            }
+            if (!rb_mmtk_is_collection_enabled()) {
+                fprintf(stderr, "ERROR: GC is disabled at the binding level, but should be enabled now.\n");
+                abort();
+            }
         }
 #endif
 
@@ -4674,7 +4694,34 @@ Init_BareVM(void)
         // When creating a ractor, it will bind mutator.
         // We pass NULL as the tls because `Collection::spawn_gc_thread` in the mmtk-ruby binding does not use it anyway.
         mmtk_initialize_collection(NULL);
-        // Note: GC is disabled at this moment.
+
+        // mmtk_initialize_collection() leaves collection enabled; explicitly disable it here so
+        // it stays off until Init_VM() re-enables it once the VM is fully bootstrapped. This is
+        // the only thread in the process at this point, and no GC has had a chance to run yet
+        // (nor could one be requested at this point in bootstrap), so this must always succeed
+        // immediately; if it doesn't, something is fundamentally broken, so abort rather than
+        // spin or silently continue with GC still enabled.
+        //
+        // Deliberately not rb_bug() here: rb_bug()'s crash-report path (rb_vm_bugreport()) is
+        // documented to be able to trigger a secondary SIGSEGV when walking frames on an
+        // abnormal VM state (see the comment in bug_report_file() in error.c), and at this point
+        // in bootstrap the main thread's execution context and ractor aren't set up yet -- so
+        // reporting via rb_bug() here risks turning a clean diagnostic into a mystery crash.
+
+        // Assert MMTk-level raw state.
+        if (!mmtk_is_collection_enabled()) {
+            fprintf(stderr, "ERROR: GC is disabled at the MMTk level, but should be enabled.\n");
+            abort();
+        }
+
+        // We disable GC at the MMTk level.
+        mmtk_disable_collection();
+
+        // Assert MMTk-level raw state.
+        if (mmtk_is_collection_enabled()) {
+            fprintf(stderr, "ERROR: GC is still enabled at the MMTk level, but should be disabled now.\n");
+            abort();
+        }
     })
 
     // setup main thread

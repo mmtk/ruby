@@ -175,10 +175,10 @@ struct rb_gc_object_metadata_entry {
  * necessary. */
 #define DURING_GC_COULD_MALLOC_REGION_START() \
     assert(rb_during_gc()); \
-    VALUE _already_disabled = rb_gc_disable_no_rest()
+    VALUE _already_disabled = rb_gc_during_gc_could_malloc_region_start()
 
 #define DURING_GC_COULD_MALLOC_REGION_END() \
-    if (_already_disabled == Qfalse) rb_gc_enable()
+    rb_gc_during_gc_could_malloc_region_end(_already_disabled)
 
 /* gc.c */
 RUBY_ATTR_MALLOC void *ruby_mimmalloc(size_t size);
@@ -277,6 +277,10 @@ void rb_gc_update_values(long n, VALUE *values);
 
 const char *rb_gc_active_gc_name(void);
 int rb_gc_modular_gc_loaded_p(void);
+
+/* Defined in gc.c; used by object_tracing.c */
+bool rb_gc_during_gc_could_malloc_region_start();
+void rb_gc_during_gc_could_malloc_region_end(bool already_disabled);
 
 RUBY_SYMBOL_EXPORT_END
 

@@ -1635,7 +1635,7 @@ bool
 rb_gc_impl_gc_enabled_p(void *objspace_ptr)
 {
     WHEN_USING_MMTK({
-        return mmtk_is_collection_enabled();
+        return rb_mmtk_is_collection_enabled();
     })
 
     rb_objspace_t *objspace = objspace_ptr;
@@ -1646,7 +1646,7 @@ void
 rb_gc_impl_gc_enable(void *objspace_ptr)
 {
     WHEN_USING_MMTK({
-        mmtk_enable_collection();
+        rb_mmtk_enable_collection();
         return;
     })
 
@@ -1659,7 +1659,7 @@ void
 rb_gc_impl_gc_disable(void *objspace_ptr, bool finish_current_gc)
 {
     WHEN_USING_MMTK({
-        mmtk_disable_collection();
+        rb_mmtk_disable_collection();
         return;
     })
 
@@ -3554,7 +3554,7 @@ rb_gc_impl_shutdown_call_finalizer(void *objspace_ptr)
         rb_gc_set_obj_free_on_exit_started();
 
         // Disable GC like the default GC does.
-        mmtk_disable_collection();
+        rb_mmtk_disable_collection();
 
         // Running data/file finalizers on exit, the MMTk style.
         // When using MMTk, we maintain a list of obj_free candidates in the Rust code,
@@ -7542,10 +7542,10 @@ rb_gc_impl_start(void *objspace_ptr, bool full_mark, bool immediate_mark, bool i
     rb_objspace_t *objspace = objspace_ptr;
 #if USE_MMTK
     if (rb_mmtk_enabled_p()) {
-        // Note: GC.start will initiates garbage collection even if manually disabled.
-        // Therefore, we need to force GC.
-        // We do a full-heap GC if full_mark is true.  In StickyImmix this may or may not trigger defragmentation.
-        // There is currently no way to force a defragmentation GC.
+        // Note: In CRuby, manual invocations of GC.start will still initiate garbage collection,
+        // but in MMTk, disabling GC means GC cannot be triggered in any way.
+        // The following statement may not necessarily trigger GC.
+        // TODO: Find a way to reconcile them.
         mmtk_handle_user_collection_request(GET_THREAD(), true, full_mark);
 
         gc_finalize_deferred(objspace);

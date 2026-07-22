@@ -5895,6 +5895,29 @@ rb_gc_after_fork(rb_pid_t pid)
 }
 
 bool
+rb_gc_during_gc_could_malloc_region_start()
+{
+    // Do nothing when using MMTk.
+    WHEN_USING_MMTK({
+        return false;
+    })
+
+    return rb_gc_disable_no_rest();
+}
+
+void rb_gc_during_gc_could_malloc_region_end(bool already_disabled)
+{
+    // Do nothing when using MMTk.
+    WHEN_USING_MMTK({
+        return;
+    })
+
+    if (already_disabled == Qfalse) {
+        rb_gc_enable();
+    }
+}
+
+bool
 rb_gc_obj_shareable_p(VALUE obj)
 {
     return RB_OBJ_SHAREABLE_P(obj);

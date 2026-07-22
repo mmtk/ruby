@@ -112,11 +112,19 @@ struct rb_mmtk_xmalloc_accounting{
     size_t malloc_total;
 } rb_mmtk_xmalloc_accounting_t;
 
+// States for disabling GC
+struct RubyMMTKGCDisablingState {
+    // This mutex only protects the `gc_is_disabled` field.
+    pthread_mutex_t mutex;
+    bool gc_is_disabled;
+};
+
 struct RubyMMTKGlobal {
     pthread_mutex_t mutex;
     pthread_cond_t cond_world_stopped;
     pthread_cond_t cond_world_started;
     rb_atomic_t mutator_blocking_count;
+    struct RubyMMTKGCDisablingState gc_disabling_state;
     unsigned int fork_hook_vm_lock_lev;
     bool world_stopped;
     size_t start_the_world_count;
@@ -125,6 +133,10 @@ struct RubyMMTKGlobal {
     .cond_world_stopped = PTHREAD_COND_INITIALIZER,
     .cond_world_started = PTHREAD_COND_INITIALIZER,
     .mutator_blocking_count = 0,
+    .gc_disabling_state = (struct RubyMMTKGCDisablingState) {
+        .mutex = PTHREAD_MUTEX_INITIALIZER,
+        .gc_is_disabled = false,
+    },
     .fork_hook_vm_lock_lev = 0,
     .world_stopped = false,
     .start_the_world_count = 0,
@@ -1802,7 +1814,83 @@ rb_mmtk_block_for_gc_internal(void *unused)
     RUBY_DEBUG_LOG("GC finished.");
 }
 
-static void
+////////////////////////////////////////////////////////////////////////////////
+// Disabling / enabling GC
+////////////////////////////////////////////////////////////////////////////////
+
+void
+rb_mmtk_disable_collection()
+{
+    // Only mutator threads can disable GC.
+    rb_mmtk_assert_mutator();
+
+    struct RubyMMTKGCDisablingState *state = &rb_mmtk_global.gc_disabling_state;
+
+    for (;;) {
+        pthread_mutex_lock(&state->mutex);
+        bool gc_is_disabled = state->gc_is_disabled;
+        if (!gc_is_disabled) {
+            // GC is not disabled, yet.  We try once to disable it.
+            bool successful = mmtk_disable_collection();
+            if (successful) {
+                // If it is successful, we have disabled GC.  We set the state value.
+                state->gc_is_disabled = true;
+                gc_is_disabled = true;
+            }
+        }
+        pthread_mutex_unlock(&state->mutex);
+
+        if (gc_is_disabled) {
+            // Either GC has already been disabled before this call,
+            // or we successfully disabled GC.  We can return.
+            return;
+        } else {
+            // Otherwise, another thread must have triggered GC, and GC will start soon.
+            // We block until the next GC finishes and try again.
+            rb_mmtk_block_for_gc((MMTk_VMMutatorThread)GET_RACTOR());
+        }
+    }
+}
+
+void
+rb_mmtk_enable_collection()
+{
+    // Only mutator threads can enable GC.
+    rb_mmtk_assert_mutator();
+
+    struct RubyMMTKGCDisablingState *state = &rb_mmtk_global.gc_disabling_state;
+
+    pthread_mutex_lock(&state->mutex);
+    bool gc_is_disabled = state->gc_is_disabled;
+    if (gc_is_disabled) {
+        // GC is already disabled.  We enable GC.  This is non-blocking.
+        mmtk_enable_collection();
+        state->gc_is_disabled = false;
+    }
+    pthread_mutex_unlock(&state->mutex);
+
+}
+
+bool
+rb_mmtk_is_collection_enabled()
+{
+    // Only mutator threads can enable GC.
+    rb_mmtk_assert_mutator();
+
+    struct RubyMMTKGCDisablingState *state = &rb_mmtk_global.gc_disabling_state;
+
+    pthread_mutex_lock(&state->mutex);
+    bool gc_is_disabled = state->gc_is_disabled;
+    pthread_mutex_unlock(&state->mutex);
+
+    return !gc_is_disabled;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Blocking for GC
+////////////////////////////////////////////////////////////////////////////////
+
+void
 rb_mmtk_block_for_gc(MMTk_VMMutatorThread tls)
 {
     rb_mmtk_assert_mutator();
