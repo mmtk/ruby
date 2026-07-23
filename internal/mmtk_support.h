@@ -178,6 +178,9 @@ void rb_mmtk_gc_probe_slowpath(bool enter);
 // xmalloc accounting
 void rb_mmtk_xmalloc_increase_body(size_t new_size, size_t old_size);
 
+// Block for GC
+void rb_mmtk_block_for_gc(MMTk_VMMutatorThread tls);
+
 // Commandline options parsing
 void rb_mmtk_pre_process_opts(int argc, char **argv);
 void rb_mmtk_post_process_opts(const char *arg);

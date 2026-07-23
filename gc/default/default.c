@@ -1,4 +1,5 @@
 #include "ruby/internal/config.h"
+#include "vm_core.h"
 
 #include <signal.h>
 
@@ -1659,12 +1660,12 @@ void
 rb_gc_impl_gc_disable(void *objspace_ptr, bool finish_current_gc)
 {
     WHEN_USING_MMTK({
-        // mmtk_disable_collection() can transiently fail (e.g. a GC is in progress), so retry
-        // until it succeeds. Call rb_thread_check_ints() on each spin: a GC pause elsewhere may
-        // be waiting on this very thread to acknowledge a ractor-barrier/interrupt before it can
-        // finish, so busy-spinning without it risks deadlock.
+        // mmtk_disable_collection() can transiently fail (e.g. a GC is in progress or has already
+        // been triggered by another thread), so retry until it succeeds.  We block for GC and try
+        // again after the next GC pause ends.
         while (!mmtk_disable_collection()) {
-            rb_thread_check_ints();
+            rb_ractor_t *cr = GET_RACTOR();
+            rb_mmtk_block_for_gc((MMTk_VMMutatorThread)cr);
         }
         return;
     })
@@ -3562,9 +3563,10 @@ rb_gc_impl_shutdown_call_finalizer(void *objspace_ptr)
         // Disable GC like the default GC does.
         // mmtk_disable_collection() can transiently fail (e.g. a GC is in progress), so retry
         // until it succeeds. See the comment in rb_gc_impl_gc_disable() about why
-        // rb_thread_check_ints() is needed here.
+        // we wait for the next GC here
         while (!mmtk_disable_collection()) {
-            rb_thread_check_ints();
+            rb_ractor_t *cr = GET_RACTOR();
+            rb_mmtk_block_for_gc((MMTk_VMMutatorThread)cr);
         }
 
         // Running data/file finalizers on exit, the MMTk style.
