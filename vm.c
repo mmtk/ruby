@@ -4680,8 +4680,16 @@ Init_BareVM(void)
         // (nor could one be requested at this point in bootstrap), so this must always succeed
         // immediately; if it doesn't, something is fundamentally broken, so abort rather than
         // spin or silently continue with GC still enabled.
+        //
+        // Deliberately not rb_bug() here: rb_bug()'s crash-report path (rb_vm_bugreport()) is
+        // documented to be able to trigger a secondary SIGSEGV when walking frames on an
+        // abnormal VM state (see the comment in bug_report_file() in error.c), and at this point
+        // in bootstrap the main thread's execution context and ractor aren't set up yet -- so
+        // reporting via rb_bug() here risks turning a clean diagnostic into a mystery crash.
         if (!mmtk_disable_collection()) {
-            rb_bug("mmtk_disable_collection() failed right after mmtk_initialize_collection()");
+            fprintf(stderr, "[FATAL] mmtk_disable_collection() failed right after "
+                            "mmtk_initialize_collection()\n");
+            abort();
         }
     })
 
