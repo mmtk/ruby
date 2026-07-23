@@ -4675,16 +4675,13 @@ Init_BareVM(void)
         // We pass NULL as the tls because `Collection::spawn_gc_thread` in the mmtk-ruby binding does not use it anyway.
         mmtk_initialize_collection(NULL);
         // mmtk_initialize_collection() leaves collection enabled; explicitly disable it here so
-        // it stays off until Init_VM() re-enables it once the VM is fully bootstrapped.
-        // mmtk_disable_collection() can transiently fail (e.g. a GC is in progress), so retry
-        // until it succeeds; otherwise this disable would silently not take effect, and MMTk
-        // could run a GC during the bootstrap window this is meant to protect.
-        // No safepoint/yield call here (unlike the loops in gc/default/default.c): the main
-        // thread's execution context and ractor aren't set up yet at this point in bootstrap
-        // (that happens further down in this function), so rb_thread_check_ints() would
-        // dereference unset thread-local state. This is also the only thread in the process at
-        // this point, so there is no other ractor for a GC pause to be waiting on.
-        while (!mmtk_disable_collection()) {
+        // it stays off until Init_VM() re-enables it once the VM is fully bootstrapped. This is
+        // the only thread in the process at this point, and no GC has had a chance to run yet
+        // (nor could one be requested at this point in bootstrap), so this must always succeed
+        // immediately; if it doesn't, something is fundamentally broken, so abort rather than
+        // spin or silently continue with GC still enabled.
+        if (!mmtk_disable_collection()) {
+            rb_bug("mmtk_disable_collection() failed right after mmtk_initialize_collection()");
         }
     })
 
