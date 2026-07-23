@@ -4609,6 +4609,13 @@ Init_VM(void)
          */
         rb_define_global_const("TOPLEVEL_BINDING", rb_binding_new());
 
+#if USE_MMTK
+        if (rb_mmtk_enabled_p()) {
+            // Now that the VM says it's time to enable GC, we enable GC for MMTk, too.
+            mmtk_enable_collection();
+        }
+#endif
+
 #ifdef _WIN32
         rb_objspace_gc_enable(vm->gc.objspace);
 #endif
@@ -4670,8 +4677,8 @@ Init_BareVM(void)
         // mmtk_initialize_collection() leaves collection enabled; explicitly disable it here so
         // it stays off until Init_VM() re-enables it once the VM is fully bootstrapped.
         // mmtk_disable_collection() can transiently fail (e.g. a GC is in progress), so retry
-        // until it succeeds; otherwise Init_VM()'s matching mmtk_enable_collection() call would
-        // panic ("Trying to enable GC when it is not disabled").
+        // until it succeeds; otherwise this disable would silently not take effect, and MMTk
+        // could run a GC during the bootstrap window this is meant to protect.
         // No safepoint/yield call here (unlike the loops in gc/default/default.c): the main
         // thread's execution context and ractor aren't set up yet at this point in bootstrap
         // (that happens further down in this function), so rb_thread_check_ints() would
