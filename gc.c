@@ -5908,7 +5908,7 @@ rb_gc_during_gc_could_malloc_region_start()
 void rb_gc_during_gc_could_malloc_region_end(bool already_disabled)
 {
     // Do nothing when using MMTk.
-    WHEN_NOT_USING_MMTK({
+    WHEN_USING_MMTK({
         return;
     })
 

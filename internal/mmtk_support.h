@@ -178,6 +178,11 @@ void rb_mmtk_gc_probe_slowpath(bool enter);
 // xmalloc accounting
 void rb_mmtk_xmalloc_increase_body(size_t new_size, size_t old_size);
 
+// Disabling / enabling GC
+void rb_mmtk_disable_collection();
+void rb_mmtk_enable_collection();
+bool rb_mmtk_is_collection_enabled();
+
 // Block for GC
 void rb_mmtk_block_for_gc(MMTk_VMMutatorThread tls);
 
