@@ -220,9 +220,9 @@ void mmtk_prepare_to_fork(void);
 
 void mmtk_after_fork(MMTk_VMThread tls);
 
-int32_t mmtk_enable_collection(void);
+bool mmtk_enable_collection(void);
 
-int32_t mmtk_disable_collection(void);
+bool mmtk_disable_collection(void);
 
 bool mmtk_is_collection_enabled(void);
 
